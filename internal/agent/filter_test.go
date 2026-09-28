@@ -41,6 +41,12 @@ func TestCPUPercent(t *testing.T) {
 			want: 30,
 		},
 		{
+			name: "guest_ticks_are_not_double_counted",
+			prev: cpu.TimesStat{},
+			cur:  cpu.TimesStat{User: 100, Guest: 100, Idle: 100},
+			want: 50,
+		},
+		{
 			name: "zero_delta_returns_zero",
 			prev: cpu.TimesStat{User: 100},
 			cur:  cpu.TimesStat{User: 100},

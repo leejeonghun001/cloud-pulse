@@ -15,8 +15,10 @@ import (
 // counter reset or no elapsed time), guarding against division by zero and
 // negative results caused by counter resets.
 func cpuPercent(prev, cur cpu.TimesStat) float64 {
-	prevTotal := prev.Total()
-	curTotal := cur.Total()
+	// Linux reports guest ticks in User/ Nice as well as Guest/GuestNice.
+	// Exclude the duplicate fields from the total before calculating busy time.
+	prevTotal := prev.Total() - prev.Guest - prev.GuestNice
+	curTotal := cur.Total() - cur.Guest - cur.GuestNice
 	totalDelta := curTotal - prevTotal
 	if totalDelta <= 0 {
 		return 0
