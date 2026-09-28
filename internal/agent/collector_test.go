@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"runtime"
 	"testing"
 	"time"
 
@@ -161,20 +162,35 @@ func TestCollector_NetExclusionGlobs(t *testing.T) {
 	}
 }
 
+// diskDedupeFixture uses mountpoints that includePartition admits on the
+// current OS. Windows has no mountpoint filter beyond pseudo filesystems, but
+// using drive-letter paths keeps the fixture representative of gopsutil data.
+func diskDedupeFixture() (dataDeep, data, backup, dataDevice, backupDevice, fstype string) {
+	switch runtime.GOOS {
+	case "darwin":
+		return "/Volumes/data/deep", "/Volumes/data", "/", "/dev/disk2s1", "/dev/disk1s1", "apfs"
+	case "windows":
+		return `C:\data\deep`, `C:\data`, `D:\`, "C:", "D:", "ntfs"
+	default:
+		return "/mnt/data/deep", "/data", "/backup", "/dev/sda1", "/dev/sdb1", "ext4"
+	}
+}
+
 func TestCollector_DiskDedupeAndAggregate(t *testing.T) {
 	t.Parallel()
 
+	dataDeep, data, backup, dataDevice, backupDevice, fstype := diskDedupeFixture()
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	src := &fakeSource{
 		partitions: []disk.PartitionStat{
-			{Device: "/dev/sda1", Mountpoint: "/mnt/data/deep", Fstype: "ext4"},
-			{Device: "/dev/sda1", Mountpoint: "/data", Fstype: "ext4"}, // shorter, should win dedupe
-			{Device: "/dev/sdb1", Mountpoint: "/backup", Fstype: "ext4"},
+			{Device: dataDevice, Mountpoint: dataDeep, Fstype: fstype},
+			{Device: dataDevice, Mountpoint: data, Fstype: fstype}, // shorter, should win dedupe
+			{Device: backupDevice, Mountpoint: backup, Fstype: fstype},
 			{Device: "tmpfs", Mountpoint: "/run/lock", Fstype: "tmpfs"}, // excluded pseudo fs
 		},
 		usage: map[string]*disk.UsageStat{
-			"/data":   {Total: 1000, Used: 400, UsedPercent: 40},
-			"/backup": {Total: 2000, Used: 1000, UsedPercent: 50},
+			data:   {Total: 1000, Used: 400, UsedPercent: 40},
+			backup: {Total: 2000, Used: 1000, UsedPercent: 50},
 		},
 	}
 	c := NewCollector(src, CollectorOptions{Now: fakeClock([]time.Time{base})})
@@ -196,25 +212,54 @@ func TestCollector_DiskDedupeAndAggregate(t *testing.T) {
 	if sample.DiskUsedPercent != wantPct {
 		t.Errorf("DiskUsedPercent = %v, want %v", sample.DiskUsedPercent, wantPct)
 	}
+
+	foundData, foundBackup := false, false
 	for _, d := range sample.Disks {
-		if d.Device == "/dev/sda1" && d.Mountpoint != "/data" {
-			t.Errorf("expected shortest mountpoint /data for sda1, got %q", d.Mountpoint)
+		switch d.Device {
+		case dataDevice:
+			foundData = true
+			if d.Mountpoint != data {
+				t.Errorf("shortest mountpoint for %s = %q, want %q", dataDevice, d.Mountpoint, data)
+			}
+		case backupDevice:
+			foundBackup = true
+			if d.Mountpoint != backup {
+				t.Errorf("mountpoint for %s = %q, want %q", backupDevice, d.Mountpoint, backup)
+			}
 		}
+	}
+	if !foundData || !foundBackup {
+		t.Errorf("Disks = %+v, want devices %q and %q", sample.Disks, dataDevice, backupDevice)
+	}
+}
+
+// diskZeroTotalFixture keeps both the included disk and the zero-total disk
+// within each platform's accepted mountpoint set, so the test exercises the
+// zero-total branch rather than a platform filter.
+func diskZeroTotalFixture() (root, empty, rootDevice, emptyDevice, fstype string) {
+	switch runtime.GOOS {
+	case "darwin":
+		return "/", "/Volumes/empty", "/dev/disk1s1", "/dev/disk2s1", "apfs"
+	case "windows":
+		return `C:\`, `D:\empty`, "C:", "D:", "ntfs"
+	default:
+		return "/", "/empty", "/dev/sda1", "/dev/zero0", "ext4"
 	}
 }
 
 func TestCollector_DiskSkipsZeroTotal(t *testing.T) {
 	t.Parallel()
 
+	root, empty, rootDevice, emptyDevice, fstype := diskZeroTotalFixture()
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	src := &fakeSource{
 		partitions: []disk.PartitionStat{
-			{Device: "/dev/sda1", Mountpoint: "/", Fstype: "ext4"},
-			{Device: "/dev/zero0", Mountpoint: "/empty", Fstype: "ext4"},
+			{Device: rootDevice, Mountpoint: root, Fstype: fstype},
+			{Device: emptyDevice, Mountpoint: empty, Fstype: fstype},
 		},
 		usage: map[string]*disk.UsageStat{
-			"/":      {Total: 1000, Used: 100},
-			"/empty": {Total: 0, Used: 0},
+			root:  {Total: 1000, Used: 100},
+			empty: {Total: 0, Used: 0},
 		},
 	}
 	c := NewCollector(src, CollectorOptions{Now: fakeClock([]time.Time{base})})
@@ -225,6 +270,9 @@ func TestCollector_DiskSkipsZeroTotal(t *testing.T) {
 	}
 	if len(sample.Disks) != 1 {
 		t.Fatalf("Disks = %+v, want 1 entry (zero-total skipped)", sample.Disks)
+	}
+	if sample.Disks[0].Device != rootDevice || sample.Disks[0].Mountpoint != root {
+		t.Errorf("remaining disk = %+v, want device %q at %q", sample.Disks[0], rootDevice, root)
 	}
 }
 

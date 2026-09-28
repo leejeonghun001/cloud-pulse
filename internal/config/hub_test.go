@@ -2,6 +2,7 @@ package config
 
 import (
 	"net/netip"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -60,7 +61,7 @@ func TestLoadHub_Defaults(t *testing.T) {
 	if h.R2Enabled() {
 		t.Error("R2Enabled() = true, want false")
 	}
-	if got, want := h.DBPath(), "data/cloud-pulse.db"; got != want {
+	if got, want := h.DBPath(), filepath.Join("data", "cloud-pulse.db"); got != want {
 		t.Errorf("DBPath() = %q, want %q", got, want)
 	}
 }
@@ -464,7 +465,7 @@ func TestLoadHub_DBPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadHub: %v", err)
 	}
-	want := "/var/lib/cloud-pulse/cloud-pulse.db"
+	want := filepath.Join("/var/lib/cloud-pulse", "cloud-pulse.db")
 	if got := h.DBPath(); got != want {
 		t.Errorf("DBPath() = %q, want %q", got, want)
 	}
