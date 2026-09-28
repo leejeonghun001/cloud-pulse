@@ -61,6 +61,36 @@ jobs:
         if: runner.os == 'Linux' && matrix.os == 'ubuntu-latest'
         run: go tool cover -func=coverage.out >> "$GITHUB_STEP_SUMMARY"
 
+  # linux/armv7 is a release target; run the whole suite as 32-bit binaries so
+  # int overflows (e.g. untyped GiB constants defaulting to int) are caught.
+  test-32bit:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goarch: "386"
+            goarm: ""
+          - os: ubuntu-24.04-arm
+            goarch: arm
+            goarm: "7"
+    runs-on: ${{ matrix.os }}
+    env:
+      GOARCH: ${{ matrix.goarch }}
+      GOARM: ${{ matrix.goarm }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run tests (32-bit)
+        run: go test -count=1 ./...
+
   build:
     strategy:
       fail-fast: false

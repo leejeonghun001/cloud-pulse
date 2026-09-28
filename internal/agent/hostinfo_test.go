@@ -50,7 +50,9 @@ func TestBuildHostInfo_Success(t *testing.T) {
 		t.Errorf("Provider = %q, want aws", info.Provider)
 	}
 	if info.EgressLimitBytes != models.AWSFreeEgressBytes {
-		t.Errorf("EgressLimitBytes = %d, want %d", info.EgressLimitBytes, models.AWSFreeEgressBytes)
+		// uint64(...) keeps the untyped 100 GiB constant from defaulting to int,
+		// which overflows on 32-bit targets (linux/armv7 is a release target).
+		t.Errorf("EgressLimitBytes = %d, want %d", info.EgressLimitBytes, uint64(models.AWSFreeEgressBytes))
 	}
 	if info.AgentVersion == "" {
 		t.Error("AgentVersion should not be empty")
