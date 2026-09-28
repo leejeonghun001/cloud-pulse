@@ -332,7 +332,7 @@ Other useful scripts:
 - `bash scripts/smoke.sh` — end-to-end hub+agent smoke test (real
   binaries, real HTTP, real SQLite).
 - `bash scripts/test-install.sh` — sandboxed install-script test suite
-  (66 assertions: checksum verification, injection/RCE regression tests,
+  (67 assertions: checksum verification, injection/RCE regression tests,
   upgrade/uninstall/purge, systemd unit validation).
 - `python3 scripts/demo-seed.py --hub <url> --token <token> [--db <path>]` —
   seed a running hub with demo hosts and bucket stats for local UI

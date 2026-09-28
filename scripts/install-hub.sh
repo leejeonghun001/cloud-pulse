@@ -755,10 +755,15 @@ detect_dashboard_host() {
 }
 
 print_summary() {
-  local host listen_port dashboard_host
-  dashboard_host="$(detect_dashboard_host)"
+  local host listen_port listen_host
   listen_port="${OPT_LISTEN##*:}"
-  host="${dashboard_host}"
+  listen_host="${OPT_LISTEN%:*}"
+  # An explicit bind address (e.g. 127.0.0.1:8090 or [fd7a::1]:8090) is the only
+  # address the hub answers on, so print it; wildcards fall back to detection.
+  case "$listen_host" in
+    ""|"0.0.0.0"|"[::]"|"::") host="$(detect_dashboard_host)" ;;
+    *) host="$listen_host" ;;
+  esac
 
   echo
   log "cloud-pulse-hub installed successfully."

@@ -296,6 +296,18 @@ test_hub_install() {
 }
 HUB_TOKEN=""
 
+test_hub_explicit_listen_host_in_one_liner() {
+  echo "==> testing install-hub.sh prints explicit --listen host in agent one-liner"
+  local sandbox="${TMP_ROOT}/sandbox-hub-listen" out
+  out="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$sandbox" \
+    timeout 60 bash scripts/install-hub.sh --listen 127.0.0.1:18091 2>&1)" || {
+    fail "install-hub.sh --listen 127.0.0.1:18091 exited 0"
+    echo "$out" >&2
+    return
+  }
+  assert_contains "one-liner uses explicit bind address" "$out" "--hub-url http://127.0.0.1:18091 "
+}
+
 test_hub_upgrade_keeps_token() {
   echo "==> testing install-hub.sh re-run (upgrade) keeps existing token"
   CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$SANDBOX_HUB" \
@@ -625,6 +637,7 @@ main() {
 
   test_hub_install
   test_hub_upgrade_keeps_token
+  test_hub_explicit_listen_host_in_one_liner
   test_hub_dry_run
   test_hub_checksum_mismatch
 
