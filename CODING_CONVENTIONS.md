@@ -232,3 +232,38 @@ interface counter wraps.
 ```
 docs(conventions): add errcheck justification example
 ```
+
+## Patterns observed during integration (Step 2 phase B)
+
+- **Consumer-defined interfaces get compile-time assertions in `cmd/**`,
+  not just runtime wiring.** `cmd/hub/main.go` declares
+  `var _ hub.Store = (*storage.DB)(nil)` (and similarly for
+  `BucketCollector`, `Notifier`) right next to the imports. This catches
+  method-set drift between independently-developed adapter and consumer
+  packages at `go build` time instead of at wiring runtime, and documents
+  the contract for readers without needing to open both packages.
+- **`cmd/**` wiring wraps every phase of the process lifecycle in its own
+  bounded step**: load config → open store (ctx-bound) → build adapters →
+  construct the consumer → start background work in a goroutine → serve →
+  on shutdown signal, `Shutdown(ctx)` the HTTP server with a timeout, stop
+  the background context, wait for the background goroutine, wait for any
+  in-flight async work (e.g. `(*hub.Server).Wait()` for alert
+  notifications), then close the store. Each step has an explicit
+  deadline; nothing blocks forever.
+- **`-check-config` and startup logs redact by presence, not partial
+  value.** Print `"(set)"`/`"(not set)"` for secret-shaped config fields,
+  never a length, prefix, or hash. If a config struct grows a new secret
+  field, add it to the redaction list in the same change.
+- **Windows-safe SQLite tests**: `storage.Open` builds its DSN with
+  `filepath.ToSlash(path)` specifically so the same test code produces a
+  valid `file:` URI on both `/`-style and `\`-style paths; storage tests
+  use `t.TempDir()` (never a hardcoded path) and close the `*DB` before
+  the test returns so Windows can delete the temp directory during
+  cleanup without a "file in use" error.
+- **Fake `Store`/`BucketCollector`/`Notifier` in `internal/hub` tests**:
+  rather than spinning up `internal/storage`'s real SQLite (which would
+  make `internal/hub` depend on `internal/storage`, violating the
+  dependency-direction rule), hub's own tests define minimal in-memory
+  fakes satisfying the same interfaces it declares. This is the standard
+  shape for testing any package that only depends on interfaces it
+  defines itself.

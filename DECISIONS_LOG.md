@@ -205,3 +205,62 @@ never rewrite history here, only add to it.
   an ADR log about the software's design.
 - **Consequences**: None — this entry exists only to record that the
   question was considered and deliberately not acted on.
+
+### D-016 — Integration stage found zero cross-package mismatches
+
+- **Date**: 2026-09-29
+- **Context**: Step 2 phase B (wiring) needed to verify that
+  `internal/storage.DB`, `internal/cloud.S3Collector`/`R2Collector`, and
+  `internal/hub.WebhookNotifier` — all written independently in parallel —
+  actually satisfy `internal/hub`'s consumer-defined `Store`,
+  `BucketCollector`, and `Notifier` interfaces.
+- **Decision**: No source changes were needed in any of those packages.
+  `cmd/hub/main.go` declares compile-time assertions (`var _ hub.Store =
+  (*storage.DB)(nil)`, etc.) that compiled clean on the first attempt.
+- **Consequences**: Validates the "consumer-defined interfaces" convention
+  in practice — as long as every adapter package is handed the exact
+  method signatures from SPEC.md, independent agents converge without a
+  reconciliation pass. Kept as a compile-time (not just runtime) guarantee
+  in `cmd/hub/main.go` so any future signature drift fails the build
+  immediately instead of surfacing as a wiring panic.
+
+### D-017 — `go mod tidy` pulls in modernc.org/sqlite's own build-tool graph
+
+- **Date**: 2026-09-29
+- **Context**: Running the final `go mod tidy` (deferred until the
+  integration stage per D-015's sibling agents' notes, to avoid a
+  go.mod race between parallel agents) needed to promote
+  `github.com/shirou/gopsutil/v4` and `modernc.org/sqlite` from
+  `// indirect` to direct requires now that `internal/agent` and
+  `internal/storage` actually import them.
+- **Decision**: Accepted the additional indirect entries `go mod tidy`
+  added (`modernc.org/cc/v4`, `modernc.org/ccgo/v4`,
+  `github.com/stretchr/testify`, `github.com/google/go-cmp`, etc.) — these
+  are `modernc.org/sqlite`'s own transitive code-generation/test tooling
+  dependencies declared in its go.mod, not new runtime dependencies of
+  cloud-pulse. Verified none carry CgoFiles
+  (`CGO_ENABLED=1 go list -deps -f '{{if and (not .Standard)
+  .CgoFiles}}{{.ImportPath}}{{end}}' ./...` stayed empty) and that
+  `github.com/shirou/gopsutil/v4 v4.26.8` / `modernc.org/sqlite v1.59.0`
+  and the `go 1.25.0` line were unchanged by the tidy run.
+- **Consequences**: `go.mod`'s direct `require` block now lists exactly
+  the two pinned dependencies; everything else stays `// indirect`. Future
+  `go mod tidy` runs may add/remove further indirect tooling deps of
+  `modernc.org/sqlite` without that being a signal to re-review — only a
+  version bump of the two pinned direct deps needs a DECISIONS_LOG entry.
+
+### D-018 — Hub startup never logs token values, even in `-check-config`
+
+- **Date**: 2026-09-29
+- **Context**: `cmd/hub -check-config` and the normal startup log both
+  need to communicate whether auth is configured, without ever risking a
+  token leaking into logs, terminal scrollback, or CI output.
+- **Decision**: Both paths print only presence (`"(set)"` / `"(not
+  set)"`) for `AgentToken`, `UIToken`, and `AlertWebhookURL` — never their
+  values, never a length, never a hash/prefix. The security warning for
+  "CP_ALLOWED_CIDRS allows all AND CP_UI_TOKEN is empty" fires on startup
+  (not just `-check-config`) so an operator running the real binary sees
+  it too, not only someone who remembers to run the check-config flag.
+- **Consequences**: Safe to pipe hub startup logs or `-check-config`
+  output anywhere (bug reports, CI logs) without redaction tooling.
+
