@@ -638,3 +638,15 @@ never rewrite history here, only add to it.
   since the installers are Linux/systemd-only by design (`detect_os`
   rejects any non-Linux `uname -s`).
 
+
+### D-038 — R2 free-tier storage uses decimal 10 GB (2026-09-29)
+
+- **Context:** `models.R2FreeTier.StorageBytes` was `10 * GiB`. Cloudflare's R2 pricing page lists "10 GB-month" without defining GB as decimal or binary.
+- **Decision:** Use `10 × 10⁹` bytes (`models.R2FreeStorageBytes`).
+- **Consequences:** The dashboard free-tier bar reaches 100% about 7% earlier than with GiB, so it errs toward warning early.
+
+### D-039 — Installer prints the explicit `--listen` host (2026-09-29)
+
+- **Context:** With `--listen 127.0.0.1:8090` the hub only answers on loopback, but the printed agent one-liner used the detected Tailscale/LAN IP, which gave a URL that doesn't work.
+- **Decision:** `print_summary` uses the bind host when it is not a wildcard (`""`, `0.0.0.0`, `::`, `[::]`); otherwise it keeps the Tailscale → `hostname -I` detection.
+- **Consequences:** The one-liner is always reachable for the address the hub is actually bound to. Covered by a `test-install.sh` assertion (67 total).

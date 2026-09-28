@@ -50,12 +50,17 @@ type FreeTier struct {
 
 // R2FreeTier is Cloudflare R2's free tier: 10 GB-month of storage
 // (approximated here as bytes stored), 1,000,000 Class A ops, and
-// 10,000,000 Class B ops.
+// 10,000,000 Class B ops. Cloudflare's pricing page does not state whether
+// "GB" is decimal or binary, so the conservative decimal value (10×10⁹ bytes)
+// is used: the dashboard bar reaches 100% slightly early rather than late.
 var R2FreeTier = FreeTier{
-	StorageBytes: 10 * GiB,
+	StorageBytes: R2FreeStorageBytes,
 	ClassAOps:    1_000_000,
 	ClassBOps:    10_000_000,
 }
+
+// R2FreeStorageBytes is the R2 free-tier storage allowance in bytes (10 GB, decimal).
+const R2FreeStorageBytes uint64 = 10 * 1000 * 1000 * 1000
 
 // BucketView is the read-model for a single bucket: latest stats, recent
 // history, and an optional free-tier reference (set to &R2FreeTier for R2

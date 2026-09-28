@@ -8,8 +8,8 @@ import (
 func TestR2FreeTier(t *testing.T) {
 	t.Parallel()
 
-	if R2FreeTier.StorageBytes != 10*GiB {
-		t.Errorf("StorageBytes = %d, want %d", R2FreeTier.StorageBytes, 10*GiB)
+	if R2FreeTier.StorageBytes != uint64(10_000_000_000) {
+		t.Errorf("StorageBytes = %d, want %d", R2FreeTier.StorageBytes, uint64(10_000_000_000))
 	}
 	if R2FreeTier.ClassAOps != 1_000_000 {
 		t.Errorf("ClassAOps = %d, want 1000000", R2FreeTier.ClassAOps)
