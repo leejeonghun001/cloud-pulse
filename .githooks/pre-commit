@@ -87,7 +87,8 @@ done
 is_vendor_path() {
   local p="$1"
   case "$p" in
-    vendor/*|*/vendor/*|web/assets/vendor/*) return 0 ;;
+    # */vendor/* also covers web/assets/vendor/*.
+    vendor/*|*/vendor/*) return 0 ;;
     *) return 1 ;;
   esac
 }
