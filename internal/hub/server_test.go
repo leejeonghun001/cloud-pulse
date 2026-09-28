@@ -270,4 +270,14 @@ func TestWrongMethod_405(t *testing.T) {
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405", rec.Code)
 	}
+	if got := rec.Header().Get("Allow"); got != "GET, HEAD" {
+		t.Errorf("Allow = %q, want %q", got, "GET, HEAD")
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+	got := decodeJSON[models.APIError](t, rec.Body)
+	if got.Error != "method not allowed" {
+		t.Errorf("error = %q, want method not allowed", got.Error)
+	}
 }

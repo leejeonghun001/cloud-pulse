@@ -147,7 +147,7 @@ func New(opts Options, store Store, collectors []BucketCollector, notifier Notif
 // Handler returns the fully wrapped HTTP handler (routes plus
 // middleware) for the server.
 func (s *Server) Handler() http.Handler {
-	var h http.Handler = s.mux
+	var h http.Handler = s.jsonMethodNotAllowed(s.mux)
 	h = s.securityHeaders(h)
 	h = s.cidrAllowlist(h)
 	h = s.requestLogger(h)

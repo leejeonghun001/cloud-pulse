@@ -63,6 +63,52 @@ func (s *Server) cidrAllowlist(next http.Handler) http.Handler {
 	})
 }
 
+// methodErrorWriter holds only the ServeMux-generated 405 response so it can
+// be replaced with the API's JSON error shape. Other responses write through
+// directly, and ServeMux's Allow header remains on the wrapped writer.
+type methodErrorWriter struct {
+	http.ResponseWriter
+	methodNotAllowed bool
+	wroteHeader      bool
+}
+
+func (w *methodErrorWriter) WriteHeader(code int) {
+	if w.wroteHeader {
+		return
+	}
+	w.wroteHeader = true
+	if code == http.StatusMethodNotAllowed {
+		w.methodNotAllowed = true
+		return
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *methodErrorWriter) Write(p []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	if w.methodNotAllowed {
+		return len(p), nil
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+// jsonMethodNotAllowed replaces the standard library's plain-text 405 with
+// an APIError while preserving the Allow header selected by http.ServeMux.
+func (s *Server) jsonMethodNotAllowed(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methodErr := &methodErrorWriter{ResponseWriter: w}
+		next.ServeHTTP(methodErr, r)
+		if !methodErr.methodNotAllowed {
+			return
+		}
+
+		w.Header().Del("Content-Length")
+		writeJSON(w, http.StatusMethodNotAllowed, models.APIError{Error: "method not allowed"})
+	})
+}
+
 // statusRecorder wraps http.ResponseWriter to capture the status code
 // written, defaulting to 200 if WriteHeader is never called explicitly.
 type statusRecorder struct {
