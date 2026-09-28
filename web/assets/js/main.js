@@ -18,6 +18,7 @@ import { formatBytes, formatBitrate, formatDuration, formatRelativeTimeFromUnixS
 import { buildEgressSection, currentMonth } from "./egress.js";
 import { buildBucketsSection } from "./buckets.js";
 import { createTimeSeriesChart, SERIES_COLORS } from "./charts.js";
+import { runHostDetailRefresh } from "./refresh.js";
 
 const REFRESH_INTERVAL_MS = 15000;
 const AGENT_INSTALL_HINT =
@@ -263,10 +264,10 @@ async function renderHostDetail(hostID) {
   mainEl.append(egressHost);
 
   async function loadSummary() {
-    if (page !== activePage) return;
+    if (page !== activePage) return false;
     try {
       const summary = await getHost(hostID, controller.signal);
-      if (page !== activePage) return;
+      if (page !== activePage) return false;
       clearBanner();
       renderHostDetailHeader(headerHost, summary, Date.now());
       renderHostEgressCard(egressHost, summary.egress);
@@ -274,8 +275,9 @@ async function renderHostDetail(hostID) {
         renderDisksTable(disksHost, summary.latest.disks);
       }
       setRefreshIndicator(`Last refreshed ${new Date().toLocaleTimeString()}`);
+      return true;
     } catch (err) {
-      if (err?.name === "AbortError") return;
+      if (err?.name === "AbortError") return false;
       if (err instanceof ApiError && err.status === 404) {
         clearChildren(mainEl);
         mainEl.append(
@@ -283,10 +285,11 @@ async function renderHostDetail(hostID) {
         );
         mainEl.append(el("a", { class: "cp-back-link", attrs: { href: "#/" }, text: "← Back to overview" }));
         clearRefreshTimer();
-        return;
+        return false;
       }
-      if (page !== activePage) return;
+      if (page !== activePage) return false;
       showBanner(describeError(err));
+      return true;
     }
   }
 
@@ -305,10 +308,13 @@ async function renderHostDetail(hostID) {
   }
 
   async function loadAll(rescheduleOnly) {
-    if (page !== activePage) return;
-    await loadSummary();
-    if (!rescheduleOnly) await loadMetrics();
-    if (page === activePage) scheduleRefresh(() => loadAll(false));
+    await runHostDetailRefresh({
+      isActive: () => page === activePage,
+      loadSummary,
+      loadMetrics,
+      rescheduleOnly,
+      schedule: () => scheduleRefresh(() => loadAll(false)),
+    });
   }
 
   await loadAll(false);
