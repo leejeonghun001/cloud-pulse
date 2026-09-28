@@ -41,30 +41,49 @@ func (s *Server) afterIngest(host models.HostInfo, now time.Time) {
 	}
 
 	usage := models.ComputeEgress(month, tx, rx, host.EgressLimitBytes, now)
+	for _, level := range egressAlertLevels(usage) {
+		first, err := s.store.MarkAlertSent(ctx, host.ID, month, level)
+		if err != nil {
+			s.logger.Error("alerts: mark alert sent failed", "host_id", host.ID, "level", level, "error", err)
+			return
+		}
+		if !first {
+			continue
+		}
+		s.notifyEgressAlert(host, usage, level)
+	}
+}
+
+// egressAlertLevels returns every configured threshold reached by usage in
+// ascending severity order. MarkAlertSent deduplicates levels previously sent
+// during an earlier ingest.
+func egressAlertLevels(usage models.EgressUsage) []models.EgressLevel {
 	if usage.Level == models.EgressOK {
-		return
+		return nil
 	}
 
-	first, err := s.store.MarkAlertSent(ctx, host.ID, month, usage.Level)
-	if err != nil {
-		s.logger.Error("alerts: mark alert sent failed", "host_id", host.ID, "level", usage.Level, "error", err)
-		return
+	levels := []models.EgressLevel{models.EgressWarning}
+	if usage.Percent >= models.EgressCriticalPercent {
+		levels = append(levels, models.EgressCritical)
 	}
-	if !first {
-		return
+	if usage.Percent >= 100 {
+		levels = append(levels, models.EgressExceeded)
 	}
+	return levels
+}
 
-	title := fmt.Sprintf("cloud-pulse: %s egress %s", host.Hostname, usage.Level)
+func (s *Server) notifyEgressAlert(host models.HostInfo, usage models.EgressUsage, level models.EgressLevel) {
+	title := fmt.Sprintf("cloud-pulse: %s egress %s", host.Hostname, level)
 	message := fmt.Sprintf(
 		"Host %s egress usage is %s: %s / %s (%.1f%%) this month (%s).",
-		host.Hostname, usage.Level,
+		host.Hostname, level,
 		models.HumanBytes(usage.TxBytes), models.HumanBytes(usage.LimitBytes),
 		usage.Percent, usage.Month,
 	)
 	s.logger.Warn("egress alert",
 		"host_id", host.ID,
 		"hostname", host.Hostname,
-		"level", usage.Level,
+		"level", level,
 		"percent", usage.Percent,
 		"month", usage.Month,
 	)
@@ -79,7 +98,7 @@ func (s *Server) afterIngest(host models.HostInfo, now time.Time) {
 		notifyCtx, cancel := context.WithTimeout(context.Background(), alertNotifyTimeout)
 		defer cancel()
 		if err := s.notifier.Notify(notifyCtx, title, message); err != nil {
-			s.logger.Error("alerts: notify failed", "host_id", host.ID, "level", usage.Level, "error", err)
+			s.logger.Error("alerts: notify failed", "host_id", host.ID, "level", level, "error", err)
 		}
 	}()
 }

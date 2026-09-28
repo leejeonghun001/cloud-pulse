@@ -650,3 +650,15 @@ never rewrite history here, only add to it.
 - **Context:** With `--listen 127.0.0.1:8090` the hub only answers on loopback, but the printed agent one-liner used the detected Tailscale/LAN IP, which gave a URL that doesn't work.
 - **Decision:** `print_summary` uses the bind host when it is not a wildcard (`""`, `0.0.0.0`, `::`, `[::]`); otherwise it keeps the Tailscale → `hostname -I` detection.
 - **Consequences:** The one-liner is always reachable for the address the hub is actually bound to. Covered by a `test-install.sh` assertion (67 total).
+
+### D-040 — Egress batches notify every newly attained threshold (2026-09-29)
+
+- **Context:** A delayed agent report can take monthly usage from below 80% directly past 95% or 100%; alerting only the current severity silently loses earlier threshold notifications.
+- **Decision:** On every ingest, test warning, critical, and exceeded thresholds in ascending order and send each level not already recorded for the host and month.
+- **Consequences:** Operators receive one alert for every attained threshold even after an outage or replay batch; `alerts_sent` remains the idempotency boundary.
+
+### D-041 — S3 month-to-date request metrics use daily CloudWatch periods (2026-09-29)
+
+- **Context:** S3 request metrics are published in UTC daily buckets. A dynamic month-length period is unnecessary and can obscure that alignment.
+- **Decision:** Query month-to-date S3 request and downloaded-byte metrics with `Period=86400` from the UTC month start, then sum the returned daily datapoints.
+- **Consequences:** The month-to-date total remains correct while matching CloudWatch's native daily S3 metric cadence.

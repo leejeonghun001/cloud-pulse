@@ -268,7 +268,8 @@ Set `CP_EGRESS_LIMIT_GB` per host to override the provider default (AWS
 100 GB, OCI 10 TB, other = unlimited) when your actual billing terms
 differ. Alerts fire once per host per month at each of 80% (warning), 95%
 (critical), and 100% (exceeded) of the configured limit, via
-`CP_ALERT_WEBHOOK_URL`.
+`CP_ALERT_WEBHOOK_URL`. A report that crosses multiple thresholds at once
+still emits each newly attained alert.
 
 ## REST API
 

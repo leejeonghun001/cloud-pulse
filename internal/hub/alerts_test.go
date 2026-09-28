@@ -91,6 +91,35 @@ func ingestWithTS(t *testing.T, s *Server, hostID string, ts int64, tx, limit ui
 	}
 }
 
+func TestAlerts_JumpAcrossThresholdsFiresEveryLevel(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	notifier := &fakeNotifier{}
+	now := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)
+	opts := testOptions()
+	opts.Now = fixedNow(now)
+	s := New(opts, store, nil, notifier, nil, testLogger())
+
+	const hostID = "host-alert-jump"
+	const limit = 1000
+	ingestWithTS(t, s, hostID, now.Unix(), 1050, limit)
+	s.Wait()
+
+	if got := notifier.callCount(); got != 3 {
+		t.Fatalf("notify calls = %d, want warning, critical, and exceeded", got)
+	}
+	month := models.MonthOf(now)
+	for _, level := range []models.EgressLevel{models.EgressWarning, models.EgressCritical, models.EgressExceeded} {
+		first, err := store.MarkAlertSent(t.Context(), hostID, month, level)
+		if err != nil {
+			t.Fatalf("MarkAlertSent(%s): %v", level, err)
+		}
+		if first {
+			t.Errorf("level %s was not marked sent", level)
+		}
+	}
+}
+
 func TestAlerts_NotifierNilSafe(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
