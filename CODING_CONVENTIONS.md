@@ -67,7 +67,7 @@ internal/hub/            HTTP API, middleware (CIDR allowlist, auth, security he
                          scheduler (rollup/prune/cloud), alerts (egress webhook). Defines interfaces Store,
                          BucketCollector, Notifier (consumer-defined interfaces).
 web/                     embed.go (package web, //go:embed → exported FS embed.FS or func Assets() fs.FS),
-                         index.html, assets/app.js, assets/app.css, assets/vendor/uplot.*
+                         index.html, assets/js/*.js, assets/app.css, assets/vendor/uplot.*
 scripts/                 install-hub.sh, install-agent.sh, build-release.sh
 .githooks/               pre-commit, commit-msg
 .github/workflows/       ci.yml, release.yml
@@ -171,25 +171,100 @@ Dependency direction rules:
 
 ## Embedded frontend standards
 
+- **File layout** (`web/assets/js/`): `main.js` (routing, page
+  render/refresh loop, token dialog), `api.js` (`fetch` wrapper, 401
+  handling), `format.js` (pure formatting helpers — bytes, percentages,
+  durations — unit-tested independently of the DOM), `components.js`
+  (shared DOM-builder helpers), `charts.js` (uPlot chart construction),
+  `egress.js` / `buckets.js` (page-specific rendering for those
+  sections). Keep pure/testable logic (`format.js`) free of DOM/`fetch`
+  calls so it can be exercised by `node --test` without a browser.
 - **Vanilla ES modules.** No bundler, no build-time transpilation for JS.
+- **DOM builder rule**: build elements programmatically (`el(tag, attrs,
+  children)`-style helpers in `components.js`) and set dynamic content
+  via `textContent`, never `innerHTML` with interpolated/request-derived
+  data. See `DECISIONS_LOG.md` D-023.
+- **Pure JS logic is tested with `node --test`** (`web/test/*.test.mjs`),
+  no browser/DOM required for those tests. Browser-dependent behavior
+  (rendering, chart output, the token dialog flow) is verified manually
+  with a headless browser during development, not via CI browser tests.
 - **No CDN at runtime.** Every third-party asset (e.g. uPlot) is vendored
   under `web/assets/vendor/` with its license file committed alongside it.
 - **Tailwind CSS is prebuilt and committed** (`web/assets/app.css`) via
-  `make css`. End users and CI never need Node.js to build or run the hub.
+  `make css`. End users and CI never need Node.js to build or run the hub;
+  run `make css` and commit the regenerated file whenever a Tailwind
+  class changes in `index.html` or any JS module.
 - **CSP-compatible**: no inline `<script>` blocks, no inline event handler
-  attributes (`onclick=` etc). All behavior lives in `assets/app.js`.
+  attributes (`onclick=` etc). All behavior lives in `assets/js/*.js`.
 - **Accessibility**: semantic HTML elements over generic `div` soup;
   `role="progressbar"` + `aria-valuenow`/`aria-valuemin`/`aria-valuemax` on
   progress bars; visible keyboard focus states; text/background contrast
   meets WCAG AA; respect `prefers-reduced-motion` for any animation.
 
-## Shell scripts
+## Shell scripts (installers)
 
 - Bash, with `set -euo pipefail` at the top of every script.
 - Quote every variable expansion (`"$var"`, `"${arr[@]}"`).
-- Scripts are idempotent — running them twice produces the same end state.
-- `bash -n script.sh` must be clean (enforced by pre-commit/CI on every
-  `.sh` file).
+- Scripts are idempotent — running them twice produces the same end state
+  (re-running an installer is the upgrade path, see D-033).
+- `bash -n script.sh` must be clean, and `shellcheck -S warning` must be
+  clean on every `.sh` file (enforced by pre-commit/CI).
+- **All top-level logic lives inside functions; `main "$@"` is the last
+  line of the file.** A `curl | bash`-piped script that gets cut off
+  mid-transfer must fail to parse, never execute a truncated fragment.
+  See D-025. Do not add any top-level statement after `main "$@"`, or
+  before it other than function/variable declarations.
+- **Every value written into an env file goes through
+  `validate_env_value VALUE FLAGNAME` first.** It rejects embedded
+  newline/CR, a leading `#`/`export `, embedded whitespace, and embedded
+  backslash — see D-028 for why each of these classes is dangerous.
+  Never skip this for a new flag that ends up in `hub.env`/`agent.env`.
+- **Never `source` or `eval` a file whose content ultimately originates
+  from a CLI flag** (that includes `hub.env`/`agent.env`). Use
+  `load_env_file_safe()`'s plain string-operation line parser and pass
+  the result as literal `env -i` argv elements instead. See D-029.
+- **Install binaries atomically**: `install -m 0755 SRC DST.new` then
+  `mv -f DST.new DST`, never `install` directly onto the final path. See
+  D-030.
+- **Sandbox testability**: every real system path is computed once in a
+  `setup_paths()`-style function with a sandbox-root prefix (empty
+  string in real installs) so `scripts/test-install.sh` can exercise the
+  full script as an unprivileged user via `CP_INSTALL_ROOT`. Only
+  operations that inherently require root or a live systemd/user
+  database (`useradd`, `chown`, `systemctl`) are replaced with a logged
+  "sandbox: would run ..." line; everything else (download, checksum,
+  file installation, unit rendering, `systemd-analyze verify`) runs for
+  real against the sandboxed paths.
+
+## Test portability (cross-OS CI matrix)
+
+CI runs `go test ./...` on `ubuntu-latest`, `ubuntu-24.04-arm`,
+`macos-latest`, and `windows-latest`. Tests must pass on all four without
+OS-specific skips, except where the behavior under test is itself
+OS-specific by design.
+
+- **Never hardcode a path separator in an expected value.** Build
+  expected filesystem paths with `filepath.Join`/`filepath.ToSlash`, not
+  string literals containing `/` or `\`.
+- **Fixtures whose validity depends on OS-specific filtering rules
+  (disk partitions, mountpoints, network interfaces) must be OS-aware.**
+  Either construct a fixture that's valid under every target OS's rule
+  set, or gate the test/fixture explicitly with a `runtime.GOOS` check
+  when the behavior itself differs by OS (e.g. Darwin's disk-partition
+  rule only allowing `/` and `/Volumes/*`).
+- **Close any `*sql.DB`/file handle before a `t.TempDir()`-based test
+  returns.** Windows cannot delete a directory containing an open file
+  handle; letting `t.Cleanup`/deferred `Close()` run before the test
+  function returns (not relying on process exit) avoids a "file in use"
+  cleanup error on Windows runners.
+- **Verification tools used during development** (not part of the
+  enforced CI suite, but useful when adding tests):
+  `CGO_ENABLED=1 go list -deps -f '{{if and (not .Standard)
+  .CgoFiles}}{{.ImportPath}}{{end}}' ./...` to confirm no CGO leaked in;
+  cross-`GOOS`/`GOARCH` `go build ./...` / `go vet ./...` for each of the
+  8 release targets before assuming a change is portable; `go test -c -o
+  /dev/null ./pkg/` to confirm a test binary at least *compiles* for an
+  OS you can't run tests on locally (e.g. windows/amd64 from Linux).
 
 ## Git hooks setup
 
