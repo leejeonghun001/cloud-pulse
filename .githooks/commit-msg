@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# cloud-pulse commit-msg hook — enforces Conventional Commits on the first line.
+set -euo pipefail
+
+if [[ -t 1 ]]; then
+  C_RED=$'\033[31m'
+  C_GREEN=$'\033[32m'
+  C_BOLD=$'\033[1m'
+  C_RESET=$'\033[0m'
+else
+  C_RED=""
+  C_GREEN=""
+  C_BOLD=""
+  C_RESET=""
+fi
+
+MSG_FILE="${1:-}"
+
+if [[ -z "$MSG_FILE" || ! -f "$MSG_FILE" ]]; then
+  echo "${C_RED}FAIL${C_RESET} commit-msg: no commit message file provided" >&2
+  exit 1
+fi
+
+# First non-comment line of the message is the subject line.
+SUBJECT=""
+while IFS= read -r line; do
+  [[ "$line" == \#* ]] && continue
+  SUBJECT="$line"
+  break
+done < "$MSG_FILE"
+
+CONVENTIONAL_RE='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._/-]+\))?!?: .+'
+
+print_help() {
+  cat >&2 <<EOF
+
+${C_RED}${C_BOLD}commit-msg: invalid commit message${C_RESET}
+
+Subject line must follow Conventional Commits:
+  ${C_BOLD}<type>(<scope>)?: <description>${C_RESET}
+  type    = feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert
+  scope   = optional, lowercase, e.g. (hub), (agent), (storage)
+  '!'     = optional, marks a breaking change, e.g. feat!: ...
+  Max 100 characters on the subject line.
+
+Examples (valid):
+  feat(hub): add egress alert webhook
+  fix(agent): correct disk delta on counter reset
+  docs: update README install instructions
+  feat!: drop support for legacy config format
+
+Also allowed as-is (no Conventional Commits check applied):
+  Merge branch 'main' into feature-x
+  Revert "feat(hub): add egress alert webhook"
+  fixup! feat(hub): add egress alert webhook
+  squash! feat(hub): add egress alert webhook
+
+Got:
+  ${SUBJECT}
+EOF
+}
+
+# Allow merge commits, reverts, and fixup!/squash! commits without further checks.
+case "$SUBJECT" in
+  "Merge "*|'Revert "'*|"fixup! "*|"squash! "*)
+    echo "${C_GREEN}PASS${C_RESET} commit-msg: recognized merge/revert/fixup/squash subject"
+    exit 0
+    ;;
+esac
+
+if [[ -z "$SUBJECT" ]]; then
+  echo "${C_RED}FAIL${C_RESET} commit-msg: empty subject line" >&2
+  print_help
+  exit 1
+fi
+
+if [[ ${#SUBJECT} -gt 100 ]]; then
+  echo "${C_RED}FAIL${C_RESET} commit-msg: subject line exceeds 100 characters (${#SUBJECT})" >&2
+  print_help
+  exit 1
+fi
+
+if [[ ! "$SUBJECT" =~ $CONVENTIONAL_RE ]]; then
+  echo "${C_RED}FAIL${C_RESET} commit-msg: subject line does not match Conventional Commits format" >&2
+  print_help
+  exit 1
+fi
+
+echo "${C_GREEN}PASS${C_RESET} commit-msg: subject line follows Conventional Commits"
+exit 0

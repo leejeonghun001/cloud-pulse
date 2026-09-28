@@ -1,0 +1,443 @@
+#!/usr/bin/env bash
+# cloud-pulse pre-commit hook — mathematical enforcement of CODING_CONVENTIONS.
+#
+# Modes:
+#   default            -> checks staged files only (git diff --cached --name-only --diff-filter=ACMR)
+#   CP_CHECK_ALL=1     -> checks the whole tree (git ls-files + untracked-not-ignored). CI uses this mode.
+#
+# Every check prints PASS/FAIL (or SKIP when gracefully skipped). All checks run regardless of
+# earlier failures; the hook exits non-zero if ANY check failed.
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Setup
+# ---------------------------------------------------------------------------
+
+export CGO_ENABLED=0
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PRE_COMMIT_SELF="$HOOK_DIR/pre-commit"
+COMMIT_MSG_SELF="$HOOK_DIR/commit-msg"
+
+OVERALL_STATUS=0
+
+# Colored output only when stdout is a tty.
+if [[ -t 1 ]]; then
+  C_RED=$'\033[31m'
+  C_GREEN=$'\033[32m'
+  C_YELLOW=$'\033[33m'
+  C_BOLD=$'\033[1m'
+  C_RESET=$'\033[0m'
+else
+  C_RED=""
+  C_GREEN=""
+  C_YELLOW=""
+  C_BOLD=""
+  C_RESET=""
+fi
+
+pass() {
+  echo "${C_GREEN}PASS${C_RESET} $*"
+}
+
+fail() {
+  echo "${C_RED}FAIL${C_RESET} $*"
+  OVERALL_STATUS=1
+}
+
+skip() {
+  echo "${C_YELLOW}SKIP${C_RESET} $*"
+}
+
+header() {
+  echo ""
+  echo "${C_BOLD}==> $*${C_RESET}"
+}
+
+# ---------------------------------------------------------------------------
+# Determine target file set
+# ---------------------------------------------------------------------------
+
+TARGET_FILES=()
+if [[ "${CP_CHECK_ALL:-0}" == "1" ]]; then
+  MODE="all (CP_CHECK_ALL=1)"
+  while IFS= read -r -d '' f; do
+    TARGET_FILES+=("$f")
+  done < <(
+    { git ls-files -z; git ls-files -z --others --exclude-standard; } | sort -zu
+  )
+else
+  MODE="staged"
+  while IFS= read -r -d '' f; do
+    TARGET_FILES+=("$f")
+  done < <(git diff --cached --name-only --diff-filter=ACMR -z)
+fi
+
+echo "${C_BOLD}cloud-pulse pre-commit${C_RESET} (mode: $MODE, ${#TARGET_FILES[@]} target file(s))"
+
+# Keep only files that still exist on disk (avoid issues with deleted-then-filtered entries).
+EXISTING_TARGET_FILES=()
+for f in "${TARGET_FILES[@]}"; do
+  [[ -f "$f" ]] && EXISTING_TARGET_FILES+=("$f")
+done
+
+is_vendor_path() {
+  local p="$1"
+  case "$p" in
+    vendor/*|*/vendor/*|web/assets/vendor/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Non-vendor subset of existing target files (used for content greps).
+NON_VENDOR_FILES=()
+for f in "${EXISTING_TARGET_FILES[@]}"; do
+  is_vendor_path "$f" || NON_VENDOR_FILES+=("$f")
+done
+
+# Go files among the non-vendor target set.
+GO_FILES=()
+for f in "${NON_VENDOR_FILES[@]}"; do
+  case "$f" in
+    *.go) GO_FILES+=("$f") ;;
+  esac
+done
+
+# Shell files among the non-vendor target set.
+SH_FILES=()
+for f in "${NON_VENDOR_FILES[@]}"; do
+  case "$f" in
+    *.sh) SH_FILES+=("$f") ;;
+  esac
+done
+
+HAVE_GO_MOD=0
+[[ -f "go.mod" ]] && HAVE_GO_MOD=1
+
+HAVE_GO_PACKAGES=0
+if [[ "$HAVE_GO_MOD" == "1" ]]; then
+  if go list ./... >/dev/null 2>&1; then
+    PKG_COUNT="$(go list ./... 2>/dev/null | wc -l | tr -d ' ')"
+    [[ "$PKG_COUNT" -gt 0 ]] && HAVE_GO_PACKAGES=1
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 1) go fmt / gofmt -l
+# ---------------------------------------------------------------------------
+
+header "1) go fmt"
+if [[ "$HAVE_GO_MOD" != "1" || "$HAVE_GO_PACKAGES" != "1" ]]; then
+  skip "go fmt ./... (no go.mod or no Go packages)"
+else
+  BEFORE_HASH=""
+  if [[ ${#GO_FILES[@]} -gt 0 ]]; then
+    BEFORE_HASH="$(cat "${GO_FILES[@]}" 2>/dev/null | sha256sum | awk '{print $1}')"
+  fi
+
+  go fmt ./... >/tmp/cp-gofmt-out.$$ 2>&1 || true
+  GOFMT_CHANGED="$(cat /tmp/cp-gofmt-out.$$)"
+  rm -f /tmp/cp-gofmt-out.$$
+
+  AFTER_HASH=""
+  if [[ ${#GO_FILES[@]} -gt 0 ]]; then
+    AFTER_HASH="$(cat "${GO_FILES[@]}" 2>/dev/null | sha256sum | awk '{print $1}')"
+  fi
+
+  GOFMT_L=""
+  if [[ ${#GO_FILES[@]} -gt 0 ]]; then
+    GOFMT_L="$(gofmt -l "${GO_FILES[@]}" 2>/dev/null || true)"
+  fi
+
+  if [[ -n "$GOFMT_CHANGED" || "$BEFORE_HASH" != "$AFTER_HASH" || -n "$GOFMT_L" ]]; then
+    fail "go fmt ./... (files were reformatted or gofmt -l reports issues)"
+    if [[ -n "$GOFMT_CHANGED" ]]; then
+      echo "  go fmt reformatted:"
+      echo "$GOFMT_CHANGED" | sed 's/^/    /'
+    fi
+    if [[ -n "$GOFMT_L" ]]; then
+      echo "  gofmt -l reports:"
+      echo "$GOFMT_L" | sed 's/^/    /'
+    fi
+    echo "  Please re-stage the affected files (git add) and commit again."
+  else
+    pass "go fmt ./... (no changes; gofmt -l clean)"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 2) go vet
+# ---------------------------------------------------------------------------
+
+header "2) go vet"
+if [[ "$HAVE_GO_MOD" != "1" || "$HAVE_GO_PACKAGES" != "1" ]]; then
+  skip "go vet ./... (no go.mod or no Go packages)"
+else
+  if VET_OUT="$(go vet ./... 2>&1)"; then
+    pass "go vet ./..."
+  else
+    fail "go vet ./..."
+    echo "$VET_OUT" | sed 's/^/    /'
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 3) CGO ban
+# ---------------------------------------------------------------------------
+
+header "3) CGO ban"
+
+# 3a. import "C" / bare "C" inside import blocks, in target .go files.
+CGO_IMPORT_HITS=""
+if [[ ${#GO_FILES[@]} -gt 0 ]]; then
+  CGO_IMPORT_HITS="$(grep -nE '^[[:space:]]*(import[[:space:]]+)?(_[[:space:]]+)?"C"[[:space:]]*$' "${GO_FILES[@]}" 2>/dev/null || true)"
+fi
+if [[ -n "$CGO_IMPORT_HITS" ]]; then
+  fail "no import \"C\" in .go files"
+  echo "$CGO_IMPORT_HITS" | sed 's/^/    /'
+else
+  pass "no import \"C\" in .go files"
+fi
+
+# 3b. #cgo directives in target .go files.
+CGO_DIRECTIVE_HITS=""
+if [[ ${#GO_FILES[@]} -gt 0 ]]; then
+  CGO_DIRECTIVE_HITS="$(grep -nE '^[[:space:]]*//[[:space:]]*#cgo\b' "${GO_FILES[@]}" 2>/dev/null || true)"
+fi
+if [[ -n "$CGO_DIRECTIVE_HITS" ]]; then
+  fail "no #cgo directives in .go files"
+  echo "$CGO_DIRECTIVE_HITS" | sed 's/^/    /'
+else
+  pass "no #cgo directives in .go files"
+fi
+
+# 3c. CGO_ENABLED=1 in any target text file (sh, Makefile, yml, yaml, go, Dockerfile).
+# .md excluded (docs mention it). Hook files themselves excluded.
+CGO_ENABLED_HITS=""
+CGO_TEXT_TARGETS=()
+for f in "${NON_VENDOR_FILES[@]}"; do
+  [[ "$f" == ".githooks/pre-commit" || "$f" == ".githooks/commit-msg" ]] && continue
+  case "$f" in
+    *.sh|*Makefile|makefile|*.yml|*.yaml|*.go|*Dockerfile|*dockerfile*)
+      CGO_TEXT_TARGETS+=("$f")
+      ;;
+  esac
+done
+if [[ ${#CGO_TEXT_TARGETS[@]} -gt 0 ]]; then
+  CGO_ENABLED_HITS="$(grep -nE 'CGO_ENABLED=1|CGO_ENABLED:[[:space:]]*"?1"?' "${CGO_TEXT_TARGETS[@]}" 2>/dev/null || true)"
+fi
+if [[ -n "$CGO_ENABLED_HITS" ]]; then
+  fail "no CGO_ENABLED=1 in tracked build/config/source files"
+  echo "$CGO_ENABLED_HITS" | sed 's/^/    /'
+else
+  pass "no CGO_ENABLED=1 in tracked build/config/source files"
+fi
+
+# 3d. go.mod must not contain github.com/mattn/go-sqlite3.
+if [[ -f "go.mod" ]] && grep -q 'github.com/mattn/go-sqlite3' go.mod 2>/dev/null; then
+  fail "go.mod must not depend on github.com/mattn/go-sqlite3"
+else
+  pass "go.mod does not depend on github.com/mattn/go-sqlite3"
+fi
+
+# 3e. dependency-graph CGO check.
+if [[ "$HAVE_GO_MOD" != "1" || "$HAVE_GO_PACKAGES" != "1" ]]; then
+  skip "CGO_ENABLED=1 go list -deps (no go.mod or no Go packages)"
+else
+  DEP_CGO_HITS="$(CGO_ENABLED=1 go list -deps -f '{{if and (not .Standard) .CgoFiles}}{{.ImportPath}}{{end}}' ./... 2>/dev/null || true)"
+  DEP_CGO_HITS="$(echo "$DEP_CGO_HITS" | sed '/^[[:space:]]*$/d')"
+  if [[ -n "$DEP_CGO_HITS" ]]; then
+    fail "dependency graph must have no CGO-using non-std packages"
+    echo "$DEP_CGO_HITS" | sed 's/^/    /'
+  else
+    pass "dependency graph has no CGO-using non-std packages"
+  fi
+fi
+
+# 3f. CGO_ENABLED=0 go build ./... must succeed.
+if [[ "$HAVE_GO_MOD" != "1" || "$HAVE_GO_PACKAGES" != "1" ]]; then
+  skip "CGO_ENABLED=0 go build ./... (no go.mod or no Go packages)"
+else
+  if BUILD_OUT="$(CGO_ENABLED=0 go build ./... 2>&1)"; then
+    pass "CGO_ENABLED=0 go build ./..."
+  else
+    fail "CGO_ENABLED=0 go build ./..."
+    echo "$BUILD_OUT" | sed 's/^/    /'
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 4) Unhandled errors (errcheck)
+# ---------------------------------------------------------------------------
+
+header "4) errcheck (unhandled errors)"
+if [[ "$HAVE_GO_MOD" != "1" || "$HAVE_GO_PACKAGES" != "1" ]]; then
+  skip "errcheck ./... (no go.mod or no Go packages)"
+else
+  ERRCHECK_BIN=""
+  if command -v errcheck >/dev/null 2>&1; then
+    ERRCHECK_BIN="errcheck"
+  fi
+
+  if [[ -n "$ERRCHECK_BIN" ]]; then
+    if ERRCHECK_OUT="$("$ERRCHECK_BIN" -blank=false -ignoretests=false ./... 2>&1)"; then
+      pass "errcheck ./... (using PATH errcheck)"
+    else
+      fail "errcheck ./... (using PATH errcheck)"
+      echo "$ERRCHECK_OUT" | sed 's/^/    /'
+    fi
+  else
+    if [[ "${CP_SKIP_ERRCHECK:-0}" == "1" ]]; then
+      skip "errcheck ./... (CP_SKIP_ERRCHECK=1)"
+    else
+      if ERRCHECK_OUT="$(go run github.com/kisielk/errcheck@v1.20.0 -blank=false -ignoretests=false ./... 2>&1)"; then
+        pass "errcheck ./... (go run github.com/kisielk/errcheck@v1.20.0)"
+      else
+        ERRCHECK_EXIT=$?
+        if echo "$ERRCHECK_OUT" | grep -qiE 'dial tcp|no such host|network is unreachable|could not resolve|timeout|TLS handshake|connection refused|lookup .* on'; then
+          fail "errcheck could not be downloaded (offline?). Set CP_SKIP_ERRCHECK=1 to bypass, or install 'errcheck' on PATH."
+          echo "$ERRCHECK_OUT" | sed 's/^/    /'
+        else
+          fail "errcheck ./... (go run github.com/kisielk/errcheck@v1.20.0)"
+          echo "$ERRCHECK_OUT" | sed 's/^/    /'
+        fi
+        : "$ERRCHECK_EXIT"
+      fi
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 5) No raw panics
+# ---------------------------------------------------------------------------
+
+header "5) no raw panic("
+PANIC_HITS=""
+NON_TEST_GO_FILES=()
+for f in "${GO_FILES[@]}"; do
+  case "$f" in
+    *_test.go) ;;
+    *) NON_TEST_GO_FILES+=("$f") ;;
+  esac
+done
+if [[ ${#NON_TEST_GO_FILES[@]} -gt 0 ]]; then
+  PANIC_HITS="$(grep -nE 'panic\(' "${NON_TEST_GO_FILES[@]}" 2>/dev/null | grep -v '// allow-panic:' || true)"
+fi
+if [[ -n "$PANIC_HITS" ]]; then
+  fail "panic( found in non-test files without // allow-panic: justification"
+  echo "$PANIC_HITS" | sed 's/^/    /'
+else
+  pass "no unjustified panic( in non-test files"
+fi
+
+# ---------------------------------------------------------------------------
+# 6) os.Exit / log.Fatal* restricted to cmd/*/main.go
+# ---------------------------------------------------------------------------
+
+header "6) os.Exit / log.Fatal* restricted to cmd/*/main.go"
+EXIT_HITS=""
+if [[ ${#NON_TEST_GO_FILES[@]} -gt 0 ]]; then
+  for f in "${NON_TEST_GO_FILES[@]}"; do
+    case "$f" in
+      cmd/*/main.go) continue ;;
+    esac
+    HIT="$(grep -nE 'os\.Exit\(|log\.Fatal(f|ln)?\(' "$f" 2>/dev/null || true)"
+    if [[ -n "$HIT" ]]; then
+      EXIT_HITS+="$f:"$'\n'"$HIT"$'\n'
+    fi
+  done
+fi
+if [[ -n "$EXIT_HITS" ]]; then
+  fail "os.Exit(/log.Fatal* only allowed in cmd/*/main.go"
+  echo "$EXIT_HITS" | sed 's/^/    /'
+else
+  pass "os.Exit(/log.Fatal* only found in cmd/*/main.go (if anywhere)"
+fi
+
+# ---------------------------------------------------------------------------
+# 7) Shell syntax
+# ---------------------------------------------------------------------------
+
+header "7) shell syntax"
+SHELL_TARGETS=("${SH_FILES[@]}")
+SHELL_TARGETS+=("$PRE_COMMIT_SELF" "$COMMIT_MSG_SELF")
+
+# De-duplicate.
+declare -A _seen_shell=()
+UNIQ_SHELL_TARGETS=()
+for f in "${SHELL_TARGETS[@]}"; do
+  [[ -f "$f" ]] || continue
+  if [[ -z "${_seen_shell[$f]:-}" ]]; then
+    _seen_shell["$f"]=1
+    UNIQ_SHELL_TARGETS+=("$f")
+  fi
+done
+
+BASH_N_FAILED=0
+for f in "${UNIQ_SHELL_TARGETS[@]}"; do
+  if BASH_N_OUT="$(bash -n "$f" 2>&1)"; then
+    :
+  else
+    fail "bash -n $f"
+    echo "$BASH_N_OUT" | sed 's/^/    /'
+    BASH_N_FAILED=1
+  fi
+done
+if [[ "$BASH_N_FAILED" == "0" ]]; then
+  if [[ ${#UNIQ_SHELL_TARGETS[@]} -gt 0 ]]; then
+    pass "bash -n (${#UNIQ_SHELL_TARGETS[@]} file(s))"
+  else
+    skip "bash -n (no shell files in target set)"
+  fi
+fi
+
+if command -v shellcheck >/dev/null 2>&1; then
+  if [[ ${#UNIQ_SHELL_TARGETS[@]} -gt 0 ]]; then
+    if SHELLCHECK_OUT="$(shellcheck -S warning "${UNIQ_SHELL_TARGETS[@]}" 2>&1)"; then
+      pass "shellcheck -S warning (${#UNIQ_SHELL_TARGETS[@]} file(s))"
+    else
+      fail "shellcheck -S warning"
+      echo "$SHELLCHECK_OUT" | sed 's/^/    /'
+    fi
+  else
+    skip "shellcheck (no shell files in target set)"
+  fi
+else
+  skip "shellcheck (not installed; optional)"
+fi
+
+# ---------------------------------------------------------------------------
+# 8) Secret heuristics
+# ---------------------------------------------------------------------------
+
+header "8) secret heuristics"
+SECRET_HITS=""
+if [[ ${#NON_VENDOR_FILES[@]} -gt 0 ]]; then
+  SECRET_HITS="$(grep -nEI \
+    -e 'AKIA[0-9A-Z]{16}' \
+    -e '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----' \
+    -e 'gh[pousr]_[A-Za-z0-9]{36}' \
+    "${NON_VENDOR_FILES[@]}" 2>/dev/null || true)"
+fi
+if [[ -n "$SECRET_HITS" ]]; then
+  fail "possible secret detected"
+  echo "$SECRET_HITS" | sed 's/^/    /'
+else
+  pass "no secret patterns detected"
+fi
+
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
+
+echo ""
+if [[ "$OVERALL_STATUS" -ne 0 ]]; then
+  echo "${C_RED}${C_BOLD}pre-commit: one or more checks FAILED${C_RESET}"
+else
+  echo "${C_GREEN}${C_BOLD}pre-commit: all checks PASSED${C_RESET}"
+fi
+
+exit "$OVERALL_STATUS"

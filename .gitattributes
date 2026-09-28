@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.sh text eol=lf
+.githooks/* text eol=lf
+web/assets/vendor/** linguist-vendored
+web/assets/app.css linguist-generated

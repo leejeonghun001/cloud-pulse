@@ -1,0 +1,152 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CGO_ENABLED: "0"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run pre-commit hook (whole tree)
+        run: CP_CHECK_ALL=1 bash .githooks/pre-commit
+
+      - name: Check gofmt
+        run: test -z "$(gofmt -l .)"
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run tests
+        run: go test -count=1 -coverprofile=coverage.out ./...
+
+      - name: Coverage summary
+        if: runner.os == 'Linux' && matrix.os == 'ubuntu-latest'
+        run: go tool cover -func=coverage.out >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            goarm: ""
+          - goos: linux
+            goarch: arm64
+            goarm: ""
+          - goos: linux
+            goarch: arm
+            goarm: "7"
+          - goos: darwin
+            goarch: amd64
+            goarm: ""
+          - goos: darwin
+            goarch: arm64
+            goarm: ""
+          - goos: windows
+            goarch: amd64
+            goarm: ""
+          - goos: windows
+            goarch: arm64
+            goarm: ""
+          - goos: freebsd
+            goarch: amd64
+            goarm: ""
+    runs-on: ubuntu-latest
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      GOARM: ${{ matrix.goarm }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build all packages for target
+        run: go build ./...
+
+      - name: Build hub/agent binaries and assert static (linux/amd64 only)
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: |
+          if [ -d cmd/hub ]; then
+            go build -trimpath -o /tmp/cloud-pulse-hub ./cmd/hub
+            file /tmp/cloud-pulse-hub | tee /tmp/hub-file-output.txt
+            grep -q "statically linked" /tmp/hub-file-output.txt
+          else
+            echo "::notice::cmd/hub does not exist yet, skipping static-link check"
+          fi
+          if [ -d cmd/agent ]; then
+            go build -trimpath -o /tmp/cloud-pulse-agent ./cmd/agent
+            file /tmp/cloud-pulse-agent | tee /tmp/agent-file-output.txt
+            grep -q "statically linked" /tmp/agent-file-output.txt
+          else
+            echo "::notice::cmd/agent does not exist yet, skipping static-link check"
+          fi
+
+  smoke:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run smoke test
+        run: |
+          if [ -d cmd/hub ] && [ -d cmd/agent ]; then
+            if [ -f scripts/smoke.sh ]; then
+              bash scripts/smoke.sh
+            else
+              echo "::notice::scripts/smoke.sh not found yet, skipping smoke test"
+            fi
+          else
+            echo "::notice::cmd/hub and/or cmd/agent do not exist yet, skipping smoke test"
+          fi

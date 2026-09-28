@@ -1,0 +1,12 @@
+dist/
+data/
+*.db
+*.db-wal
+*.db-shm
+coverage.out
+node_modules/
+.DS_Store
+/cloud-pulse-hub
+/cloud-pulse-agent
+*.exe
+tmp/

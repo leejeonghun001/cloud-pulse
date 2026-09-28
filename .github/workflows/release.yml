@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v1.2.3)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run tests
+        run: go test ./...
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build release artifacts
+        run: scripts/build-release.sh "${TAG}" dist
+
+      - name: Determine prerelease flag
+        id: prerelease
+        run: |
+          if [[ "${TAG}" == *-* ]]; then
+            echo "value=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create or update GitHub release
+        run: |
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" dist/* --clobber
+          else
+            extra_args=()
+            if [ "${PRERELEASE}" = "true" ]; then
+              extra_args+=(--prerelease)
+            fi
+            gh release create "${TAG}" dist/* --title "${TAG}" --generate-notes --verify-tag "${extra_args[@]}"
+          fi
+        env:
+          PRERELEASE: ${{ steps.prerelease.outputs.value }}
+
+      - name: Verify published checksums
+        run: |
+          rm -f dist/published-checksums.txt
+          gh release download "${TAG}" --pattern checksums.txt --output dist/published-checksums.txt --clobber
+          (cd dist && sha256sum -c published-checksums.txt --ignore-missing)
