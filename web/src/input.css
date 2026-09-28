@@ -1,0 +1,530 @@
+@import "tailwindcss";
+
+/* @source scans these for Tailwind utility classes referenced from JS
+   (components are built at runtime via document.createElement, so the
+   scanner needs to see the literal class strings in the JS sources, not
+   just index.html). */
+@source "../index.html";
+@source "../assets/js/**/*.js";
+
+@theme {
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  --color-cp-bg: #0b0f14;
+  --color-cp-surface: #111823;
+  --color-cp-surface-raised: #16202c;
+  --color-cp-border: #22303f;
+  --color-cp-text: #e6edf3;
+  --color-cp-muted: #8b98a5;
+
+  --color-cp-ok: #10b981;
+  --color-cp-warning: #f59e0b;
+  --color-cp-critical: #fb923c;
+  --color-cp-exceeded: #ef4444;
+
+  --color-cp-aws: #f59e0b;
+  --color-cp-oci: #ef4444;
+  --color-cp-other: #64748b;
+  --color-cp-r2: #f97316;
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  * {
+    scrollbar-color: var(--color-cp-border) transparent;
+  }
+
+  body {
+    background: var(--color-cp-bg);
+    color: var(--color-cp-text);
+    font-family: var(--font-sans);
+  }
+
+  :focus-visible {
+    outline: 2px solid #38bdf8;
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  .cp-skip-link {
+    @apply sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:bg-cp-surface-raised focus:px-4 focus:py-2 focus:text-cp-text focus:shadow-lg;
+  }
+
+  .cp-sr-only {
+    @apply sr-only;
+  }
+
+  .cp-sr-only-summary {
+    @apply sr-only;
+  }
+
+  .cp-noscript-banner {
+    @apply bg-cp-exceeded/20 border border-cp-exceeded text-cp-text p-4 text-center;
+  }
+
+  .cp-header {
+    @apply border-b border-cp-border bg-cp-surface sticky top-0 z-40;
+  }
+
+  .cp-header-inner {
+    @apply mx-auto max-w-7xl flex items-center justify-between px-4 py-3 sm:px-6;
+  }
+
+  .cp-brand {
+    @apply text-lg font-semibold tracking-tight text-cp-text;
+  }
+
+  .cp-header nav a {
+    @apply text-sm text-cp-muted hover:text-cp-text transition-colors;
+  }
+
+  .cp-banner-host {
+    @apply mx-auto max-w-7xl px-4 sm:px-6;
+  }
+
+  .cp-main {
+    @apply mx-auto max-w-7xl px-4 py-6 sm:px-6 flex flex-col gap-8;
+  }
+
+  .cp-footer {
+    @apply mx-auto max-w-7xl px-4 py-4 sm:px-6 text-sm text-cp-muted border-t border-cp-border mt-8;
+  }
+
+  .cp-refresh-indicator {
+    @apply text-xs text-cp-muted;
+  }
+
+  .cp-page-title {
+    @apply text-2xl font-semibold text-cp-text;
+  }
+
+  .cp-section {
+    @apply flex flex-col gap-4;
+  }
+
+  .cp-section h2 {
+    @apply text-xl font-semibold text-cp-text;
+  }
+
+  .cp-card {
+    @apply rounded-xl border border-cp-border bg-cp-surface p-4 shadow-sm flex flex-col gap-3;
+  }
+
+  .cp-summary-strip {
+    @apply grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 rounded-xl border border-cp-border bg-cp-surface p-4;
+  }
+
+  .cp-summary-item {
+    @apply flex flex-col items-start gap-1;
+  }
+
+  .cp-summary-value {
+    @apply text-xl font-semibold text-cp-text;
+  }
+
+  .cp-summary-label {
+    @apply text-xs text-cp-muted uppercase tracking-wide;
+  }
+
+  .cp-refresh-row {
+    @apply flex items-center justify-between gap-3;
+  }
+
+  .cp-refresh-label {
+    @apply text-sm text-cp-muted;
+  }
+
+  .cp-btn {
+    @apply inline-flex items-center justify-center rounded-md border border-cp-border bg-cp-surface-raised px-3 py-1.5 text-sm text-cp-text hover:bg-cp-border transition-colors cursor-pointer;
+  }
+
+  .cp-btn-secondary {
+    @apply text-sm;
+  }
+
+  .cp-btn-icon {
+    @apply px-2 py-1 text-base;
+  }
+
+  .cp-btn-range[aria-pressed="true"] {
+    @apply bg-sky-600 border-sky-500 text-white;
+  }
+
+  .cp-host-grid {
+    @apply grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4;
+  }
+
+  .cp-host-card {
+    @apply block hover:border-sky-500 focus-visible:border-sky-500 transition-colors no-underline;
+  }
+
+  .cp-host-card-offline {
+    @apply opacity-60;
+  }
+
+  .cp-host-card-header {
+    @apply flex items-center gap-2 flex-wrap;
+  }
+
+  .cp-host-card-name {
+    @apply text-base font-semibold text-cp-text truncate flex-1;
+  }
+
+  .cp-host-card-meta {
+    @apply text-xs text-cp-muted;
+  }
+
+  .cp-host-card-offline-note {
+    @apply text-xs text-cp-exceeded;
+  }
+
+  .cp-host-card-net {
+    @apply flex gap-3 text-xs text-cp-muted;
+  }
+
+  .cp-host-card-uptime {
+    @apply text-xs text-cp-muted;
+  }
+
+  .cp-dot {
+    @apply inline-block h-2.5 w-2.5 rounded-full shrink-0;
+  }
+
+  .cp-dot-up {
+    @apply bg-cp-ok;
+  }
+
+  .cp-dot-down {
+    @apply bg-cp-exceeded;
+  }
+
+  .cp-badge {
+    @apply inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shrink-0;
+  }
+
+  .cp-badge-aws {
+    @apply bg-cp-aws/90;
+  }
+
+  .cp-badge-oci {
+    @apply bg-cp-oci/90;
+  }
+
+  .cp-badge-other {
+    @apply bg-cp-other/90;
+  }
+
+  .cp-badge-r2 {
+    @apply bg-cp-r2/90;
+  }
+
+  .cp-chip {
+    @apply inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium;
+  }
+
+  .cp-chip-ok {
+    @apply bg-cp-ok/20 text-emerald-300;
+  }
+
+  .cp-chip-warning {
+    @apply bg-cp-warning/20 text-amber-300;
+  }
+
+  .cp-chip-critical {
+    @apply bg-cp-critical/20 text-orange-300;
+  }
+
+  .cp-chip-exceeded {
+    @apply bg-cp-exceeded/20 text-red-300;
+  }
+
+  .cp-metric-row {
+    @apply flex flex-col gap-1;
+  }
+
+  .cp-metric-head {
+    @apply flex items-center justify-between text-xs;
+  }
+
+  .cp-metric-label {
+    @apply text-cp-muted;
+  }
+
+  .cp-metric-value {
+    @apply text-cp-text font-medium;
+  }
+
+  .cp-bar {
+    @apply flex items-center gap-2;
+  }
+
+  .cp-bar-track {
+    @apply relative h-2 flex-1 rounded-full bg-cp-border overflow-hidden;
+  }
+
+  .cp-bar-fill {
+    @apply h-full rounded-full transition-[width];
+  }
+
+  .cp-bar-ok {
+    @apply bg-cp-ok;
+  }
+
+  .cp-bar-warning {
+    @apply bg-cp-warning;
+  }
+
+  .cp-bar-critical {
+    @apply bg-cp-critical;
+  }
+
+  .cp-bar-exceeded {
+    @apply bg-cp-exceeded;
+  }
+
+  .cp-bar-text {
+    @apply text-xs text-cp-muted w-auto whitespace-nowrap;
+  }
+
+  .cp-egress-mini {
+    @apply flex flex-col gap-1 border-t border-cp-border pt-2 mt-1;
+  }
+
+  .cp-egress-unlimited {
+    @apply text-xs text-cp-muted;
+  }
+
+  .cp-egress-projection {
+    @apply text-xs text-cp-muted;
+  }
+
+  .cp-empty-state {
+    @apply col-span-full flex flex-col items-center gap-3 rounded-xl border border-dashed border-cp-border bg-cp-surface p-8 text-center;
+  }
+
+  .cp-empty-state h3 {
+    @apply text-lg font-semibold text-cp-text;
+  }
+
+  .cp-empty-state p {
+    @apply text-sm text-cp-muted max-w-md;
+  }
+
+  .cp-code-block {
+    @apply w-full max-w-2xl overflow-x-auto rounded-md bg-cp-bg border border-cp-border p-3 text-left text-xs text-emerald-300;
+  }
+
+  .cp-error-banner {
+    @apply rounded-md border border-cp-exceeded bg-cp-exceeded/10 text-red-200 px-4 py-2 text-sm my-3;
+  }
+
+  .cp-month-controls {
+    @apply flex items-center gap-2;
+  }
+
+  .cp-input {
+    @apply rounded-md border border-cp-border bg-cp-surface-raised px-2 py-1 text-sm text-cp-text;
+  }
+
+  .cp-egress-list {
+    @apply flex flex-col gap-3;
+  }
+
+  .cp-egress-row {
+    @apply rounded-lg border border-cp-border bg-cp-surface p-3 flex flex-col gap-2;
+  }
+
+  .cp-egress-row-head {
+    @apply flex items-center justify-between gap-2;
+  }
+
+  .cp-egress-row-head a {
+    @apply text-sm font-medium text-sky-300 hover:underline;
+  }
+
+  .cp-muted {
+    @apply text-sm text-cp-muted;
+  }
+
+  .cp-muted-small {
+    @apply text-xs text-cp-muted;
+  }
+
+  .cp-hint {
+    @apply text-xs text-amber-300;
+  }
+
+  .cp-bucket-grid {
+    @apply grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3;
+  }
+
+  .cp-bucket-card-header {
+    @apply flex items-center gap-2;
+  }
+
+  .cp-bucket-card-name {
+    @apply text-base font-semibold text-cp-text truncate;
+  }
+
+  .cp-bucket-stats-grid {
+    @apply grid grid-cols-2 gap-2;
+  }
+
+  .cp-stat-pair {
+    @apply flex flex-col;
+  }
+
+  .cp-stat-value {
+    @apply text-sm font-semibold text-cp-text;
+  }
+
+  .cp-stat-label {
+    @apply text-[11px] text-cp-muted;
+  }
+
+  .cp-sparkline-wrap {
+    @apply h-10 w-full;
+  }
+
+  .cp-free-tier {
+    @apply flex flex-col gap-2 border-t border-cp-border pt-2;
+  }
+
+  .cp-free-tier h4 {
+    @apply text-xs font-semibold text-cp-muted uppercase tracking-wide;
+  }
+
+  .cp-collector-status {
+    @apply rounded-xl border border-cp-border bg-cp-surface p-4 flex flex-col gap-2;
+  }
+
+  .cp-collector-status h3 {
+    @apply text-sm font-semibold text-cp-text;
+  }
+
+  .cp-collector-list {
+    @apply flex flex-col gap-2 list-none p-0 m-0;
+  }
+
+  .cp-collector-item {
+    @apply flex items-center gap-3 text-xs flex-wrap;
+  }
+
+  .cp-collector-name {
+    @apply font-medium text-cp-text;
+  }
+
+  .cp-collector-error {
+    @apply text-cp-exceeded;
+  }
+
+  .cp-back-link {
+    @apply text-sm text-sky-300 hover:underline inline-block;
+  }
+
+  .cp-host-detail-header {
+    @apply flex flex-col gap-3;
+  }
+
+  .cp-host-detail-top {
+    @apply flex items-center gap-3;
+  }
+
+  .cp-host-detail-meta {
+    @apply grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 text-sm;
+  }
+
+  .cp-host-detail-meta-pair {
+    @apply flex flex-col;
+  }
+
+  .cp-host-detail-meta dt {
+    @apply text-cp-muted text-xs uppercase tracking-wide;
+  }
+
+  .cp-host-detail-meta dd {
+    @apply text-cp-text;
+  }
+
+  .cp-range-row {
+    @apply flex gap-2 flex-wrap;
+  }
+
+  .cp-charts-grid {
+    @apply grid grid-cols-1 gap-4 lg:grid-cols-2;
+  }
+
+  .cp-chart-card {
+    @apply min-w-0;
+  }
+
+  .cp-chart-wrap {
+    @apply w-full;
+  }
+
+  .cp-table {
+    @apply w-full text-sm border-collapse;
+  }
+
+  .cp-table th {
+    @apply text-left text-xs text-cp-muted uppercase tracking-wide border-b border-cp-border py-2 pr-4;
+  }
+
+  .cp-table td {
+    @apply py-2 pr-4 border-b border-cp-border/50 text-cp-text;
+  }
+
+  .cp-dialog {
+    @apply rounded-xl border border-cp-border bg-cp-surface text-cp-text p-6 max-w-sm w-full;
+  }
+
+  .cp-dialog::backdrop {
+    @apply bg-black/60;
+  }
+
+  .cp-dialog form {
+    @apply flex flex-col gap-3;
+  }
+
+  .cp-dialog label {
+    @apply text-sm text-cp-muted;
+  }
+
+  .cp-dialog input {
+    @apply rounded-md border border-cp-border bg-cp-surface-raised px-3 py-2 text-sm text-cp-text;
+  }
+
+  .cp-dialog-error {
+    @apply text-sm text-cp-exceeded min-h-[1.25rem];
+  }
+
+  .cp-dialog-actions {
+    @apply flex justify-end gap-2 mt-2;
+  }
+
+  .cp-dialog-actions button {
+    @apply rounded-md border border-cp-border px-3 py-1.5 text-sm hover:bg-cp-border transition-colors cursor-pointer;
+  }
+
+  .cp-dialog-actions button[type="submit"] {
+    @apply bg-sky-600 border-sky-500 text-white hover:bg-sky-500;
+  }
+
+  .cp-uplot {
+    @apply w-full;
+  }
+}

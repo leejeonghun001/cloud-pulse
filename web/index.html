@@ -4,14 +4,54 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>cloud-pulse</title>
+  <link rel="stylesheet" href="/assets/vendor/uplot/uPlot.min.css">
   <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
-  <main>
-    <h1>cloud-pulse</h1>
-    <p>Dashboard coming soon.</p>
-    <p><a href="/api/v1/hosts">/api/v1/hosts</a></p>
+  <a class="cp-skip-link" href="#cp-main">Skip to main content</a>
+
+  <noscript>
+    <div class="cp-noscript-banner">
+      cloud-pulse requires JavaScript to render the dashboard. Please enable
+      JavaScript, or use the JSON API directly at
+      <code>/api/v1/hosts</code>.
+    </div>
+  </noscript>
+
+  <header class="cp-header">
+    <div class="cp-header-inner">
+      <span class="cp-brand">cloud-pulse</span>
+      <nav aria-label="Primary">
+        <a href="#/">Overview</a>
+      </nav>
+    </div>
+  </header>
+
+  <div id="cp-banner-host" class="cp-banner-host"></div>
+
+  <main id="cp-main" class="cp-main" tabindex="-1">
+    <!-- Rendered by assets/js/main.js -->
   </main>
-  <script type="module" src="/assets/app.js"></script>
+
+  <footer class="cp-footer">
+    <p id="cp-refresh-indicator" class="cp-refresh-indicator">Loading…</p>
+    <p id="cp-live-region" class="cp-sr-only" role="status" aria-live="polite"></p>
+  </footer>
+
+  <dialog id="cp-token-dialog" class="cp-dialog" aria-labelledby="cp-token-dialog-title">
+    <form id="cp-token-form" method="dialog">
+      <h2 id="cp-token-dialog-title">Authentication required</h2>
+      <p>Enter the UI access token configured on this hub (<code>CP_UI_TOKEN</code>).</p>
+      <label for="cp-token-input">Access token</label>
+      <input id="cp-token-input" name="token" type="password" autocomplete="off" required>
+      <p id="cp-token-error" class="cp-dialog-error" role="alert"></p>
+      <div class="cp-dialog-actions">
+        <button type="button" id="cp-token-cancel" value="cancel">Cancel</button>
+        <button type="submit" value="submit">Continue</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="/assets/js/main.js"></script>
 </body>
 </html>
