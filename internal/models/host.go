@@ -165,4 +165,8 @@ type HostSummary struct {
 	LastSeen int64       `json:"last_seen"`
 	Latest   *Sample     `json:"latest,omitempty"`
 	Egress   EgressUsage `json:"egress"`
+	// Update describes an available agent update for this host, or nil
+	// when no update is known or the host's agent version doesn't
+	// parse.
+	Update *AgentUpdate `json:"update,omitempty"`
 }

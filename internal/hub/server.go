@@ -127,6 +127,13 @@ type Options struct {
 	// nil, a hub.WebhookNotifier with a 10s-timeout client is used.
 	// Tests inject a fake to observe/short-circuit outbound HTTP calls.
 	NotifierFor func(url string) Notifier
+	// UpdateSource resolves the latest published cloud-pulse release
+	// tag for the background update checker. nil disables the checker
+	// entirely (RunBackground's update-check loop becomes a no-op) and
+	// GET /api/v1/version reports update_check_enabled accordingly.
+	// cmd/hub constructs selfupdate.SourceFromEnv(os.LookupEnv) here
+	// when CP_UPDATE_CHECK is true.
+	UpdateSource LatestResolver
 	// Now returns the current time; nil defaults to time.Now.
 	Now func() time.Time
 }
@@ -162,6 +169,16 @@ type Server struct {
 
 	statusMu sync.Mutex
 	status   map[string]models.CollectorStatus
+
+	updateMu      sync.Mutex
+	updateStatusV updateStatus
+
+	// updateFirstDelay/updateInterval override the update-check loop's
+	// timing; both zero (the Server zero value) means "use the real
+	// defaults" (firstUpdateCheckDelay/updateCheckInterval). Only tests
+	// in this package set these, via newTestServerWithUpdateTiming.
+	updateFirstDelay time.Duration
+	updateInterval   time.Duration
 }
 
 // New constructs a Server. collectors and notifier may be empty/nil.

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
-	"github.com/leejeonghun001/cloud-pulse/internal/version"
 )
 
 // maxReportBytes is the maximum accepted size of an agent report body.
@@ -33,13 +32,11 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleVersion reports build metadata.
+// handleVersion reports build metadata and the hub's self-update check
+// status.
 func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{
-		"version": version.Version,
-		"commit":  version.Commit,
-		"date":    version.Date,
-	})
+	info := buildVersionInfo(s.opts.UpdateSource != nil, s.updateStatusSnapshot())
+	writeJSON(w, http.StatusOK, info)
 }
 
 // handleStatic serves the embedded web assets from s.assets for
@@ -108,10 +105,11 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := models.IngestResponse{
-		Accepted:     inserted,
-		Duplicates:   len(valid) - inserted,
-		Rejected:     rejected,
-		ServerTimeMs: s.opts.now().UnixMilli(),
+		Accepted:      inserted,
+		Duplicates:    len(valid) - inserted,
+		Rejected:      rejected,
+		ServerTimeMs:  s.opts.now().UnixMilli(),
+		LatestVersion: s.updateStatusSnapshot().latestVersion,
 	}
 	writeJSON(w, http.StatusOK, resp)
 
@@ -160,7 +158,7 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	summaries := make([]models.HostSummary, 0, len(records))
 	for _, rec := range records {
 		tx, rx := egressByHost[rec.Info.ID].TxBytes, egressByHost[rec.Info.ID].RxBytes
-		summaries = append(summaries, buildHostSummary(rec, limitsByHost[rec.Info.ID], tx, rx, now, s.opts.OfflineAfter))
+		summaries = append(summaries, s.buildHostSummary(rec, limitsByHost[rec.Info.ID], tx, rx, now, s.opts.OfflineAfter))
 	}
 
 	sort.Slice(summaries, func(i, j int) bool {
@@ -205,7 +203,7 @@ func (s *Server) handleGetHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	summary := buildHostSummary(rec, limits, tx, rx, now, s.opts.OfflineAfter)
+	summary := s.buildHostSummary(rec, limits, tx, rx, now, s.opts.OfflineAfter)
 	writeJSON(w, http.StatusOK, summary)
 }
 
@@ -415,8 +413,9 @@ func (s *Server) currentMonthEgress(ctx context.Context, hostID string, now time
 // buildHostSummary computes a HostSummary for rec at now given its
 // current-month tx/rx byte totals and hub-side limit overrides,
 // resolving effective outbound/inbound limits via
-// models.EffectiveLimits.
-func buildHostSummary(rec models.HostRecord, limits models.HostLimits, tx, rx uint64, now time.Time, offlineAfter time.Duration) models.HostSummary {
+// models.EffectiveLimits, and the available agent update (if any) via
+// s.agentUpdateFor.
+func (s *Server) buildHostSummary(rec models.HostRecord, limits models.HostLimits, tx, rx uint64, now time.Time, offlineAfter time.Duration) models.HostSummary {
 	status := models.HostDown
 	if now.Sub(time.Unix(rec.LastSeen, 0)) <= offlineAfter {
 		status = models.HostUp
@@ -434,6 +433,7 @@ func buildHostSummary(rec models.HostRecord, limits models.HostLimits, tx, rx ui
 		LastSeen: rec.LastSeen,
 		Latest:   rec.Latest,
 		Egress:   egress,
+		Update:   s.agentUpdateFor(rec.Info),
 	}
 }
 

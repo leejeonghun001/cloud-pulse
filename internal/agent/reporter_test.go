@@ -1,10 +1,13 @@
 package agent
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -227,5 +230,56 @@ func TestReporter_RetainOn429(t *testing.T) {
 	}
 	if r.Buffered() != 1 {
 		t.Errorf("Buffered = %d, want 1 (retained on 429)", r.Buffered())
+	}
+}
+
+func TestReporter_LogsUpdateNoticeWhenHubReportsNewerVersion(t *testing.T) {
+	withTestVersion(t, "v0.3.0")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(models.IngestResponse{Accepted: 1, LatestVersion: "v0.3.1"})
+	}))
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	r := NewReporter(ReporterOptions{HubURL: srv.URL, Token: "tok", Logger: logger})
+	r.Enqueue(models.Sample{Timestamp: 1})
+	if err := r.Flush(t.Context(), models.HostInfo{}); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	if !strings.Contains(buf.String(), "a newer cloud-pulse-agent is available") {
+		t.Errorf("expected update notice in log output, got: %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "latest=v0.3.1") {
+		t.Errorf("expected latest=v0.3.1 in log output, got: %q", buf.String())
+	}
+}
+
+func TestReporter_NoUpdateNoticeWhenLatestVersionAbsent(t *testing.T) {
+	withTestVersion(t, "v0.3.0")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(models.IngestResponse{Accepted: 1})
+	}))
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	r := NewReporter(ReporterOptions{HubURL: srv.URL, Token: "tok", Logger: logger})
+	r.Enqueue(models.Sample{Timestamp: 1})
+	if err := r.Flush(t.Context(), models.HostInfo{}); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	if strings.Contains(buf.String(), "a newer cloud-pulse-agent is available") {
+		t.Errorf("expected no update notice when latest_version is absent, got: %q", buf.String())
 	}
 }

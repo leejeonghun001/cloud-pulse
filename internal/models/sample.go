@@ -65,6 +65,10 @@ type IngestResponse struct {
 	// moment the response was produced, used by agents to synchronize
 	// their clock to the hub's.
 	ServerTimeMs int64 `json:"server_time_ms"`
+	// LatestVersion is the latest cloud-pulse-agent release tag known to
+	// the hub, omitted when unknown. Agents use it to log a one-time
+	// notice when a newer version is available.
+	LatestVersion string `json:"latest_version,omitempty"`
 }
 
 // TimeResponse is returned by the hub's time-sync endpoint so agents can

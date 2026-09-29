@@ -25,6 +25,7 @@ import (
 	"github.com/leejeonghun001/cloud-pulse/internal/cloud"
 	"github.com/leejeonghun001/cloud-pulse/internal/config"
 	"github.com/leejeonghun001/cloud-pulse/internal/hub"
+	"github.com/leejeonghun001/cloud-pulse/internal/selfupdate"
 	"github.com/leejeonghun001/cloud-pulse/internal/storage"
 	"github.com/leejeonghun001/cloud-pulse/internal/version"
 	"github.com/leejeonghun001/cloud-pulse/web"
@@ -38,6 +39,7 @@ var (
 	_ hub.BucketCollector = (*cloud.S3Collector)(nil)
 	_ hub.BucketCollector = (*cloud.R2Collector)(nil)
 	_ hub.Notifier        = hub.WebhookNotifier{}
+	_ hub.LatestResolver  = selfupdate.Source{}
 )
 
 // httpClientTimeout bounds every HTTP call made by cloud collectors.
@@ -48,6 +50,9 @@ const httpClientTimeout = 30 * time.Second
 const shutdownTimeout = 10 * time.Second
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "update" {
+		os.Exit(runUpdate(os.Args[2:]))
+	}
 	os.Exit(run())
 }
 
@@ -59,6 +64,11 @@ func run() int {
 	checkConfigFlag := flag.Bool("check-config", false, "load and validate configuration, print a redacted summary, and exit")
 	listenFlag := flag.String("listen", "", "override CP_LISTEN (address to listen on)")
 	dataDirFlag := flag.String("data-dir", "", "override CP_DATA_DIR (directory for the SQLite database)")
+	flag.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: cloud-pulse-hub [flags]")
+		fmt.Fprintln(os.Stderr, "       cloud-pulse-hub update [--check] [--version vX.Y.Z] [--no-restart]")
+		flag.PrintDefaults()
+	}
 	flag.Parse()
 
 	if *versionFlag {
@@ -126,6 +136,7 @@ func printConfigSummary(w *os.File, cfg config.Hub) {
 		fmt.Sprintf("  offline_after:     %s", cfg.OfflineAfter),
 		fmt.Sprintf("  cloud_interval:    %s", cfg.CloudInterval),
 		fmt.Sprintf("  alert_webhook_url: %s", redactPresence(cfg.AlertWebhookURL)),
+		fmt.Sprintf("  update_check:      %t", cfg.UpdateCheck),
 		fmt.Sprintf("  log_level:         %s", cfg.LogLevel),
 		fmt.Sprintf("  log_format:        %s", cfg.LogFormat),
 		fmt.Sprintf("  s3_enabled:        %t (%d bucket(s))", cfg.S3Enabled(), len(cfg.S3Buckets)),
@@ -186,6 +197,12 @@ func runHub(cfg config.Hub) int {
 
 	collectors := buildCollectors(cfg)
 
+	var updateSource hub.LatestResolver
+	if cfg.UpdateCheck {
+		src := selfupdate.SourceFromEnv(os.LookupEnv)
+		updateSource = src
+	}
+
 	srv := hub.New(hub.Options{
 		AgentToken:      cfg.AgentToken,
 		UIToken:         cfg.UIToken,
@@ -196,6 +213,7 @@ func runHub(cfg config.Hub) int {
 		// NotifierFor left nil: hub.Options.notifierFor's default
 		// (hub.WebhookNotifier with its own 10s-timeout client) is used
 		// for both env- and settings-sourced webhook URLs.
+		UpdateSource: updateSource,
 	}, store, collectors, nil, web.Assets(), logger)
 
 	logStartupSummary(logger, cfg, collectors)

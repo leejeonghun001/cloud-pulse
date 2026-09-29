@@ -43,6 +43,11 @@ type Hub struct {
 	// to; empty disables webhook notifications.
 	AlertWebhookURL string
 
+	// UpdateCheck enables the hub's periodic background check against
+	// the GitHub releases endpoint for a newer cloud-pulse version.
+	// false means the hub never contacts GitHub.
+	UpdateCheck bool
+
 	// LogLevel is one of debug|info|warn|error.
 	LogLevel string
 	// LogFormat is one of text|json.
@@ -136,6 +141,11 @@ func LoadHub(l LookupFunc) (Hub, error) {
 		if err := validateWebhookURL(h.AlertWebhookURL); err != nil {
 			return Hub{}, err
 		}
+	}
+
+	h.UpdateCheck, err = getBool(l, "CP_UPDATE_CHECK", true)
+	if err != nil {
+		return Hub{}, err
 	}
 
 	h.LogLevel = getString(l, "CP_LOG_LEVEL", "info")

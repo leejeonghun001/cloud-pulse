@@ -43,6 +43,9 @@ func TestLoadHub_Defaults(t *testing.T) {
 	if h.LogLevel != "info" {
 		t.Errorf("LogLevel = %q, want info", h.LogLevel)
 	}
+	if !h.UpdateCheck {
+		t.Error("UpdateCheck = false, want true (default)")
+	}
 	if h.LogFormat != "text" {
 		t.Errorf("LogFormat = %q, want text", h.LogFormat)
 	}
@@ -439,6 +442,50 @@ func TestLoadHub_WebhookURLValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLoadHub_UpdateCheck(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{"unset_defaults_true", "", true},
+		{"explicit_true", "true", true},
+		{"explicit_false", "false", false},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			env := map[string]string{"CP_AGENT_TOKEN": "abcdefghijklmnop"}
+			if tc.raw != "" {
+				env["CP_UPDATE_CHECK"] = tc.raw
+			}
+			h, err := LoadHub(mapLookup(env))
+			if err != nil {
+				t.Fatalf("LoadHub: %v", err)
+			}
+			if h.UpdateCheck != tc.want {
+				t.Errorf("UpdateCheck = %v, want %v", h.UpdateCheck, tc.want)
+			}
+		})
+	}
+
+	t.Run("invalid_value_errors", func(t *testing.T) {
+		t.Parallel()
+		env := map[string]string{
+			"CP_AGENT_TOKEN":  "abcdefghijklmnop",
+			"CP_UPDATE_CHECK": "not-a-bool",
+		}
+		_, err := LoadHub(mapLookup(env))
+		if err == nil {
+			t.Fatal("expected error for invalid CP_UPDATE_CHECK")
+		}
+	})
 }
 
 func TestLoadHub_CloudIntervalMinimum(t *testing.T) {

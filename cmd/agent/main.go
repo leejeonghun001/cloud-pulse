@@ -21,6 +21,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "update" {
+		os.Exit(runUpdate(os.Args[2:]))
+	}
 	os.Exit(run())
 }
 
@@ -30,6 +33,11 @@ func run() int {
 	versionFlag := flag.Bool("version", false, "print version information and exit")
 	onceFlag := flag.Bool("once", false, "collect two samples one second apart, print the second as JSON, and exit")
 	printHostFlag := flag.Bool("print-host", false, "print detected host info as JSON and exit")
+	flag.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: cloud-pulse-agent [flags]")
+		fmt.Fprintln(os.Stderr, "       cloud-pulse-agent update [--check] [--version vX.Y.Z] [--no-restart]")
+		flag.PrintDefaults()
+	}
 	flag.Parse()
 
 	if *versionFlag {

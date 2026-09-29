@@ -110,11 +110,24 @@ func TestVersion_Endpoint(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	got := decodeJSON[map[string]string](t, rec.Body)
-	for _, key := range []string{"version", "commit", "date"} {
-		if _, ok := got[key]; !ok {
-			t.Errorf("response missing key %q: %v", key, got)
-		}
+	got := decodeJSON[models.VersionInfo](t, rec.Body)
+	if got.Version == "" {
+		t.Error("response missing version")
+	}
+	if got.Commit == "" {
+		t.Error("response missing commit")
+	}
+	if got.Date == "" {
+		t.Error("response missing date")
+	}
+	if got.UpdateCheckEnabled {
+		t.Error("UpdateCheckEnabled = true, want false (no UpdateSource configured in testOptions)")
+	}
+	if got.UpdateCommand != "sudo cloud-pulse-hub update" {
+		t.Errorf("UpdateCommand = %q, want %q", got.UpdateCommand, "sudo cloud-pulse-hub update")
+	}
+	if got.LatestVersion != "" {
+		t.Errorf("LatestVersion = %q, want empty (no check has run)", got.LatestVersion)
 	}
 }
 

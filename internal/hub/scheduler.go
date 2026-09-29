@@ -44,7 +44,31 @@ func (s *Server) RunBackground(ctx context.Context) {
 		}()
 	}
 
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.runUpdateCheckLoop(ctx, s.updateFirstDelayOrDefault(), s.updateIntervalOrDefault())
+	}()
+
 	wg.Wait()
+}
+
+// updateFirstDelayOrDefault returns s.updateFirstDelay if a test has set
+// it (non-zero), otherwise the real firstUpdateCheckDelay.
+func (s *Server) updateFirstDelayOrDefault() time.Duration {
+	if s.updateFirstDelay > 0 {
+		return s.updateFirstDelay
+	}
+	return firstUpdateCheckDelay
+}
+
+// updateIntervalOrDefault returns s.updateInterval if a test has set it
+// (non-zero), otherwise the real updateCheckInterval.
+func (s *Server) updateIntervalOrDefault() time.Duration {
+	if s.updateInterval > 0 {
+		return s.updateInterval
+	}
+	return updateCheckInterval
 }
 
 func (s *Server) runRollupLoop(ctx context.Context) {
