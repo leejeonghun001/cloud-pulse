@@ -472,7 +472,8 @@ curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scr
 
 This keeps every existing token/setting/data file untouched, re-renders
 the systemd unit (via the freshly downloaded binary's own
-`systemd-unit print`, see below), and prints `Upgraded vA → vB` plus,
+`systemd-unit print`, see below), explicitly restarts the service if it
+is already running (or starts it if inactive), and prints `Upgraded vA → vB` plus,
 the first time this crosses the v0.3.0 boundary, "This install now
 includes the built-in updater." **From that point on**, the two
 `update` subcommands are the only thing you need — including for future

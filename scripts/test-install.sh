@@ -41,6 +41,9 @@ SERVER_PID=""
 SERVER_PORT=""
 TAMPERED_SERVER_PID=""
 TAMPERED_SERVER_PORT=""
+SYSTEMCTL_SHIM=""
+SYSTEMCTL_LOG=""
+SYSTEMCTL_STATE=""
 
 HOST_ARCH=""
 
@@ -1422,6 +1425,216 @@ test_active_managed_key_keeps_commented_peer() {
 }
 
 # ---------------------------------------------------------------------------
+# systemctl lifecycle integration tests
+# ---------------------------------------------------------------------------
+
+setup_systemctl_shim() {
+  SYSTEMCTL_LOG="${TMP_ROOT}/systemctl.log"
+  SYSTEMCTL_STATE="${TMP_ROOT}/systemctl.state"
+  SYSTEMCTL_SHIM="${TMP_ROOT}/systemctl-shim"
+  cat > "$SYSTEMCTL_SHIM" <<'SHIM'
+#!/usr/bin/env bash
+set -euo pipefail
+
+log_file="${CP_SYSTEMCTL_LOG:?}"
+state_file="${CP_SYSTEMCTL_STATE:?}"
+printf '%s\n' "$*" >> "$log_file"
+
+get_state() {
+  awk -F= -v key="$1" '$1 == key { print substr($0, length(key) + 2); exit }' "$state_file"
+}
+
+set_state() {
+  local key="$1" value="$2" tmp
+  tmp="${state_file}.tmp"
+  awk -F= -v key="$key" -v value="$value" '
+    $1 == key { print key "=" value; next }
+    { print }
+  ' "$state_file" > "$tmp"
+  mv "$tmp" "$state_file"
+}
+
+bump_process() {
+  local pid started
+  pid="$(get_state pid)"
+  started="$(get_state started)"
+  set_state state active
+  set_state pid "$((pid + 1))"
+  set_state started "$((started + 1))"
+}
+
+case "$1" in
+  daemon-reload|enable|disable)
+    exit 0
+    ;;
+  is-active)
+    [ "$(get_state state)" = "active" ]
+    ;;
+  show)
+    case "$3" in
+      MainPID) get_state pid ;;
+      ExecMainStartTimestampMonotonic) get_state started ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  start)
+    bump_process
+    ;;
+  restart)
+    if [ "$(get_state fail_restart)" = "1" ]; then
+      set_state state inactive
+    else
+      bump_process
+    fi
+    ;;
+  stop)
+    set_state state inactive
+    ;;
+  *)
+    echo "unexpected systemctl invocation: $*" >&2
+    exit 1
+    ;;
+esac
+SHIM
+  chmod 0755 "$SYSTEMCTL_SHIM"
+}
+
+set_systemctl_state() {
+  local state="$1" fail_restart="$2"
+  cat > "$SYSTEMCTL_STATE" <<EOF
+state=${state}
+pid=100
+started=1000
+fail_restart=${fail_restart}
+EOF
+  : > "$SYSTEMCTL_LOG"
+}
+
+assert_systemctl_called() {
+  local desc="$1" command="$2"
+  if grep -Fqx -- "$command" "$SYSTEMCTL_LOG"; then
+    pass "$desc"
+  else
+    fail "$desc (missing '${command}')"
+    sed 's/^/    /' "$SYSTEMCTL_LOG" >&2 || true
+  fi
+}
+
+assert_systemctl_not_called() {
+  local desc="$1" command="$2"
+  if grep -Fqx -- "$command" "$SYSTEMCTL_LOG"; then
+    fail "$desc (unexpected '${command}')"
+    sed 's/^/    /' "$SYSTEMCTL_LOG" >&2 || true
+  else
+    pass "$desc"
+  fi
+}
+
+test_systemctl_lifecycle() {
+  echo "==> testing installer systemctl lifecycle through sandbox shim"
+  setup_systemctl_shim
+
+  local hub_sandbox="${TMP_ROOT}/sandbox-hub-systemctl" out
+  set_systemctl_state inactive 0
+  out="$(env CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$hub_sandbox" \
+    CP_SYSTEMCTL="$SYSTEMCTL_SHIM" CP_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" CP_SYSTEMCTL_STATE="$SYSTEMCTL_STATE" \
+    timeout 60 bash scripts/install-hub.sh --install --yes --listen :18092 2>&1)" || {
+    fail "hub fresh install through systemctl shim exits 0"
+    echo "$out" >&2
+  }
+  assert_systemctl_called "hub fresh install enables service" "enable cloud-pulse-hub.service"
+  assert_systemctl_called "hub fresh install starts inactive service" "start cloud-pulse-hub.service"
+  assert_systemctl_not_called "hub fresh install does not restart inactive service" "restart cloud-pulse-hub.service"
+  assert_contains "hub fresh summary says started" "$out" "Service:        cloud-pulse-hub.service started (running v0.0.0-test)"
+
+  set_systemctl_state active 0
+  out="$(env CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$hub_sandbox" \
+    CP_SYSTEMCTL="$SYSTEMCTL_SHIM" CP_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" CP_SYSTEMCTL_STATE="$SYSTEMCTL_STATE" \
+    timeout 60 bash scripts/install-hub.sh --reinstall --yes 2>&1)" || {
+    fail "hub active reinstall through systemctl shim exits 0"
+    echo "$out" >&2
+  }
+  assert_systemctl_called "hub active reinstall restarts service" "restart cloud-pulse-hub.service"
+  assert_contains "hub active summary says restarted" "$out" "Service:        cloud-pulse-hub.service restarted (running v0.0.0-test)"
+
+  set_systemctl_state inactive 0
+  out="$(env CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$hub_sandbox" \
+    CP_SYSTEMCTL="$SYSTEMCTL_SHIM" CP_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" CP_SYSTEMCTL_STATE="$SYSTEMCTL_STATE" \
+    timeout 60 bash scripts/install-hub.sh --reinstall --yes 2>&1)" || {
+    fail "hub inactive reinstall through systemctl shim exits 0"
+    echo "$out" >&2
+  }
+  assert_systemctl_called "hub inactive reinstall starts service" "start cloud-pulse-hub.service"
+  assert_systemctl_not_called "hub inactive reinstall does not restart service" "restart cloud-pulse-hub.service"
+
+  set_systemctl_state active 1
+  out="$(env CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$hub_sandbox" \
+    CP_SYSTEMCTL="$SYSTEMCTL_SHIM" CP_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" CP_SYSTEMCTL_STATE="$SYSTEMCTL_STATE" \
+    timeout 25 bash scripts/install-hub.sh --reinstall --yes 2>&1)" && {
+    fail "hub failed restart exits nonzero"
+  }
+  assert_contains "hub failed restart prints journal hint" "$out" "journalctl -u cloud-pulse-hub"
+
+  set_systemctl_state active 0
+  assert_exit0 "hub uninstall routes through systemctl shim" \
+    env CP_INSTALL_ROOT="$hub_sandbox" CP_SYSTEMCTL="$SYSTEMCTL_SHIM" \
+    CP_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" CP_SYSTEMCTL_STATE="$SYSTEMCTL_STATE" \
+    timeout 30 bash scripts/install-hub.sh --uninstall --yes
+  assert_systemctl_called "hub uninstall stops service" "stop cloud-pulse-hub.service"
+  assert_systemctl_called "hub uninstall disables service" "disable cloud-pulse-hub.service"
+
+  local agent_sandbox="${TMP_ROOT}/sandbox-agent-systemctl"
+  set_systemctl_state inactive 0
+  out="$(env CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$agent_sandbox" \
+    CP_SYSTEMCTL="$SYSTEMCTL_SHIM" CP_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" CP_SYSTEMCTL_STATE="$SYSTEMCTL_STATE" \
+    timeout 60 bash scripts/install-agent.sh --install --yes --hub-url http://127.0.0.1:18092 \
+      --token 0123456789abcdef 2>&1)" || {
+    fail "agent fresh install through systemctl shim exits 0"
+    echo "$out" >&2
+  }
+  assert_systemctl_called "agent fresh install enables service" "enable cloud-pulse-agent.service"
+  assert_systemctl_called "agent fresh install starts inactive service" "start cloud-pulse-agent.service"
+  assert_systemctl_not_called "agent fresh install does not restart inactive service" "restart cloud-pulse-agent.service"
+  assert_contains "agent fresh summary says started" "$out" "Service:      cloud-pulse-agent.service started (running v0.0.0-test)"
+
+  set_systemctl_state active 0
+  out="$(env CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$agent_sandbox" \
+    CP_SYSTEMCTL="$SYSTEMCTL_SHIM" CP_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" CP_SYSTEMCTL_STATE="$SYSTEMCTL_STATE" \
+    timeout 60 bash scripts/install-agent.sh --reinstall --yes 2>&1)" || {
+    fail "agent active reinstall through systemctl shim exits 0"
+    echo "$out" >&2
+  }
+  assert_systemctl_called "agent active reinstall restarts service" "restart cloud-pulse-agent.service"
+  assert_contains "agent active summary says restarted" "$out" "Service:      cloud-pulse-agent.service restarted (running v0.0.0-test)"
+
+  set_systemctl_state inactive 0
+  out="$(env CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$agent_sandbox" \
+    CP_SYSTEMCTL="$SYSTEMCTL_SHIM" CP_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" CP_SYSTEMCTL_STATE="$SYSTEMCTL_STATE" \
+    timeout 60 bash scripts/install-agent.sh --reinstall --yes 2>&1)" || {
+    fail "agent inactive reinstall through systemctl shim exits 0"
+    echo "$out" >&2
+  }
+  assert_systemctl_called "agent inactive reinstall starts service" "start cloud-pulse-agent.service"
+  assert_systemctl_not_called "agent inactive reinstall does not restart service" "restart cloud-pulse-agent.service"
+
+  set_systemctl_state active 1
+  out="$(env CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$agent_sandbox" \
+    CP_SYSTEMCTL="$SYSTEMCTL_SHIM" CP_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" CP_SYSTEMCTL_STATE="$SYSTEMCTL_STATE" \
+    timeout 25 bash scripts/install-agent.sh --reinstall --yes 2>&1)" && {
+    fail "agent failed restart exits nonzero"
+  }
+  assert_contains "agent failed restart prints journal hint" "$out" "journalctl -u cloud-pulse-agent"
+
+  set_systemctl_state active 0
+  assert_exit0 "agent uninstall routes through systemctl shim" \
+    env CP_INSTALL_ROOT="$agent_sandbox" CP_SYSTEMCTL="$SYSTEMCTL_SHIM" \
+    CP_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" CP_SYSTEMCTL_STATE="$SYSTEMCTL_STATE" \
+    timeout 30 bash scripts/install-agent.sh --uninstall --yes
+  assert_systemctl_called "agent uninstall stops service" "stop cloud-pulse-agent.service"
+  assert_systemctl_called "agent uninstall disables service" "disable cloud-pulse-agent.service"
+}
+
+# ---------------------------------------------------------------------------
 # Static checks
 # ---------------------------------------------------------------------------
 
@@ -1505,6 +1718,7 @@ main() {
 
   test_agent_uninstall_and_purge
   test_hub_uninstall_and_purge
+  test_systemctl_lifecycle
 
   echo
   echo "===================================================="

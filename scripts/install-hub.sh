@@ -71,7 +71,9 @@
 #                         prefixed with this directory instead of the real
 #                         root filesystem. The root check, `useradd`,
 #                         `chown`, and `systemctl` calls are skipped and
-#                         replaced with "sandbox: would run ..." messages.
+#                         replaced with "sandbox: would run ..." messages,
+#                         unless CP_SYSTEMCTL explicitly names a systemctl
+#                         shim (a test hook), in which case that shim runs.
 #                         Downloading, checksum verification, file
 #                         installation, unit rendering, and
 #                         `systemd-analyze verify` (if available) still
@@ -140,7 +142,13 @@ OPT_ANY_FLAG_GIVEN=0
 UI_TOKEN_WAS_GENERATED=0
 
 SANDBOX_ROOT="${CP_INSTALL_ROOT:-}"
+SYSTEMCTL="${CP_SYSTEMCTL:-systemctl}"
 IS_SANDBOX=0
+
+# Set by start_service so the final summary reports the actual lifecycle
+# action and the version of the binary that was launched.
+SERVICE_ACTION=""
+SERVICE_VERSION=""
 
 BIN_DIR=""
 ETC_DIR=""
@@ -1138,19 +1146,48 @@ run_check_config() {
 }
 
 start_service() {
-  if [ "$IS_SANDBOX" -eq 1 ]; then
-    log "sandbox: would run systemctl daemon-reload"
-    log "sandbox: would run systemctl enable --now cloud-pulse-hub.service"
+  local service="cloud-pulse-hub.service"
+  local previous_pid="" previous_started="" current_pid="" current_started=""
+  local attempts=30
+
+  if [ "$IS_SANDBOX" -eq 1 ] && [ -z "${CP_SYSTEMCTL:-}" ]; then
+    log "sandbox: would run ${SYSTEMCTL} daemon-reload"
+    log "sandbox: would run ${SYSTEMCTL} enable ${service}"
+    log "sandbox: would run ${SYSTEMCTL} start ${service} (or restart if already running)"
     return
   fi
-  systemctl daemon-reload
-  systemctl enable --now cloud-pulse-hub.service
-  if systemctl is-active --quiet cloud-pulse-hub.service; then
-    log "cloud-pulse-hub.service is active"
+
+  "$SYSTEMCTL" daemon-reload
+  "$SYSTEMCTL" enable "$service"
+  if "$SYSTEMCTL" is-active --quiet "$service"; then
+    SERVICE_ACTION="restarted"
+    previous_pid="$("$SYSTEMCTL" show -p MainPID --value "$service" 2>/dev/null || true)"
+    previous_started="$("$SYSTEMCTL" show -p ExecMainStartTimestampMonotonic --value "$service" 2>/dev/null || true)"
+    "$SYSTEMCTL" restart "$service"
   else
-    err "cloud-pulse-hub.service failed to start; check: journalctl -u cloud-pulse-hub"
-    exit 1
+    SERVICE_ACTION="started"
+    "$SYSTEMCTL" start "$service"
   fi
+
+  while [ "$attempts" -gt 0 ]; do
+    attempts=$((attempts - 1))
+    if "$SYSTEMCTL" is-active --quiet "$service"; then
+      if [ "$SERVICE_ACTION" = "started" ]; then
+        SERVICE_VERSION="$(probe_existing_version "$BIN_PATH")"
+        return
+      fi
+      current_pid="$("$SYSTEMCTL" show -p MainPID --value "$service" 2>/dev/null || true)"
+      current_started="$("$SYSTEMCTL" show -p ExecMainStartTimestampMonotonic --value "$service" 2>/dev/null || true)"
+      if [ "$current_pid" != "$previous_pid" ] && [ "$current_started" != "$previous_started" ]; then
+        SERVICE_VERSION="$(probe_existing_version "$BIN_PATH")"
+        return
+      fi
+    fi
+    sleep 0.5
+  done
+
+  err "${service} failed to ${SERVICE_ACTION}; check: journalctl -u cloud-pulse-hub"
+  exit 1
 }
 
 # ---------------------------------------------------------------------------
@@ -1192,7 +1229,11 @@ print_summary() {
   log "cloud-pulse-hub installed successfully."
   echo "  Dashboard:      http://${host}:${listen_port}/"
   echo "  Config file:    ${ENV_FILE}"
-  echo "  Service:        cloud-pulse-hub.service"
+  if [ -n "$SERVICE_ACTION" ]; then
+    echo "  Service:        cloud-pulse-hub.service ${SERVICE_ACTION} (running ${SERVICE_VERSION})"
+  else
+    echo "  Service:        cloud-pulse-hub.service"
+  fi
   echo
   print_version_hint
   print_ui_token_summary
@@ -1259,7 +1300,8 @@ print_dry_run() {
   echo "  - write ${ENV_FILE} (mode 0640, owner root:${CP_SERVICE_GROUP})"
   echo "  - write ${UNIT_FILE}"
   echo "  - systemd-analyze verify the unit"
-  echo "  - systemctl daemon-reload && systemctl enable --now cloud-pulse-hub.service"
+  echo "  - ${SYSTEMCTL} daemon-reload && ${SYSTEMCTL} enable cloud-pulse-hub.service"
+  echo "  - start cloud-pulse-hub.service if inactive; restart it if already running"
   echo "  - run -check-config before starting"
   if [ -x "$BIN_PATH" ]; then
     local existing_version
@@ -1290,12 +1332,12 @@ service_status_text() {
     echo ""
     return
   fi
-  if ! command -v systemctl >/dev/null 2>&1; then
+  if ! command -v "$SYSTEMCTL" >/dev/null 2>&1; then
     echo ""
     return
   fi
   local state
-  state="$(systemctl is-active cloud-pulse-hub.service 2>/dev/null || true)"
+  state="$("$SYSTEMCTL" is-active cloud-pulse-hub.service 2>/dev/null || true)"
   if [ -n "$state" ]; then
     echo " (service: ${state})"
   else
@@ -1466,20 +1508,20 @@ menu_loop() {
 # ---------------------------------------------------------------------------
 
 do_uninstall() {
-  if [ "$IS_SANDBOX" -eq 1 ]; then
-    log "sandbox: would run systemctl disable --now cloud-pulse-hub.service"
-  else
-    if command -v systemctl >/dev/null 2>&1; then
-      systemctl disable --now cloud-pulse-hub.service 2>/dev/null || true
-    fi
+  if [ "$IS_SANDBOX" -eq 1 ] && [ -z "${CP_SYSTEMCTL:-}" ]; then
+    log "sandbox: would run ${SYSTEMCTL} stop cloud-pulse-hub.service"
+    log "sandbox: would run ${SYSTEMCTL} disable cloud-pulse-hub.service"
+  elif command -v "$SYSTEMCTL" >/dev/null 2>&1; then
+    "$SYSTEMCTL" stop cloud-pulse-hub.service 2>/dev/null || true
+    "$SYSTEMCTL" disable cloud-pulse-hub.service 2>/dev/null || true
   fi
 
   rm -f "$UNIT_FILE"
   rm -f "$BIN_PATH"
   log "removed unit and binary"
 
-  if [ "$IS_SANDBOX" -ne 1 ] && command -v systemctl >/dev/null 2>&1; then
-    systemctl daemon-reload || true
+  if { [ "$IS_SANDBOX" -ne 1 ] || [ -n "${CP_SYSTEMCTL:-}" ]; } && command -v "$SYSTEMCTL" >/dev/null 2>&1; then
+    "$SYSTEMCTL" daemon-reload || true
   fi
 
   if [ "$OPT_PURGE" -eq 1 ]; then
