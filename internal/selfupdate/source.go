@@ -387,10 +387,9 @@ func sha256File(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// currentGOOSGOARCH returns runtime.GOOS/runtime.GOARCH, extracted so
-// tests can exercise AssetName-selection logic paths without relying on
-// the actual build target (Run itself always uses the real runtime
-// values; only Options-level plumbing is tested this way).
+// currentGOOSGOARCH returns runtime.GOOS/runtime.GOARCH for Run's
+// default release-asset platform selection when Options.GOOS or
+// Options.GOARCH is empty.
 func currentGOOSGOARCH() (string, string) {
 	return runtime.GOOS, runtime.GOARCH
 }

@@ -13,10 +13,23 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/leejeonghun001/cloud-pulse/internal/version"
 )
+
+// testGOOS and testGOARCH identify a release platform that the current
+// test binary can exercise. Unsupported build targets (such as linux/386)
+// use the portable linux/amd64 fixture platform instead.
+var testGOOS, testGOARCH = testPlatform()
+
+func testPlatform() (string, string) {
+	if _, err := AssetName("cloud-pulse-hub", runtime.GOOS, runtime.GOARCH); err == nil {
+		return runtime.GOOS, runtime.GOARCH
+	}
+	return "linux", "amd64"
+}
 
 // newFakeReleaseServer starts an httptest server that serves a "latest"
 // redirect to latestTag plus checksums.txt + the binary asset for
@@ -82,7 +95,7 @@ func TestRun_UpdateAvailableAndInstalled(t *testing.T) {
 	}
 
 	newContent := []byte("new binary v0.3.1")
-	_, source := newFakeReleaseServer(t, "v0.3.1", "cloud-pulse-hub", runtime.GOOS, runtime.GOARCH, newContent)
+	_, source := newFakeReleaseServer(t, "v0.3.1", "cloud-pulse-hub", testGOOS, testGOARCH, newContent)
 
 	var verifyCalls []string
 	var restartCalls []string
@@ -94,6 +107,8 @@ func TestRun_UpdateAvailableAndInstalled(t *testing.T) {
 	var stdout bytes.Buffer
 	result, err := Run(context.Background(), Options{
 		Binary:   "cloud-pulse-hub",
+		GOOS:     testGOOS,
+		GOARCH:   testGOARCH,
 		Current:  "v0.3.0",
 		ExecPath: execPath,
 		Source:   source,
@@ -166,10 +181,12 @@ func TestRun_AlreadyUpToDate(t *testing.T) {
 		t.Fatalf("write fake binary: %v", err)
 	}
 
-	_, source := newFakeReleaseServer(t, "v0.3.0", "cloud-pulse-hub", runtime.GOOS, runtime.GOARCH, []byte("irrelevant"))
+	_, source := newFakeReleaseServer(t, "v0.3.0", "cloud-pulse-hub", testGOOS, testGOARCH, []byte("irrelevant"))
 
 	result, err := Run(context.Background(), Options{
 		Binary:   "cloud-pulse-hub",
+		GOOS:     testGOOS,
+		GOARCH:   testGOARCH,
 		Current:  "v0.3.0",
 		ExecPath: execPath,
 		Source:   source,
@@ -221,10 +238,12 @@ func TestRun_CheckOnly(t *testing.T) {
 				t.Fatalf("write fake binary: %v", err)
 			}
 
-			_, source := newFakeReleaseServer(t, tc.latest, "cloud-pulse-hub", runtime.GOOS, runtime.GOARCH, []byte("irrelevant"))
+			_, source := newFakeReleaseServer(t, tc.latest, "cloud-pulse-hub", testGOOS, testGOARCH, []byte("irrelevant"))
 
 			result, err := Run(context.Background(), Options{
 				Binary:    "cloud-pulse-hub",
+				GOOS:      testGOOS,
+				GOARCH:    testGOARCH,
 				Current:   tc.current,
 				ExecPath:  execPath,
 				Source:    source,
@@ -261,7 +280,7 @@ func TestRun_TamperedChecksum_BinaryUntouched(t *testing.T) {
 		t.Fatalf("write fake binary: %v", err)
 	}
 
-	asset, err := AssetName("cloud-pulse-hub", runtime.GOOS, runtime.GOARCH)
+	asset, err := AssetName("cloud-pulse-hub", testGOOS, testGOARCH)
 	if err != nil {
 		t.Fatalf("AssetName: %v", err)
 	}
@@ -287,6 +306,8 @@ func TestRun_TamperedChecksum_BinaryUntouched(t *testing.T) {
 
 	_, err = Run(context.Background(), Options{
 		Binary:   "cloud-pulse-hub",
+		GOOS:     testGOOS,
+		GOARCH:   testGOARCH,
 		Current:  "v0.3.0",
 		ExecPath: execPath,
 		Source:   source,
@@ -324,11 +345,13 @@ func TestRun_VerifyFailure_BinaryUntouched(t *testing.T) {
 		t.Fatalf("write fake binary: %v", err)
 	}
 
-	_, source := newFakeReleaseServer(t, "v0.3.1", "cloud-pulse-hub", runtime.GOOS, runtime.GOARCH, []byte("new binary bytes"))
+	_, source := newFakeReleaseServer(t, "v0.3.1", "cloud-pulse-hub", testGOOS, testGOARCH, []byte("new binary bytes"))
 
 	verifyErr := errors.New("injected verify failure")
 	_, err := Run(context.Background(), Options{
 		Binary:   "cloud-pulse-hub",
+		GOOS:     testGOOS,
+		GOARCH:   testGOARCH,
 		Current:  "v0.3.0",
 		ExecPath: execPath,
 		Source:   source,
@@ -361,11 +384,13 @@ func TestRun_RestartFailure_StillReportsUpdated(t *testing.T) {
 		t.Fatalf("write fake binary: %v", err)
 	}
 
-	_, source := newFakeReleaseServer(t, "v0.3.1", "cloud-pulse-hub", runtime.GOOS, runtime.GOARCH, []byte("new"))
+	_, source := newFakeReleaseServer(t, "v0.3.1", "cloud-pulse-hub", testGOOS, testGOARCH, []byte("new"))
 
 	restartErr := errors.New("injected restart failure")
 	result, err := Run(context.Background(), Options{
 		Binary:   "cloud-pulse-hub",
+		GOOS:     testGOOS,
+		GOARCH:   testGOARCH,
 		Current:  "v0.3.0",
 		ExecPath: execPath,
 		Source:   source,
@@ -397,11 +422,13 @@ func TestRun_NoRestartOption(t *testing.T) {
 		t.Fatalf("write fake binary: %v", err)
 	}
 
-	_, source := newFakeReleaseServer(t, "v0.3.1", "cloud-pulse-hub", runtime.GOOS, runtime.GOARCH, []byte("new"))
+	_, source := newFakeReleaseServer(t, "v0.3.1", "cloud-pulse-hub", testGOOS, testGOARCH, []byte("new"))
 
 	restartCalled := false
 	result, err := Run(context.Background(), Options{
 		Binary:    "cloud-pulse-hub",
+		GOOS:      testGOOS,
+		GOARCH:    testGOARCH,
 		Current:   "v0.3.0",
 		ExecPath:  execPath,
 		Source:    source,
@@ -438,7 +465,7 @@ func TestRun_ExplicitTargetAllowsDowngrade(t *testing.T) {
 		t.Fatalf("write fake binary: %v", err)
 	}
 
-	asset, err := AssetName("cloud-pulse-hub", runtime.GOOS, runtime.GOARCH)
+	asset, err := AssetName("cloud-pulse-hub", testGOOS, testGOARCH)
 	if err != nil {
 		t.Fatalf("AssetName: %v", err)
 	}
@@ -461,6 +488,8 @@ func TestRun_ExplicitTargetAllowsDowngrade(t *testing.T) {
 	var stdout bytes.Buffer
 	result, err := Run(context.Background(), Options{
 		Binary:   "cloud-pulse-hub",
+		GOOS:     testGOOS,
+		GOARCH:   testGOARCH,
 		Current:  "v0.3.5",
 		Target:   "v0.3.0",
 		ExecPath: execPath,
@@ -497,7 +526,7 @@ func TestRun_DowngradeBelowSelfUpdateSince_Warns(t *testing.T) {
 		t.Fatalf("write fake binary: %v", err)
 	}
 
-	asset, err := AssetName("cloud-pulse-hub", runtime.GOOS, runtime.GOARCH)
+	asset, err := AssetName("cloud-pulse-hub", testGOOS, testGOARCH)
 	if err != nil {
 		t.Fatalf("AssetName: %v", err)
 	}
@@ -520,6 +549,8 @@ func TestRun_DowngradeBelowSelfUpdateSince_Warns(t *testing.T) {
 	var stdout bytes.Buffer
 	_, err = Run(context.Background(), Options{
 		Binary:   "cloud-pulse-hub",
+		GOOS:     testGOOS,
+		GOARCH:   testGOARCH,
 		Current:  "v0.3.5",
 		Target:   "v0.2.0",
 		ExecPath: execPath,
@@ -545,10 +576,12 @@ func TestRun_DevBuildWithoutTarget_Refuses(t *testing.T) {
 		t.Fatalf("write fake binary: %v", err)
 	}
 
-	_, source := newFakeReleaseServer(t, "v0.3.1", "cloud-pulse-hub", runtime.GOOS, runtime.GOARCH, []byte("new"))
+	_, source := newFakeReleaseServer(t, "v0.3.1", "cloud-pulse-hub", testGOOS, testGOARCH, []byte("new"))
 
 	result, err := Run(context.Background(), Options{
 		Binary:   "cloud-pulse-hub",
+		GOOS:     testGOOS,
+		GOARCH:   testGOARCH,
 		Current:  "dev",
 		ExecPath: execPath,
 		Source:   source,
@@ -581,7 +614,7 @@ func TestRun_DevBuildWithTarget_Updates(t *testing.T) {
 		t.Fatalf("write fake binary: %v", err)
 	}
 
-	asset, err := AssetName("cloud-pulse-hub", runtime.GOOS, runtime.GOARCH)
+	asset, err := AssetName("cloud-pulse-hub", testGOOS, testGOARCH)
 	if err != nil {
 		t.Fatalf("AssetName: %v", err)
 	}
@@ -603,6 +636,8 @@ func TestRun_DevBuildWithTarget_Updates(t *testing.T) {
 
 	result, err := Run(context.Background(), Options{
 		Binary:   "cloud-pulse-hub",
+		GOOS:     testGOOS,
+		GOARCH:   testGOARCH,
 		Current:  "dev",
 		Target:   "v0.3.1",
 		ExecPath: execPath,
@@ -629,6 +664,8 @@ func TestRun_InvalidExplicitTarget(t *testing.T) {
 
 	_, err := Run(context.Background(), Options{
 		Binary:   "cloud-pulse-hub",
+		GOOS:     testGOOS,
+		GOARCH:   testGOARCH,
 		Current:  "v0.3.0",
 		Target:   "not-a-valid-tag; rm -rf /",
 		ExecPath: execPath,
@@ -659,10 +696,12 @@ func TestRun_PermissionDenied(t *testing.T) {
 		t.Skip("running as root bypasses directory permission bits")
 	}
 
-	_, source := newFakeReleaseServer(t, "v0.3.1", "cloud-pulse-hub", runtime.GOOS, runtime.GOARCH, []byte("new"))
+	_, source := newFakeReleaseServer(t, "v0.3.1", "cloud-pulse-hub", testGOOS, testGOARCH, []byte("new"))
 
 	_, err := Run(context.Background(), Options{
 		Binary:   "cloud-pulse-hub",
+		GOOS:     testGOOS,
+		GOARCH:   testGOARCH,
 		Current:  "v0.3.0",
 		ExecPath: execPath,
 		Source:   source,
@@ -686,6 +725,8 @@ func TestRun_UnsupportedPlatformAsset(t *testing.T) {
 
 	_, err := Run(context.Background(), Options{
 		Binary:   "totally-unknown-binary",
+		GOOS:     testGOOS,
+		GOARCH:   testGOARCH,
 		Current:  "v0.3.0",
 		Target:   "v0.3.1",
 		ExecPath: execPath,
@@ -696,6 +737,42 @@ func TestRun_UnsupportedPlatformAsset(t *testing.T) {
 	}
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("Run() error = %v; want wrapping ErrUnsupported", err)
+	}
+}
+
+func TestRun_UnsupportedPlatformDoesNotDownload(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	execPath := filepath.Join(dir, "cloud-pulse-hub")
+	if err := os.WriteFile(execPath, []byte("binary"), 0o755); err != nil {
+		t.Fatalf("write fake binary: %v", err)
+	}
+
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := Run(context.Background(), Options{
+		Binary:   "cloud-pulse-hub",
+		GOOS:     "linux",
+		GOARCH:   "386",
+		Current:  "v0.3.0",
+		Target:   "v0.3.1",
+		ExecPath: execPath,
+		Source:   Source{AssetBaseURL: srv.URL, Client: srv.Client()},
+	})
+	if err == nil {
+		t.Fatal("Run() = nil error; want ErrUnsupported for linux/386")
+	}
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("Run() error = %v; want wrapping ErrUnsupported", err)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("release server received %d requests; want none before unsupported-platform rejection", got)
 	}
 }
 
@@ -715,6 +792,8 @@ func TestRun_LatestResolutionFailure(t *testing.T) {
 
 	_, err := Run(context.Background(), Options{
 		Binary:   "cloud-pulse-hub",
+		GOOS:     testGOOS,
+		GOARCH:   testGOARCH,
 		Current:  "v0.3.0",
 		ExecPath: execPath,
 		Source:   Source{LatestURL: srv.URL, Client: srv.Client()},

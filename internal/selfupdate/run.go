@@ -47,6 +47,11 @@ type Options struct {
 	// ExecPath is the path to the binary to replace. Empty resolves it
 	// via os.Executable + filepath.EvalSymlinks.
 	ExecPath string
+	// GOOS and GOARCH select the release asset platform. Empty values use
+	// runtime.GOOS and runtime.GOARCH respectively. They are primarily
+	// useful to callers that need to select a supported release platform
+	// independently of the process build target.
+	GOOS, GOARCH string
 	// Source describes where to fetch release info/assets from.
 	Source Source
 	// Verify validates a downloaded binary at path before it replaces
@@ -143,7 +148,14 @@ func Run(ctx context.Context, o Options) (Result, error) {
 		return result, err
 	}
 
-	goos, goarch := currentGOOSGOARCH()
+	goos, goarch := o.GOOS, o.GOARCH
+	runtimeGOOS, runtimeGOARCH := currentGOOSGOARCH()
+	if goos == "" {
+		goos = runtimeGOOS
+	}
+	if goarch == "" {
+		goarch = runtimeGOARCH
+	}
 	asset, err := AssetName(o.Binary, goos, goarch)
 	if err != nil {
 		return result, err
