@@ -3,7 +3,7 @@
 // auto-refresh loop (paused while the tab is hidden), request
 // cancellation via AbortController on navigation, and the 401 token
 // dialog wiring.
-import { apiFetch, registerTokenDialog, getHosts, getHost, getHostMetrics, getEgress, getBuckets, ApiError } from "./api.js";
+import { apiFetch, registerTokenDialog, getHosts, getHost, getHostMetrics, getEgress, getBuckets, getVersion, ApiError } from "./api.js";
 import {
   el,
   clearChildren,
@@ -14,13 +14,22 @@ import {
   progressBar,
   levelClassForBar,
   egressDirectionRow,
+  updateBanner,
+  agentUpdatePanel,
 } from "./components.js";
 import { formatBytes, formatBitrate, formatDuration, formatRelativeTimeFromUnixSeconds, formatLoad } from "./format.js";
 import { buildEgressSection, currentMonth, getStoredDirection, setStoredDirection } from "./egress.js";
 import { buildBucketsSection } from "./buckets.js";
 import { createTimeSeriesChart, SERIES_COLORS } from "./charts.js";
 import { runHostDetailRefresh } from "./refresh.js";
-import { buildSettingsPage } from "./settings.js";
+import { buildSettingsPage, copyToClipboard } from "./settings.js";
+import {
+  shouldShowUpdateBanner,
+  getDismissedUpdateTag,
+  setDismissedUpdateTag,
+  outdatedAgentCount,
+  VERSION_REFRESH_INTERVAL_MS,
+} from "./updates.js";
 
 const REFRESH_INTERVAL_MS = 15000;
 const AGENT_INSTALL_HINT =
@@ -36,6 +45,18 @@ let liveRegionEl;
 let refreshIndicatorEl;
 /** @type {HTMLElement} */
 let refreshBannerHost;
+/** @type {HTMLElement} */
+let updateBannerHost;
+
+/** updateBannerTimer holds the pending setInterval id for the 30-min
+ * GET /api/v1/version poll driving the global update banner. Runs for
+ * the lifetime of the app (not torn down on route changes), matching
+ * D-U6's "all pages" banner scope. */
+let updateBannerTimer = null;
+/** latestVersionInfo caches the last successful GET /api/v1/version
+ * response so a page navigation can re-render the banner without an
+ * extra fetch. */
+let latestVersionInfo = null;
 
 /** Router state: tracks the active page's teardown so navigation cleans up timers/charts/fetches. */
 let activePage = null;
@@ -222,6 +243,7 @@ function renderSummary(host, hostsResp, bucketsResp, nowMs) {
       fleetIngressBytes,
       bucketsTracked: bucketsResp.buckets.length,
       lastRefreshMs: nowMs,
+      outdatedAgents: outdatedAgentCount(hosts),
     }),
   );
 }
@@ -273,6 +295,9 @@ async function renderHostDetail(hostID) {
   const egressHost = el("div", { class: "cp-egress-host" });
   mainEl.append(egressHost);
 
+  const agentUpdateHost = el("div", { class: "cp-agent-update-host" });
+  mainEl.append(agentUpdateHost);
+
   async function loadSummary() {
     if (page !== activePage) return false;
     try {
@@ -281,6 +306,7 @@ async function renderHostDetail(hostID) {
       clearBanner();
       renderHostDetailHeader(headerHost, summary, Date.now());
       renderHostEgressCard(egressHost, hostID, summary.egress);
+      renderAgentUpdatePanel(agentUpdateHost, summary.update);
       if (summary.latest?.disks) {
         renderDisksTable(disksHost, summary.latest.disks);
       }
@@ -412,6 +438,24 @@ function renderHostEgressCard(host, hostID, egress) {
   );
 
   host.append(card);
+}
+
+/**
+ * renderAgentUpdatePanel renders (or clears) the host-detail "Agent
+ * update" panel from a host summary's `update` field. Clears the host
+ * element entirely when there's no update info to show.
+ */
+function renderAgentUpdatePanel(host, update) {
+  clearChildren(host);
+  const built = agentUpdatePanel(update);
+  if (!built) return;
+  if (built.copyBtn) {
+    built.copyBtn.addEventListener("click", async () => {
+      await copyToClipboard(built.command, undefined);
+      announce("Agent update command copied to clipboard.");
+    });
+  }
+  host.append(built.node);
 }
 
 function renderDisksTable(host, disks) {
@@ -587,6 +631,53 @@ async function renderSettings(focusHostID) {
 }
 
 // ---------------------------------------------------------------------------
+// Global update banner (all pages; polls GET /api/v1/version every 30 min)
+// ---------------------------------------------------------------------------
+
+/**
+ * renderUpdateBanner re-renders the global update banner from the
+ * cached latestVersionInfo and the persisted dismissed-tag, showing or
+ * clearing it as appropriate. Safe to call anytime (e.g. after a route
+ * change) without re-fetching.
+ */
+function renderUpdateBanner() {
+  clearChildren(updateBannerHost);
+  if (!shouldShowUpdateBanner(latestVersionInfo, getDismissedUpdateTag())) return;
+
+  const { node, copyBtn, dismissBtn, command } = updateBanner({ versionInfo: latestVersionInfo });
+  copyBtn.addEventListener("click", async () => {
+    await copyToClipboard(command);
+    announce("Update command copied to clipboard.");
+  });
+  dismissBtn.addEventListener("click", () => {
+    setDismissedUpdateTag(latestVersionInfo.latest_version || "");
+    renderUpdateBanner();
+  });
+  updateBannerHost.append(node);
+}
+
+/**
+ * pollVersion fetches GET /api/v1/version, caches the result, and
+ * re-renders the update banner. Errors are swallowed (the banner simply
+ * doesn't update this cycle) since this must never disrupt the rest of
+ * the dashboard.
+ */
+async function pollVersion() {
+  try {
+    latestVersionInfo = await getVersion();
+    renderUpdateBanner();
+  } catch {
+    // Network/auth error fetching version info: leave any previously
+    // shown banner as-is rather than surfacing a second error banner.
+  }
+}
+
+function startUpdateBannerPolling() {
+  pollVersion();
+  updateBannerTimer = setInterval(pollVersion, VERSION_REFRESH_INTERVAL_MS);
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -621,6 +712,7 @@ function bootstrap() {
   liveRegionEl = document.getElementById("cp-live-region");
   refreshIndicatorEl = document.getElementById("cp-refresh-indicator");
   refreshBannerHost = document.getElementById("cp-banner-host");
+  updateBannerHost = document.getElementById("cp-update-banner-host");
 
   const tokenDialog = document.getElementById("cp-token-dialog");
   registerTokenDialog({
@@ -636,6 +728,7 @@ function bootstrap() {
   window.addEventListener("hashchange", route);
   document.addEventListener("visibilitychange", handleVisibilityChange);
 
+  startUpdateBannerPolling();
   route();
 }
 

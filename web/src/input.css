@@ -125,7 +125,7 @@
   }
 
   .cp-summary-strip {
-    @apply grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6 rounded-xl border border-cp-border bg-cp-surface p-4;
+    @apply grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] rounded-xl border border-cp-border bg-cp-surface p-4;
   }
 
   .cp-summary-item {
@@ -607,5 +607,37 @@
 
   .cp-row-highlighted {
     @apply bg-sky-950 outline outline-2 outline-sky-500;
+  }
+
+  .cp-update-banner {
+    @apply flex flex-col gap-3 rounded-xl border border-sky-600/60 bg-sky-950/40 p-4 mt-4 sm:flex-row sm:items-center sm:justify-between;
+  }
+
+  .cp-update-banner-text {
+    @apply flex flex-col gap-2 flex-1 min-w-0;
+  }
+
+  .cp-update-banner-headline {
+    @apply text-sm font-medium text-cp-text;
+  }
+
+  .cp-update-banner-code-row {
+    @apply flex items-center gap-2;
+  }
+
+  .cp-update-banner-actions {
+    @apply flex items-center gap-2 flex-wrap shrink-0;
+  }
+
+  .cp-badge-update {
+    @apply bg-cp-warning/90 normal-case tracking-normal;
+  }
+
+  .cp-agent-update-panel {
+    @apply gap-3;
+  }
+
+  .cp-agent-update-legacy-note {
+    @apply border-t border-cp-border pt-2 mt-1;
   }
 }

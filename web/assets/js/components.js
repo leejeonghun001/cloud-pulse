@@ -14,6 +14,7 @@ import {
   formatLoad,
   clamp,
 } from "./format.js";
+import { bannerText, hostUpdateBadgeText, agentVersionText, agentUpdatePanelText, LEGACY_AGENT_EXPLANATION } from "./updates.js";
 
 /**
  * el creates an element with optional class names, attributes, and
@@ -203,12 +204,22 @@ export function hostCard(summary, nowMs) {
     el("h3", { class: "cp-host-card-name", text: host.hostname }),
     providerBadge(host.provider),
   );
+  const updateBadgeInfo = hostUpdateBadgeText(summary.update);
+  if (updateBadgeInfo) {
+    header.append(
+      el("span", {
+        class: "cp-badge cp-badge-update",
+        text: updateBadgeInfo.text,
+        attrs: { title: updateBadgeInfo.label, "aria-label": updateBadgeInfo.label },
+      }),
+    );
+  }
   card.append(header);
 
   card.append(
     el("p", {
       class: "cp-host-card-meta",
-      text: `${host.os || "unknown"} / ${host.arch || "unknown"}`,
+      text: `${host.os || "unknown"} / ${host.arch || "unknown"} · ${agentVersionText(host.agent_version)}`,
     }),
   );
 
@@ -352,6 +363,90 @@ export function egressSection(egress) {
 }
 
 /**
+ * updateBanner builds the global "new version available" banner shown
+ * below the header on every page when the hub reports an update. The
+ * caller wires up the Copy and Dismiss button handlers (kept out of
+ * this pure builder so it stays easily composable/testable); this
+ * function only builds the DOM structure and fills in the text/link.
+ * @param {Object} opts
+ * @param {Object} opts.versionInfo GET /api/v1/version JSON (models.VersionInfo)
+ * @returns {{node: HTMLElement, copyBtn: HTMLButtonElement, dismissBtn: HTMLButtonElement, command: string}}
+ */
+export function updateBanner({ versionInfo }) {
+  const { headline, command } = bannerText(versionInfo);
+
+  const wrap = el("div", { class: "cp-update-banner", attrs: { role: "status" } });
+  const textCol = el("div", { class: "cp-update-banner-text" });
+  textCol.append(el("p", { class: "cp-update-banner-headline", text: headline }));
+
+  const codeRow = el("div", { class: "cp-update-banner-code-row" });
+  const pre = el("pre", { class: "cp-code-block cp-code-block-wrap" });
+  pre.append(el("code", { text: command }));
+  codeRow.append(pre);
+  textCol.append(codeRow);
+  wrap.append(textCol);
+
+  const actions = el("div", { class: "cp-update-banner-actions" });
+  const copyBtn = /** @type {HTMLButtonElement} */ (
+    el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: "Copy" })
+  );
+  actions.append(copyBtn);
+
+  if (versionInfo?.release_url) {
+    actions.append(
+      el("a", {
+        class: "cp-btn cp-btn-secondary",
+        attrs: { href: versionInfo.release_url, target: "_blank", rel: "noopener noreferrer" },
+        text: "Release notes",
+      }),
+    );
+  }
+
+  const dismissBtn = /** @type {HTMLButtonElement} */ (
+    el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: "Dismiss" })
+  );
+  actions.append(dismissBtn);
+  wrap.append(actions);
+
+  return { node: wrap, copyBtn, dismissBtn, command };
+}
+
+/**
+ * agentUpdatePanel builds the host-detail "Agent update" panel: a
+ * headline, a copyable command (when one is available), and — for
+ * agents that predate the built-in updater — the legacy explanation.
+ * Returns null when there's no update field to show (host summary has
+ * no `update`), so the caller can skip rendering the panel entirely.
+ * @param {Object|null|undefined} update a models.AgentUpdate JSON object
+ * @returns {{node: HTMLElement, copyBtn: HTMLButtonElement|null, command: string}|null}
+ */
+export function agentUpdatePanel(update) {
+  const info = agentUpdatePanelText(update);
+  if (!info) return null;
+
+  const card = el("div", { class: "cp-card cp-agent-update-panel" });
+  card.append(el("h2", { text: "Agent update" }));
+  card.append(el("p", { text: info.headline }));
+
+  let copyBtn = null;
+  if (info.command) {
+    const pre = el("pre", { class: "cp-code-block cp-code-block-wrap" });
+    pre.append(el("code", { text: info.command }));
+    card.append(pre);
+    copyBtn = /** @type {HTMLButtonElement} */ (
+      el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: "Copy" })
+    );
+    card.append(copyBtn);
+  }
+
+  if (info.showLegacyNote) {
+    card.append(el("p", { class: "cp-muted-small cp-agent-update-legacy-note", text: LEGACY_AGENT_EXPLANATION }));
+  }
+
+  return { node: card, copyBtn, command: info.command };
+}
+
+/**
  * emptyState builds a generic empty-state block with a heading, message,
  * and optional code sample shown in a <code> block.
  * @param {Object} opts
@@ -395,6 +490,9 @@ export function errorBanner(message) {
  * @param {number} stats.fleetIngressBytes fleet-wide inbound bytes this month
  * @param {number} stats.bucketsTracked
  * @param {number} stats.lastRefreshMs
+ * @param {number} [stats.outdatedAgents] count of hosts with an agent
+ *   update available; omitted or 0 skips the summary item entirely (see
+ *   SPEC-v0.3 D-U6: "only if it fits the 6-col strip").
  * @returns {HTMLElement}
  */
 export function summaryStrip(stats) {
@@ -408,6 +506,9 @@ export function summaryStrip(stats) {
     ["Fleet inbound (mo.)", formatBytes(stats.fleetIngressBytes)],
     ["Buckets tracked", formatNumber(stats.bucketsTracked)],
   ];
+  if (stats.outdatedAgents) {
+    items.push(["Agents outdated", formatNumber(stats.outdatedAgents)]);
+  }
   for (const [label, value] of items) {
     const item = el("div", { class: "cp-summary-item" });
     item.append(el("span", { class: "cp-summary-value", text: value }));

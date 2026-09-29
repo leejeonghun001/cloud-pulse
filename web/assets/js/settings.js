@@ -5,14 +5,16 @@
 // no CP_UI_TOKEN configured (GET /api/v1/settings -> 403
 // admin_disabled).
 import { el, clearChildren } from "./components.js";
-import { formatBytes } from "./format.js";
+import { formatBytes, formatRelativeTimeFromUnixSeconds } from "./format.js";
 import { parseLimitGiB, formatLimitGiB } from "./limits.js";
+import { hubInfoUpdateFields } from "./updates.js";
 import {
   getSettings,
   getAgentToken,
   setHostLimits,
   setAlertWebhook,
   testAlertWebhook,
+  getVersion,
   AdminError,
 } from "./api.js";
 
@@ -80,7 +82,17 @@ export async function buildSettingsPage({ signal, announce, focusHostID }) {
   body.append(agentEnrollmentCard({ signal, announce }));
   body.append(trafficLimitsCard({ view, signal, announce, focusHostID }));
   body.append(alertsCard({ view, signal, announce }));
-  body.append(hubInfoCard(view));
+
+  let versionInfo = null;
+  try {
+    versionInfo = await getVersion(signal);
+  } catch (err) {
+    if (err?.name === "AbortError") return root;
+    // GET /api/v1/version failing shouldn't block the rest of the
+    // settings page from rendering — the Hub info card just falls back
+    // to "unknown"/disabled defaults for the update fields.
+  }
+  body.append(hubInfoCard(view, versionInfo));
 
   return root;
 }
@@ -478,13 +490,21 @@ function alertsCard({ view, signal, announce }) {
 
 /**
  * hubInfoCard builds the read-only hub info card: version, allowed
- * CIDRs, offline threshold, cloud interval, and whether UI auth is on.
+ * CIDRs, offline threshold, cloud interval, whether UI auth is on, and
+ * (when available) the self-update check status: latest known version,
+ * last checked (relative), whether checking is enabled, and any check
+ * error.
  * @param {Object} view models.SettingsView JSON
+ * @param {Object|null} [versionInfo] GET /api/v1/version JSON
+ *   (models.VersionInfo); null/omitted when that fetch failed or hasn't
+ *   completed — the update rows then fall back to "unknown"/disabled.
  * @returns {HTMLElement}
  */
-function hubInfoCard(view) {
+function hubInfoCard(view, versionInfo) {
   const card = el("div", { class: "cp-card" });
   card.append(el("h2", { text: "Hub info" }));
+
+  const update = hubInfoUpdateFields(versionInfo || {});
 
   const dl = el("dl", { class: "cp-host-detail-meta" });
   const entries = [
@@ -494,6 +514,14 @@ function hubInfoCard(view) {
     ["Cloud interval", `${view.cloud_interval_seconds}s`],
     ["UI auth", view.ui_auth_enabled ? "on" : "off"],
     ["Agent token", view.agent_token_hint],
+    ["Update checks", update.checkEnabled ? "enabled" : "disabled"],
+    ["Latest known version", update.latest],
+    [
+      "Last checked",
+      update.checkEnabled && update.checkedAtUnixSeconds
+        ? formatRelativeTimeFromUnixSeconds(update.checkedAtUnixSeconds)
+        : "never",
+    ],
   ];
   for (const [label, value] of entries) {
     const pair = el("div", { class: "cp-host-detail-meta-pair" });
@@ -501,6 +529,11 @@ function hubInfoCard(view) {
     dl.append(pair);
   }
   card.append(dl);
+
+  if (update.checkError) {
+    card.append(el("p", { class: "cp-hint", text: `Last update check failed: ${update.checkError}` }));
+  }
+
   return card;
 }
 
