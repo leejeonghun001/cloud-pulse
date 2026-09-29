@@ -1,0 +1,289 @@
+/* alerts.css — SPEC-v0.5 §D alerting/inventory UI: navbar bell +
+   dropdown, #/alerts page (active card + history table), Settings →
+   Notifications (channel list + add/edit dialog with a platform
+   picker and step-by-step guide panel), Settings → Alert rules (rule
+   list + editor dialog with presets/duration fields/live preview), and
+   the host detail "Services & ports" card (Docker containers +
+   listening ports). Loaded after settings.css in input.css. */
+
+@layer components {
+  /* ---------------------------------------------------------------- */
+  /* Navbar bell                                                       */
+  /* ---------------------------------------------------------------- */
+
+  .cp-navbar-bell {
+    @apply relative;
+  }
+
+  .cp-navbar-bell-active {
+    @apply text-cp-warning;
+  }
+
+  .cp-navbar-bell-badge {
+    @apply absolute top-1 right-1 inline-flex items-center justify-center min-w-[1rem] h-4 px-1 rounded-full bg-cp-exceeded text-white text-[10px] font-semibold leading-none;
+  }
+
+  .cp-navbar-bell-menu-title {
+    @apply min-w-[16rem];
+  }
+
+  .cp-navbar-bell-empty {
+    @apply text-sm text-[rgb(var(--muted))];
+  }
+
+  .cp-navbar-bell-item {
+    @apply flex flex-col gap-0.5 items-start;
+  }
+
+  .cp-navbar-bell-item-title {
+    @apply text-sm font-medium text-[rgb(var(--text))];
+  }
+
+  .cp-navbar-bell-item-meta {
+    @apply text-xs text-[rgb(var(--muted))];
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* #/alerts page                                                     */
+  /* ---------------------------------------------------------------- */
+
+  .cp-alerts-page {
+    @apply flex flex-col gap-6;
+  }
+
+  .cp-alerts-active-card {
+    @apply gap-3;
+  }
+
+  .cp-alerts-active-list {
+    @apply flex flex-col gap-2 list-none p-0 m-0;
+  }
+
+  .cp-alerts-active-item {
+    @apply flex flex-col gap-1 rounded-lg border border-[rgb(var(--border))] p-3;
+  }
+
+  .cp-alerts-active-link {
+    @apply flex items-center gap-2 no-underline text-[rgb(var(--text))];
+  }
+
+  .cp-alerts-active-name {
+    @apply text-sm font-semibold;
+  }
+
+  .cp-alerts-active-host {
+    @apply text-xs text-[rgb(var(--muted))];
+  }
+
+  .cp-alerts-filter-row {
+    @apply mb-1;
+  }
+
+  .cp-alerts-delivery-chips {
+    @apply flex flex-wrap gap-1;
+  }
+
+  .cp-alerts-delivery-chip {
+    @apply inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-xs;
+  }
+
+  .cp-alerts-delivery-chip .cp-icon {
+    @apply h-3 w-3;
+  }
+
+  .cp-alerts-delivery-ok {
+    @apply bg-cp-ok/15 text-emerald-600 dark:text-emerald-400;
+  }
+
+  .cp-alerts-delivery-fail {
+    @apply bg-cp-exceeded/15 text-red-600 dark:text-red-400;
+  }
+
+  .cp-alerts-test-result {
+    @apply flex items-center gap-2 rounded-lg border p-3 text-sm;
+  }
+
+  .cp-alerts-test-ok {
+    @apply border-cp-ok/40 bg-cp-ok/10 text-emerald-700 dark:text-emerald-300;
+  }
+
+  .cp-alerts-test-fail {
+    @apply border-cp-exceeded/40 bg-cp-exceeded/10 text-red-700 dark:text-red-300;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Notifications: channel list                                       */
+  /* ---------------------------------------------------------------- */
+
+  .cp-channel-list {
+    @apply flex flex-col gap-2 list-none p-0 m-0;
+  }
+
+  .cp-channel-row {
+    @apply flex items-center gap-3 rounded-lg border border-[rgb(var(--border))] p-3 flex-wrap;
+  }
+
+  .cp-channel-row-info {
+    @apply flex flex-col gap-0.5 flex-1 min-w-[10rem];
+  }
+
+  .cp-channel-row-name {
+    @apply text-sm font-semibold text-[rgb(var(--text))];
+  }
+
+  .cp-channel-row-actions {
+    @apply flex items-center gap-1.5;
+  }
+
+  .cp-channel-row-status {
+    @apply w-full basis-full;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Notifications: add/edit channel dialog                            */
+  /* ---------------------------------------------------------------- */
+
+  .cp-channel-dialog-layout {
+    @apply grid grid-cols-1 lg:grid-cols-2 gap-6;
+  }
+
+  .cp-channel-dialog-form {
+    @apply flex flex-col gap-3;
+  }
+
+  .cp-channel-dialog-fields {
+    @apply flex flex-col gap-3;
+  }
+
+  .cp-channel-dialog-guide {
+    @apply rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--muted-surface))] p-4;
+  }
+
+  .cp-channel-guide-title {
+    @apply text-sm font-semibold text-[rgb(var(--text))] mb-2;
+  }
+
+  .cp-channel-guide-list {
+    @apply flex flex-col gap-2 text-sm text-[rgb(var(--text))] pl-5 list-decimal;
+  }
+
+  .cp-channel-dialog-test-result {
+    @apply min-h-[2.5rem];
+  }
+
+  .cp-checkbox-field {
+    @apply flex items-center gap-2 text-sm text-[rgb(var(--text))] cursor-pointer;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Alert rules: list + editor                                        */
+  /* ---------------------------------------------------------------- */
+
+  .cp-rule-list {
+    @apply flex flex-col gap-2 list-none p-0 m-0;
+  }
+
+  .cp-rule-row {
+    @apply flex flex-col gap-2 rounded-lg border border-[rgb(var(--border))] p-3;
+  }
+
+  .cp-rule-row-top {
+    @apply flex items-center gap-2 flex-wrap;
+  }
+
+  .cp-rule-row-name {
+    @apply text-sm font-semibold text-[rgb(var(--text))];
+  }
+
+  .cp-rule-row-actions {
+    @apply flex items-center gap-1.5;
+  }
+
+  .cp-rule-preset-row {
+    @apply flex items-center gap-1.5 flex-wrap mb-3;
+  }
+
+  .cp-rule-dialog-form {
+    @apply flex flex-col gap-3;
+  }
+
+  .cp-rule-form-row {
+    @apply grid grid-cols-1 sm:grid-cols-2 gap-3;
+  }
+
+  .cp-rule-duration-field {
+    @apply max-w-sm;
+  }
+
+  .cp-rule-duration-row {
+    @apply flex items-center gap-2;
+  }
+
+  .cp-rule-channels-list {
+    @apply flex flex-col gap-1.5;
+  }
+
+  .cp-rule-dialog-summary {
+    @apply rounded-lg border border-cp-accent/30 bg-cp-accent/5 p-3;
+  }
+
+  .cp-rule-summary-sentence {
+    @apply text-sm text-[rgb(var(--text))] m-0;
+  }
+
+  .cp-rule-dialog-preview {
+    @apply min-h-[1.5rem];
+  }
+
+  .cp-rule-preview-list {
+    @apply flex flex-col gap-1.5 list-none p-0 m-0;
+  }
+
+  .cp-rule-preview-item {
+    @apply flex items-center gap-2 text-sm text-[rgb(var(--text))];
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Host detail: Services & ports card                                */
+  /* ---------------------------------------------------------------- */
+
+  .cp-services-card {
+    @apply gap-5;
+  }
+
+  .cp-services-section {
+    @apply flex flex-col gap-2;
+  }
+
+  .cp-services-section-title {
+    @apply text-sm font-semibold text-[rgb(var(--text))];
+  }
+
+  .cp-services-status-box {
+    @apply flex items-start gap-3 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--muted-surface))] p-3;
+  }
+
+  .cp-services-status-title {
+    @apply text-sm font-medium text-[rgb(var(--text))] m-0;
+  }
+
+  .cp-services-port-chips {
+    @apply flex flex-wrap gap-1;
+  }
+
+  .cp-services-port-chip {
+    @apply font-mono text-[11px];
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Overview: Containers column                                       */
+  /* ---------------------------------------------------------------- */
+
+  .cp-systems-containers-cell {
+    @apply flex items-center gap-1.5;
+  }
+
+  .cp-systems-containers-cell .cp-icon {
+    @apply h-4 w-4 text-[rgb(var(--muted))];
+  }
+}

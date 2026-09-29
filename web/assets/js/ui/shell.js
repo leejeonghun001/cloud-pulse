@@ -29,6 +29,7 @@ import { showToast } from "./toast.js";
  *   liveRegionEl: HTMLElement,
  *   setUsername: (name: string) => void,
  *   setNavVisible: (visible: boolean) => void,
+ *   setActiveAlerts: (events: Array) => void,
  * }}
  */
 export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
@@ -53,6 +54,19 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
   navbar.append(searchBtn);
 
   const actions = el("div", { class: "cp-navbar-actions" });
+
+  let activeAlertEvents = [];
+  const bellBtn = /** @type {HTMLButtonElement} */ (
+    el("button", { class: "cp-icon-btn cp-navbar-bell", attrs: { type: "button", "aria-label": "Alerts" } })
+  );
+  const bellBadge = el("span", { class: "cp-navbar-bell-badge", attrs: { "aria-hidden": "true" } });
+  bellBadge.hidden = true;
+  bellBtn.append(icon("bell"), bellBadge);
+  actions.append(bellBtn);
+  createDropdown({
+    trigger: bellBtn,
+    buildMenu: () => buildBellMenu(activeAlertEvents),
+  });
 
   const themeBtn = /** @type {HTMLButtonElement} */ (
     el("button", { class: "cp-icon-btn", attrs: { type: "button", "aria-label": "Toggle theme" } })
@@ -84,6 +98,7 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
   );
   userBtn.append(icon("user"));
   let username = "";
+  actions.append(userBtn);
   createDropdown({
     trigger: userBtn,
     buildMenu: () => {
@@ -112,7 +127,6 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
       return frag;
     },
   });
-  actions.append(userBtn);
 
   const addAgentBtn = el("button", {
     class: "cp-btn cp-btn-primary cp-navbar-primary-btn",
@@ -157,7 +171,57 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
     footer.style.display = visible ? "" : "none";
   }
 
-  return { mainEl, bannerHost, liveRegionEl, setUsername, setNavVisible };
+  /**
+   * setActiveAlerts updates the bell badge count and the dropdown's
+   * contents from the latest GET /api/v1/alerts/active response. Safe
+   * to call on every poll tick regardless of whether the dropdown is
+   * currently open (buildMenu() is only invoked when it opens).
+   * @param {Array} events models.AlertEvent[]
+   */
+  function setActiveAlerts(events) {
+    activeAlertEvents = events || [];
+    const count = activeAlertEvents.length;
+    bellBadge.hidden = count === 0;
+    bellBadge.textContent = count > 99 ? "99+" : String(count);
+    bellBtn.setAttribute("aria-label", count > 0 ? `Alerts, ${count} firing` : "Alerts");
+    bellBtn.classList.toggle("cp-navbar-bell-active", count > 0);
+  }
+
+  return { mainEl, bannerHost, liveRegionEl, setUsername, setNavVisible, setActiveAlerts };
+}
+
+/**
+ * buildBellMenu builds the navbar bell dropdown's contents: up to 5
+ * firing alerts (each a link to its host) plus a "View all" link to
+ * #/alerts, or an empty-state message when nothing is firing.
+ * @param {Array} events models.AlertEvent[], already sorted
+ *   newest-first by the caller (core/api.js's getActiveAlerts response
+ *   is sorted server-side).
+ * @returns {DocumentFragment}
+ */
+function buildBellMenu(events) {
+  const frag = document.createDocumentFragment();
+  const header = el("div", { class: "cp-dropdown-item cp-navbar-bell-menu-title", attrs: { style: "pointer-events:none;font-weight:600" } });
+  header.textContent = events.length > 0 ? `${events.length} firing` : "Alerts";
+  frag.append(header, dropdownSeparator());
+
+  if (events.length === 0) {
+    const empty = el("div", { class: "cp-dropdown-item cp-navbar-bell-empty", attrs: { style: "pointer-events:none" } });
+    empty.textContent = "No active alerts.";
+    frag.append(empty);
+  } else {
+    for (const ev of events.slice(0, 5)) {
+      const link = el("a", { class: "cp-dropdown-item cp-navbar-bell-item", attrs: { href: `#/host/${encodeURIComponent(ev.host_id)}` } });
+      const title = el("span", { class: "cp-navbar-bell-item-title", text: `${ev.rule_name || ev.metric}` });
+      const meta = el("span", { class: "cp-navbar-bell-item-meta", text: ev.hostname || ev.host_id });
+      link.append(title, meta);
+      frag.append(link);
+    }
+  }
+
+  frag.append(dropdownSeparator());
+  frag.append(el("a", { class: "cp-dropdown-item", attrs: { href: "#/alerts" }, text: "View all" }));
+  return frag;
 }
 
 /**

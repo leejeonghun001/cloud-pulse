@@ -21,8 +21,24 @@ let openCloser = null;
  */
 export function createDropdown({ trigger, buildMenu, align = "right" }) {
   const wrap = el("div", { class: "cp-dropdown" });
-  trigger.parentElement?.insertBefore(wrap, trigger);
-  wrap.append(trigger);
+
+  /**
+   * ensureWrapped lazily moves trigger inside wrap the first time it's
+   * needed (on open(), or eagerly below if trigger is already attached
+   * at call time). Deferring this until open() also covers the common
+   * caller pattern of building a trigger, calling createDropdown, and
+   * only appending the trigger to its real parent afterward (trigger
+   * has no parentElement yet at createDropdown() call time in that
+   * case) — re-parenting a node that already has a different parent
+   * still works correctly via Node.append's implicit remove-then-insert.
+   */
+  function ensureWrapped() {
+    if (wrap.contains(trigger)) return;
+    const parent = trigger.parentElement;
+    if (parent) parent.insertBefore(wrap, trigger);
+    wrap.append(trigger);
+  }
+  if (trigger.parentElement) ensureWrapped();
 
   /** @type {HTMLElement|null} */
   let menu = null;
@@ -51,6 +67,7 @@ export function createDropdown({ trigger, buildMenu, align = "right" }) {
   }
 
   function open() {
+    ensureWrapped();
     if (openCloser && openCloser !== close) openCloser();
     if (menu) return;
     menu = el("div", { class: `cp-dropdown-menu${align === "left" ? " cp-dropdown-menu-left" : ""}`, attrs: { role: "menu" } });

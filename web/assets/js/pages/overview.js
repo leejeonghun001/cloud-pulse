@@ -376,6 +376,7 @@ function buildTableRow(row, state) {
   if (visible("outbound")) tr.append(td(egressCell(row.egress, "out")));
   if (visible("inbound")) tr.append(td(egressCell(row.egress, "in")));
   if (visible("load")) tr.append(td(el("span", { class: "cp-tabular", text: row.latest ? formatLoad(row.latest.load1) : "–" })));
+  if (visible("containers")) tr.append(td(containersCell(row)));
   if (visible("agent")) tr.append(td(agentCell(row)));
   if (visible("lastSeen")) tr.append(td(el("span", { text: formatRelativeTimeFromUnixSeconds(row.last_seen, state.nowMs) })));
 
@@ -471,6 +472,17 @@ function egressCell(egress, direction) {
       }),
     );
   }
+  return wrap;
+}
+
+function containersCell(row) {
+  const wrap = el("div", { class: "cp-systems-containers-cell" });
+  if (row.containers_running === undefined || row.containers_running === null) {
+    wrap.append(el("span", { class: "cp-muted-small", text: "–" }));
+    return wrap;
+  }
+  wrap.append(icon("box"));
+  wrap.append(el("span", { class: "cp-tabular", text: formatNumber(row.containers_running) }));
   return wrap;
 }
 

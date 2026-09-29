@@ -12,6 +12,7 @@
 @import "./pages/overview.css";
 @import "./pages/host.css";
 @import "./pages/settings.css";
+@import "./pages/alerts.css";
 
 /* ------------------------------------------------------------------ */
 /* Legacy dashboard component classes (ported as-is from v0.3.2).      */

@@ -47,6 +47,13 @@ test("columnAccessors: numeric metrics fall back sanely when latest is missing",
   assert.equal(columnAccessors.outbound(row), 0);
   assert.equal(columnAccessors.inbound(row), 0);
   assert.equal(columnAccessors.lastSeen(row), 0);
+  assert.equal(columnAccessors.containers(row), -1);
+});
+
+test("columnAccessors: containers reads containers_running, -1 when omitted (no inventory yet)", () => {
+  assert.equal(columnAccessors.containers({ containers_running: 3 }), 3);
+  assert.equal(columnAccessors.containers({ containers_running: 0 }), 0);
+  assert.equal(columnAccessors.containers({}), -1);
 });
 
 test("columnAccessors: egress bytes read from egress sub-object", () => {

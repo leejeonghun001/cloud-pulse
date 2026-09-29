@@ -4,7 +4,7 @@
 // tooltips (destroy+recreate on theme change), disks table, monthly
 // traffic card, and agent update card. Redesigned per SPEC-v0.4 §4 on
 // top of the v0.3.x data layer (zero feature loss).
-import { getHost, getHostMetrics, ApiError } from "../core/api.js";
+import { getHost, getHostMetrics, getHostInventory, ApiError } from "../core/api.js";
 import { el, clearChildren, emptyState, errorBanner, egressDirectionRow, agentUpdatePanel, statusDot } from "../ui/components.js";
 import { selectField } from "../ui/select.js";
 import { icon } from "../ui/icons.js";
@@ -12,6 +12,16 @@ import { formatBytes, formatBitrate, formatDuration, formatRelativeTimeFromUnixS
 import { createTimeSeriesChart, SERIES_COLORS } from "./charts.js";
 import { runHostDetailRefresh } from "../core/refresh.js";
 import { getItem, setItem } from "../core/store.js";
+import {
+  formatPublishedPort,
+  formatListeningAddress,
+  sortPorts,
+  sortContainers,
+  processLabel,
+  dockerStatusInfo,
+  containerHealthLabel,
+  containerComposeLabel,
+} from "../core/ports.js";
 
 const RANGE_OPTIONS = [
   { value: "1h", label: "1 hour" },
@@ -53,8 +63,9 @@ export function mountHostDetailPage(container, hostID, { announce, copyToClipboa
   const chartsHost = el("div", { class: `cp-charts-grid cp-charts-grid-cols-${state.layout}` });
   const disksHost = el("div", { class: "cp-disks-host" });
   const egressHost = el("div", { class: "cp-egress-host" });
+  const inventoryHost = el("div", { class: "cp-inventory-host" });
   const agentUpdateHost = el("div", { class: "cp-agent-update-host" });
-  container.append(chartsHost, disksHost, egressHost, agentUpdateHost);
+  container.append(chartsHost, disksHost, egressHost, inventoryHost, agentUpdateHost);
 
   const onThemeChange = () => {
     if (state.lastSeries) {
@@ -84,6 +95,7 @@ export function mountHostDetailPage(container, hostID, { announce, copyToClipboa
       } else {
         clearChildren(disksHost);
       }
+      loadInventory();
       return true;
     } catch (err) {
       if (err?.name === "AbortError") return false;
@@ -98,6 +110,21 @@ export function mountHostDetailPage(container, hostID, { announce, copyToClipboa
       }
       showBanner(describeError(err));
       return true;
+    }
+  }
+
+  async function loadInventory() {
+    try {
+      const inventory = await getHostInventory(hostID, controller.signal);
+      renderServicesCard(inventoryHost, inventory);
+    } catch (err) {
+      if (err?.name === "AbortError") return;
+      if (err instanceof ApiError && err.status === 404) {
+        clearChildren(inventoryHost);
+        return;
+      }
+      // Non-404 inventory errors don't block the rest of the page —
+      // just leave the card in its last-known state.
     }
   }
 
@@ -283,6 +310,127 @@ function renderAgentUpdatePanel(host, update, announce, copyToClipboard) {
     });
   }
   host.append(built.node);
+}
+
+/**
+ * renderServicesCard builds the host detail "Services & ports" card
+ * (SPEC-v0.5 §D): a Docker containers table (or an empty/permission/
+ * error state with the exact fix command) followed by a listening
+ * ports table.
+ * @param {HTMLElement} host
+ * @param {Object} inventory a models.Inventory JSON object
+ */
+function renderServicesCard(host, inventory) {
+  clearChildren(host);
+  const card = el("div", { class: "cp-card cp-services-card" });
+  card.append(el("h2", { text: "Services & ports" }));
+
+  card.append(renderDockerSection(inventory.docker));
+  card.append(renderPortsSection(inventory.ports));
+
+  host.append(card);
+}
+
+function renderDockerSection(docker) {
+  const section = el("div", { class: "cp-services-section" });
+  section.append(el("h3", { class: "cp-services-section-title", text: "Docker containers" }));
+
+  if (docker.status !== "ok") {
+    const info = dockerStatusInfo(docker.status);
+    const box = el("div", { class: "cp-services-status-box" });
+    box.append(icon(docker.status === "permission_denied" ? "triangleAlert" : "box"));
+    const textCol = el("div");
+    textCol.append(el("p", { class: "cp-services-status-title", text: info.title }));
+    textCol.append(el("p", { class: "cp-muted-small", text: docker.error || info.message }));
+    if (info.fixCommand) {
+      const pre = el("pre", { class: "cp-code-block cp-code-block-wrap" });
+      pre.append(el("code", { text: info.fixCommand }));
+      textCol.append(pre);
+    }
+    box.append(textCol);
+    section.append(box);
+    return section;
+  }
+
+  if (!docker.containers || docker.containers.length === 0) {
+    section.append(el("p", { class: "cp-muted-small", text: "No containers reported." }));
+    return section;
+  }
+
+  const tableWrap = el("div", { class: "cp-table-wrap" });
+  const table = el("table", { class: "cp-table" });
+  const thead = el("thead");
+  thead.append(
+    el("tr", { children: ["Name", "Compose", "Image", "State", "Health", "Ports", "Status"].map((t) => el("th", { text: t })) }),
+  );
+  table.append(thead);
+  const tbody = el("tbody");
+  for (const c of sortContainers(docker.containers)) {
+    tbody.append(containerRow(c));
+  }
+  table.append(tbody);
+  tableWrap.append(table);
+  section.append(tableWrap);
+  return section;
+}
+
+function containerRow(c) {
+  const isRunning = c.state === "running";
+  const health = containerHealthLabel(c.health);
+  const compose = containerComposeLabel(c);
+
+  const portsCell = el("td");
+  const portsWrap = el("div", { class: "cp-services-port-chips" });
+  for (const p of c.ports || []) {
+    portsWrap.append(el("span", { class: "cp-chip cp-chip-other cp-services-port-chip", text: formatPublishedPort(p) }));
+  }
+  if ((c.ports || []).length === 0) portsWrap.append(el("span", { class: "cp-muted-small", text: "—" }));
+  portsCell.append(portsWrap);
+
+  return el("tr", {
+    children: [
+      el("td", { text: c.name }),
+      el("td", { text: compose || "—" }),
+      el("td", { text: c.image }),
+      el("td", { children: [el("span", { class: `cp-chip ${isRunning ? "cp-chip-ok" : "cp-chip-other"}`, text: c.state })] }),
+      el("td", { text: health || "—" }),
+      portsCell,
+      el("td", { text: c.status }),
+    ],
+  });
+}
+
+function renderPortsSection(ports) {
+  const section = el("div", { class: "cp-services-section" });
+  section.append(el("h3", { class: "cp-services-section-title", text: "Listening ports" }));
+
+  if (!ports || ports.length === 0) {
+    section.append(el("p", { class: "cp-muted-small", text: "No listening ports reported." }));
+    return section;
+  }
+
+  const tableWrap = el("div", { class: "cp-table-wrap" });
+  const table = el("table", { class: "cp-table" });
+  const thead = el("thead");
+  thead.append(el("tr", { children: ["Proto", "Address", "Process", "Container"].map((t) => el("th", { text: t })) }));
+  table.append(thead);
+  const tbody = el("tbody");
+  for (const p of sortPorts(ports)) {
+    tbody.append(
+      el("tr", {
+        children: [
+          el("td", { text: p.proto.toUpperCase() }),
+          el("td", { children: [el("span", { class: "cp-tabular", text: formatListeningAddress(p) })] }),
+          el("td", { text: processLabel(p) }),
+          el("td", { text: p.container_id ? p.container_id.slice(0, 12) : "—" }),
+        ],
+      }),
+    );
+  }
+  table.append(tbody);
+  tableWrap.append(table);
+  section.append(tableWrap);
+  return section;
 }
 
 function renderDisksTable(host, disks) {

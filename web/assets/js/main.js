@@ -6,13 +6,14 @@
 import { initThemeWatcher } from "./core/theme.js";
 import { Router } from "./core/router.js";
 import { getSessionToken, clearSessionToken, removeLegacyToken, parseLoginNext } from "./core/auth.js";
-import { onUnauthorized, onPasswordChangeRequired, getMe, getVersion, getAgentToken } from "./core/api.js";
+import { onUnauthorized, onPasswordChangeRequired, getMe, getVersion, getAgentToken, getActiveAlerts } from "./core/api.js";
 import { mountShell, openAddAgentDialog } from "./ui/shell.js";
 import { showToast } from "./ui/toast.js";
 import { mountLoginPage, openForcedChangeModal } from "./pages/login.js";
 import { mountOverviewPage } from "./pages/overview.js";
 import { mountHostDetailPage } from "./pages/host.js";
 import { mountSettingsPage, copyToClipboard, SECTIONS as SETTINGS_SECTIONS } from "./pages/settings/index.js";
+import { mountAlertsPage } from "./pages/alerts.js";
 import { updateBanner, clearChildren } from "./ui/components.js";
 import {
   shouldShowUpdateBanner,
@@ -101,6 +102,13 @@ function routeHostDetail(match) {
   mountPageWithAutoRefresh(handle);
 }
 
+function routeAlerts() {
+  clearLoginRoot();
+  const container = shell.mainEl;
+  const handle = mountAlertsPage(container, { announce });
+  mountPageWithAutoRefresh(handle);
+}
+
 function routeSettings(match, query) {
   clearLoginRoot();
   const container = shell.mainEl;
@@ -129,6 +137,7 @@ function routeLogin(_match, query) {
       authState.mustChangePassword = Boolean(loginResp.must_change_password);
       shell.setUsername(authState.username);
       refreshPaletteHostCache();
+      pollActiveAlerts();
       const next = parseLoginNext(`#/login?${query.toString() ? query.toString() : ""}`);
       router.navigate(next);
     },
@@ -149,6 +158,7 @@ function isAuthenticated() {
 function buildPaletteItems() {
   const items = [
     { id: "nav-overview", label: "Overview", group: "Pages", iconName: "house", onSelect: () => router.navigate("#/") },
+    { id: "nav-alerts", label: "Alerts", group: "Pages", iconName: "bell", onSelect: () => router.navigate("#/alerts") },
     { id: "nav-settings", label: "Settings", group: "Pages", iconName: "settings", onSelect: () => router.navigate("#/settings") },
   ];
   for (const section of SETTINGS_SECTIONS) {
@@ -272,6 +282,29 @@ function startUpdateBannerPolling() {
 }
 
 // ---------------------------------------------------------------------------
+// Navbar bell: active-alert polling (all authenticated pages)
+// ---------------------------------------------------------------------------
+
+const ACTIVE_ALERTS_POLL_MS = 15000;
+let activeAlertsTimer = null;
+
+async function pollActiveAlerts() {
+  if (!authState.authenticated) return;
+  try {
+    const resp = await getActiveAlerts();
+    shell.setActiveAlerts(resp.events || []);
+  } catch {
+    // Swallow: the bell simply doesn't update this cycle.
+  }
+}
+
+function startActiveAlertsPolling() {
+  pollActiveAlerts();
+  activeAlertsTimer = setInterval(pollActiveAlerts, ACTIVE_ALERTS_POLL_MS);
+  void activeAlertsTimer;
+}
+
+// ---------------------------------------------------------------------------
 // Bootstrap
 // ---------------------------------------------------------------------------
 
@@ -297,6 +330,7 @@ function bootstrap() {
       authState.authenticated = false;
       authState.username = "";
       shell.setUsername("");
+      shell.setActiveAlerts([]);
       paletteHostCache = [];
       router.navigate("#/login");
     },
@@ -309,6 +343,7 @@ function bootstrap() {
     authState.authenticated = false;
     authState.username = "";
     shell.setUsername("");
+    shell.setActiveAlerts([]);
     paletteHostCache = [];
     if (wasAuthenticated) {
       showToast({ message: sessionExpired ? "Session expired. Please sign in again." : "Please sign in.", variant: "error" });
@@ -336,6 +371,7 @@ function bootstrap() {
   router.add(/^#\/login(?:\?.*)?$/, routeLogin, { public: true });
   router.add(/^#\/host\/([^/?]+)$/, routeHostDetail);
   router.add(/^#\/settings(?:\/([^/?]+))?(?:\?.*)?$/, routeSettings);
+  router.add(/^#\/alerts(?:\?.*)?$/, routeAlerts);
   router.add(/^#\/$/, routeOverview);
   router.setNotFound(routeOverview);
 
@@ -357,6 +393,7 @@ function bootstrap() {
     shell.setUsername(authState.username);
     router.start();
     startUpdateBannerPolling();
+    startActiveAlertsPolling();
     refreshPaletteHostCache();
     setInterval(refreshPaletteHostCache, PALETTE_HOST_REFRESH_MS);
   });

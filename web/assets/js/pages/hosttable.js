@@ -25,6 +25,7 @@ export const COLUMNS = [
   { key: "outbound", label: "Outbound (mo.)", sortable: true, alwaysVisible: false },
   { key: "inbound", label: "Inbound (mo.)", sortable: true, alwaysVisible: false },
   { key: "load", label: "Load", sortable: true, alwaysVisible: false },
+  { key: "containers", label: "Containers", sortable: true, alwaysVisible: false },
   { key: "agent", label: "Agent", sortable: false, alwaysVisible: false },
   { key: "lastSeen", label: "Last seen", sortable: true, alwaysVisible: false },
 ];
@@ -49,6 +50,7 @@ export const columnAccessors = {
   outbound: (row) => row.egress?.tx_bytes ?? 0,
   inbound: (row) => row.egress?.rx_bytes ?? 0,
   load: (row) => row.latest?.load1 ?? -1,
+  containers: (row) => row.containers_running ?? -1,
   lastSeen: (row) => row.last_seen ?? 0,
 };
 

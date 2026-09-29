@@ -17,12 +17,16 @@ export class ApiError extends Error {
    * @param {number} status
    * @param {string} [code] machine-readable error code from the body's
    *   {"code": "..."} field, "" if absent/unparseable.
+   * @param {Object<string,string>} [details] field-level validation
+   *   errors from the body's {"details": {...}} map, undefined if
+   *   absent (see models.APIError.Details).
    */
-  constructor(message, status, code = "") {
+  constructor(message, status, code = "", details = undefined) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -80,20 +84,23 @@ export function onUnauthorized(handler) {
 
 /**
  * parseErrorBody best-effort parses a models.APIError JSON body,
- * returning {message, code, retryAfterSeconds}. Falls back to a generic
- * message when the body isn't JSON or lacks the expected shape.
+ * returning {message, code, retryAfterSeconds, details}. Falls back to
+ * a generic message when the body isn't JSON or lacks the expected
+ * shape.
  * @param {Response} res
- * @returns {Promise<{message: string, code: string, retryAfterSeconds: number}>}
+ * @returns {Promise<{message: string, code: string, retryAfterSeconds: number, details: Object<string,string>|undefined}>}
  */
 async function parseErrorBody(res) {
   let message = `request failed: ${res.status}`;
   let code = "";
   let retryAfterSeconds = 0;
+  let details;
   try {
     const body = await res.json();
     if (body && typeof body.error === "string") message = body.error;
     if (body && typeof body.code === "string") code = body.code;
     if (body && typeof body.retry_after_seconds === "number") retryAfterSeconds = body.retry_after_seconds;
+    if (body && body.details && typeof body.details === "object") details = body.details;
   } catch {
     // Non-JSON error body: keep the generic message/empty code.
   }
@@ -102,7 +109,7 @@ async function parseErrorBody(res) {
     const parsed = header ? Number(header) : NaN;
     if (Number.isFinite(parsed) && parsed > 0) retryAfterSeconds = parsed;
   }
-  return { message, code, retryAfterSeconds };
+  return { message, code, retryAfterSeconds, details };
 }
 
 /**
@@ -143,8 +150,8 @@ export async function apiFetch(path, init = {}) {
   }
 
   if (!res.ok) {
-    const { message, code } = await parseErrorBody(res);
-    throw new ApiError(message, res.status, code);
+    const { message, code, details } = await parseErrorBody(res);
+    throw new ApiError(message, res.status, code, details);
   }
 
   if (res.status === 204) return null;
@@ -300,6 +307,144 @@ export function setAlertWebhook(webhookURL, signal) {
 export function testAlertWebhook(signal) {
   return apiFetch("/api/v1/settings/alerts/test", { method: "POST", signal });
 }
+
+// ---------------------------------------------------------------------------
+// Alerting (SPEC-v0.5 §B/§D): notify channels, alert rules, events.
+// ---------------------------------------------------------------------------
+
+/** getNotifyChannels fetches GET /api/v1/alerts/channels (admin);
+ * secrets are redacted by the hub. */
+export function getNotifyChannels(signal) {
+  return apiFetch("/api/v1/alerts/channels", { signal });
+}
+
+/**
+ * createNotifyChannel calls POST /api/v1/alerts/channels (admin).
+ * @param {{name: string, type: string, enabled: boolean, config: Object<string,string>}} channel
+ */
+export function createNotifyChannel(channel, signal) {
+  return apiFetch("/api/v1/alerts/channels", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(channel),
+    signal,
+  });
+}
+
+/**
+ * updateNotifyChannel calls PUT /api/v1/alerts/channels/{id} (admin). A
+ * secret Config field omitted (or "***") preserves the stored value.
+ * @param {number} id
+ * @param {{name: string, type: string, enabled: boolean, config: Object<string,string>}} channel
+ */
+export function updateNotifyChannel(id, channel, signal) {
+  return apiFetch(`/api/v1/alerts/channels/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(channel),
+    signal,
+  });
+}
+
+/** deleteNotifyChannel calls DELETE /api/v1/alerts/channels/{id} (admin). */
+export function deleteNotifyChannel(id, signal) {
+  return apiFetch(`/api/v1/alerts/channels/${encodeURIComponent(id)}`, { method: "DELETE", signal });
+}
+
+/** testNotifyChannel calls POST /api/v1/alerts/channels/{id}/test
+ * (admin) for a saved channel. Returns {ok: boolean, error?: string}. */
+export function testNotifyChannel(id, signal) {
+  return apiFetch(`/api/v1/alerts/channels/${encodeURIComponent(id)}/test`, { method: "POST", signal });
+}
+
+/** testDraftNotifyChannel calls POST /api/v1/alerts/channels/test
+ * (admin) with an unsaved channel configuration from the "Add channel"
+ * dialog. Returns {ok: boolean, error?: string}. */
+export function testDraftNotifyChannel(channel, signal) {
+  return apiFetch("/api/v1/alerts/channels/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(channel),
+    signal,
+  });
+}
+
+/** getAlertRules fetches GET /api/v1/alerts/rules (admin). */
+export function getAlertRules(signal) {
+  return apiFetch("/api/v1/alerts/rules", { signal });
+}
+
+/**
+ * createAlertRule calls POST /api/v1/alerts/rules (admin).
+ * @param {Object} rule a ruleRequest-shaped object (see
+ *   internal/hub/alertroutes.go's ruleRequest)
+ */
+export function createAlertRule(rule, signal) {
+  return apiFetch("/api/v1/alerts/rules", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(rule),
+    signal,
+  });
+}
+
+/**
+ * updateAlertRule calls PUT /api/v1/alerts/rules/{id} (admin).
+ * @param {number} id
+ * @param {Object} rule
+ */
+export function updateAlertRule(id, rule, signal) {
+  return apiFetch(`/api/v1/alerts/rules/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(rule),
+    signal,
+  });
+}
+
+/** deleteAlertRule calls DELETE /api/v1/alerts/rules/{id} (admin). */
+export function deleteAlertRule(id, signal) {
+  return apiFetch(`/api/v1/alerts/rules/${encodeURIComponent(id)}`, { method: "DELETE", signal });
+}
+
+/** previewAlertRule calls POST /api/v1/alerts/rules/{id}/preview
+ * (admin). Returns a {[hostID]: boolean} map of "would fire now". */
+export function previewAlertRule(id, signal) {
+  return apiFetch(`/api/v1/alerts/rules/${encodeURIComponent(id)}/preview`, { method: "POST", signal });
+}
+
+/**
+ * getAlertEvents fetches GET /api/v1/alerts/events with optional
+ * filters. Returns {events: models.AlertEvent[]}.
+ * @param {{state?: string, host?: string, limit?: number, before?: number}} [params]
+ */
+export function getAlertEvents(params = {}, signal) {
+  const qs = new URLSearchParams();
+  if (params.state) qs.set("state", params.state);
+  if (params.host) qs.set("host", params.host);
+  if (params.limit) qs.set("limit", String(params.limit));
+  if (params.before) qs.set("before", String(params.before));
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return apiFetch(`/api/v1/alerts/events${suffix}`, { signal });
+}
+
+/** getActiveAlerts fetches GET /api/v1/alerts/active. Returns
+ * {events: models.AlertEvent[]}. Used by the navbar bell. */
+export function getActiveAlerts(signal) {
+  return apiFetch("/api/v1/alerts/active", { signal });
+}
+
+// ---------------------------------------------------------------------------
+// Inventory (SPEC-v0.5 §C/§D): Docker containers + listening ports.
+// ---------------------------------------------------------------------------
+
+/** getHostInventory fetches GET /api/v1/hosts/{id}/inventory. Throws
+ * ApiError{status:404, code:"no_inventory"} when the host has never
+ * reported one. */
+export function getHostInventory(id, signal) {
+  return apiFetch(`/api/v1/hosts/${encodeURIComponent(id)}/inventory`, { signal });
+}
+
 
 // ---------------------------------------------------------------------------
 // Network settings (SPEC-v0.4 §2) — thin passthroughs for the settings
