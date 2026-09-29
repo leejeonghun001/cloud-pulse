@@ -7,6 +7,19 @@ import (
 	"github.com/shirou/gopsutil/v4/cpu"
 )
 
+func TestCPUTotal(t *testing.T) {
+	t.Parallel()
+
+	stat := cpu.TimesStat{
+		User: 1, System: 2, Idle: 3, Nice: 4, Iowait: 5,
+		Irq: 6, Softirq: 7, Steal: 8, Guest: 9, GuestNice: 10,
+	}
+	const want = 55
+	if got := cpuTotal(stat); got != want {
+		t.Errorf("cpuTotal(%+v) = %v, want %v", stat, got, want)
+	}
+}
+
 func TestCPUPercent(t *testing.T) {
 	t.Parallel()
 

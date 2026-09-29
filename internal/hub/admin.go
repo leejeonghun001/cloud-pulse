@@ -250,6 +250,14 @@ func (s *Server) handleSetAlertWebhook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
 		return
 	}
+	if err := s.syncDefaultWebhookChannel(ctx, req.WebhookURL); err != nil {
+		// Logged but not fatal to the request: the legacy setting (which
+		// the old webhook-notifier path and effectiveWebhookURL still
+		// read) is already saved above; the Default webhook channel is
+		// only needed by newly created alert rules that want to
+		// reference it from the SPEC-v0.5 alerting UI.
+		s.logger.Error("sync default webhook channel failed", "error", err)
+	}
 
 	view, err := s.buildSettingsView(ctx)
 	if err != nil {
@@ -258,6 +266,54 @@ func (s *Server) handleSetAlertWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+// defaultWebhookChannelName is the fixed name migration 0004 and this
+// legacy-compatibility path both use for the notify_channels row backing
+// PUT /api/v1/settings/alerts, so both paths always agree on which row
+// is "the" default webhook channel.
+const defaultWebhookChannelName = "Default webhook"
+
+// syncDefaultWebhookChannel keeps a "Default webhook" NotifyChannel in
+// sync with the legacy alert_webhook_url setting, so
+// PUT /api/v1/settings/alerts (SPEC-v0.4, still supported) continues to
+// work as the simple single-webhook setup path while also being usable
+// as a channel target from the newer SPEC-v0.5 alert rules UI. An empty
+// webhookURL disables (but does not delete) the channel if one exists,
+// preserving any alert rules that already reference its ID.
+func (s *Server) syncDefaultWebhookChannel(ctx context.Context, webhookURL string) error {
+	channels, err := s.store.ListNotifyChannels(ctx)
+	if err != nil {
+		return fmt.Errorf("hub: list notify channels: %w", err)
+	}
+	var existing *models.NotifyChannel
+	for i := range channels {
+		if channels[i].Name == defaultWebhookChannelName && channels[i].Type == models.NotifyChannelWebhook {
+			existing = &channels[i]
+			break
+		}
+	}
+
+	if existing == nil {
+		if webhookURL == "" {
+			return nil // nothing to create, nothing configured
+		}
+		_, err := s.store.CreateNotifyChannel(ctx, models.NotifyChannel{
+			Name: defaultWebhookChannelName, Type: models.NotifyChannelWebhook, Enabled: true,
+			Config: map[string]string{"webhook_url": webhookURL},
+		})
+		if err != nil {
+			return fmt.Errorf("hub: create default webhook channel: %w", err)
+		}
+		return nil
+	}
+
+	existing.Enabled = webhookURL != ""
+	existing.Config = map[string]string{"webhook_url": webhookURL}
+	if _, err := s.store.UpdateNotifyChannel(ctx, *existing); err != nil {
+		return fmt.Errorf("hub: update default webhook channel: %w", err)
+	}
+	return nil
 }
 
 // validateAdminWebhookURL validates a non-empty webhook URL: http(s)

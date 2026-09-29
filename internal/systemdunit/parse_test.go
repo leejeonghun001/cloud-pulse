@@ -1,6 +1,7 @@
 package systemdunit
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -17,7 +18,7 @@ func TestParseExisting_ValidHubUnit(t *testing.T) {
 		User:    "cloud-pulse",
 		Group:   "cloud-pulse",
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ParseExisting mismatch:\ngot:  %+v\nwant: %+v", got, want)
 	}
 }
@@ -37,7 +38,7 @@ func TestParseExisting_ValidHubSandboxUnit(t *testing.T) {
 		Group:         "cloud-pulse",
 		ReadWritePath: root + "/var/lib/cloud-pulse",
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ParseExisting mismatch:\ngot:  %+v\nwant: %+v", got, want)
 	}
 }
@@ -54,7 +55,7 @@ func TestParseExisting_ValidAgentUnit(t *testing.T) {
 		User:    "cloud-pulse",
 		Group:   "cloud-pulse",
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ParseExisting mismatch:\ngot:  %+v\nwant: %+v", got, want)
 	}
 }
@@ -156,6 +157,29 @@ func TestParseExisting_ExecStartExtraArgsUsesFirstToken(t *testing.T) {
 	}
 	if got.BinPath != "/usr/local/bin/cloud-pulse-hub" {
 		t.Fatalf("BinPath = %q, want /usr/local/bin/cloud-pulse-hub", got.BinPath)
+	}
+}
+
+// TestParseExisting_SupplementaryGroups_RoundTrips covers parsing and
+// re-rendering an agent unit with a SupplementaryGroups= line
+// (SPEC-v0.5 §C).
+func TestParseExisting_SupplementaryGroups_RoundTrips(t *testing.T) {
+	unit := "[Service]\nExecStart=/usr/local/bin/cloud-pulse-agent\nEnvironmentFile=/etc/cloud-pulse/agent.env\nUser=cloud-pulse\nGroup=cloud-pulse\nSupplementaryGroups=docker adm\n"
+	got, err := ParseExisting(unit)
+	if err != nil {
+		t.Fatalf("ParseExisting: %v", err)
+	}
+	want := []string{"docker", "adm"}
+	if !reflect.DeepEqual(got.SupplementaryGroups, want) {
+		t.Fatalf("SupplementaryGroups = %v, want %v", got.SupplementaryGroups, want)
+	}
+
+	rendered, err := Render(got)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !strings.Contains(rendered, "SupplementaryGroups=docker adm\n") {
+		t.Fatalf("re-rendered unit missing SupplementaryGroups= line:\n%s", rendered)
 	}
 }
 

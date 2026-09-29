@@ -240,3 +240,112 @@ func TestTimeResponse_JSON(t *testing.T) {
 		t.Errorf("round-trip = %+v, want %+v", got, r)
 	}
 }
+
+func TestAPIError_JSON_DetailsOmittedWhenNil(t *testing.T) {
+	t.Parallel()
+
+	e := APIError{Error: "invalid request"}
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatalf("Unmarshal raw: %v", err)
+	}
+	if _, ok := raw["details"]; ok {
+		t.Errorf("details must be omitted when nil, got %s", b)
+	}
+}
+
+func TestAPIError_JSON_DetailsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	e := APIError{
+		Error: "validation failed",
+		Code:  "invalid_request",
+		Details: map[string]string{
+			"threshold":    "must be greater than 0",
+			"duration_sec": "must not be negative",
+		},
+	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded APIError
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if len(decoded.Details) != len(e.Details) {
+		t.Fatalf("Details = %v, want %v", decoded.Details, e.Details)
+	}
+	for k, v := range e.Details {
+		if decoded.Details[k] != v {
+			t.Errorf("Details[%q] = %q, want %q", k, decoded.Details[k], v)
+		}
+	}
+}
+
+func TestAgentReport_InventoryOmittedWhenNil(t *testing.T) {
+	t.Parallel()
+
+	r := AgentReport{Host: HostInfo{ID: "h1"}, Samples: []Sample{}}
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatalf("Unmarshal raw: %v", err)
+	}
+	if _, ok := raw["inventory"]; ok {
+		t.Errorf("inventory must be omitted when nil, got %s", b)
+	}
+}
+
+func TestAgentReport_InventoryRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	r := AgentReport{
+		Host:    HostInfo{ID: "h1"},
+		Samples: []Sample{},
+		Inventory: &Inventory{
+			CollectedAt: 1700000000,
+			Ports:       []ListeningPort{{Proto: "tcp", IP: "0.0.0.0", Port: 22}},
+			Docker:      DockerInfo{Status: DockerStatusUnavailable, Containers: []Container{}},
+		},
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded AgentReport
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Inventory == nil {
+		t.Fatal("Inventory = nil, want non-nil")
+	}
+	if decoded.Inventory.CollectedAt != r.Inventory.CollectedAt {
+		t.Errorf("Inventory.CollectedAt = %d, want %d", decoded.Inventory.CollectedAt, r.Inventory.CollectedAt)
+	}
+	if len(decoded.Inventory.Ports) != 1 || decoded.Inventory.Ports[0].Port != 22 {
+		t.Errorf("Inventory.Ports = %+v, want one port 22", decoded.Inventory.Ports)
+	}
+}
+
+func TestAgentReport_OldPayloadWithoutInventoryStillDecodes(t *testing.T) {
+	t.Parallel()
+
+	// Simulates a pre-v0.5.0 agent's payload, which never sent an
+	// "inventory" field at all.
+	const oldPayload = `{"host":{"id":"h1"},"samples":[]}`
+	var r AgentReport
+	if err := json.Unmarshal([]byte(oldPayload), &r); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if r.Inventory != nil {
+		t.Errorf("Inventory = %+v, want nil for a payload with no inventory field", r.Inventory)
+	}
+}

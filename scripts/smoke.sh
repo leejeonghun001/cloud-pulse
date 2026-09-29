@@ -35,6 +35,7 @@ AGENT_LOG="${TMP_DIR}/agent.log"
 HUB_PID=""
 AGENT_PID=""
 FAKE_PID=""
+WEBHOOK_PID=""
 
 PASS_COUNT=0
 
@@ -69,6 +70,10 @@ cleanup() {
   if [ -n "$FAKE_PID" ] && kill -0 "$FAKE_PID" 2>/dev/null; then
     kill "$FAKE_PID" 2>/dev/null || true
     wait "$FAKE_PID" 2>/dev/null || true
+  fi
+  if [ -n "$WEBHOOK_PID" ] && kill -0 "$WEBHOOK_PID" 2>/dev/null; then
+    kill "$WEBHOOK_PID" 2>/dev/null || true
+    wait "$WEBHOOK_PID" 2>/dev/null || true
   fi
   if [ "$status" -ne 0 ]; then
     dump_logs
@@ -142,12 +147,19 @@ echo "==> starting hub on ${HUB_ADDR}"
 # CP_UPDATE_CHECK is explicitly false: CI must never depend on reaching
 # GitHub for this test to pass (see the dedicated update-check section
 # below, which uses a local fake release server instead).
+# CP_NOTIFY_ALLOW_CUSTOM_ENDPOINTS is explicitly "1": the v0.5 alerting
+# section below points a webhook notify channel at a local plain-http
+# python receiver, which the SSRF guard's default policy (https-only,
+# fixed-host allowlist for Discord/Telegram/WhatsApp) would otherwise
+# reject — this mirrors the task's live-check instruction to use the
+# same env var for the same reason against real fakes.
 CP_LISTEN="${HUB_ADDR}" \
 CP_AGENT_TOKEN="${AGENT_TOKEN}" \
 CP_UI_TOKEN="${UI_TOKEN}" \
 CP_ALLOWED_CIDRS="127.0.0.0/8,::1/128" \
 CP_DATA_DIR="${DATA_DIR}" \
 CP_UPDATE_CHECK="false" \
+CP_NOTIFY_ALLOW_CUSTOM_ENDPOINTS="1" \
   "$HUB_BIN" >"$HUB_LOG" 2>&1 &
 HUB_PID=$!
 
@@ -791,6 +803,185 @@ if [ "$NOPENDING_REVERT_STATUS" != "409" ]; then
   fail "POST /api/v1/settings/network/revert with no pending change returned ${NOPENDING_REVERT_STATUS}, want 409"
 fi
 pass "POST .../network/confirm and .../revert with no pending change -> both 409 no_pending"
+
+# ---------------------------------------------------------------------------
+# v0.5: alerting + notify + chart — SPEC-v0.5 §E
+#
+# Creates a generic webhook notify channel (include_image=true) pointed
+# at a local python webhook receiver, an alert rule with threshold 0/
+# duration 0 (fires immediately on the smoke agent's first sample), and
+# asserts the receiver got a firing message carrying a PNG chart image
+# (magic-byte + full decode check). Also exercises the channel test
+# endpoint, the events list, and the inventory endpoint.
+# ---------------------------------------------------------------------------
+
+echo "==> v0.5 alerting + notify + chart"
+
+WEBHOOK_PORT="${WEBHOOK_PORT:-18098}"
+WEBHOOK_BASE_URL="http://127.0.0.1:${WEBHOOK_PORT}"
+WEBHOOK_LOG="${TMP_DIR}/webhook-receiver.log"
+WEBHOOK_RECEIVED="${TMP_DIR}/webhook-received.jsonl"
+: >"$WEBHOOK_RECEIVED"
+
+python3 "${REPO_ROOT}/scripts/webhook_receiver.py" "$WEBHOOK_PORT" "$WEBHOOK_RECEIVED" \
+  >"$WEBHOOK_LOG" 2>&1 &
+WEBHOOK_PID=$!
+
+WEBHOOK_UP=0
+for _ in $(seq 1 40); do
+  if curl -fsS -o /dev/null "${WEBHOOK_BASE_URL}/healthz" 2>/dev/null; then
+    WEBHOOK_UP=1
+    break
+  fi
+  if ! kill -0 "$WEBHOOK_PID" 2>/dev/null; then
+    fail "webhook receiver exited before becoming reachable"
+  fi
+  sleep 0.25
+done
+if [ "$WEBHOOK_UP" -ne 1 ]; then
+  fail "webhook receiver did not become reachable within 10s"
+fi
+pass "local webhook receiver reachable on ${WEBHOOK_BASE_URL}"
+
+# We reuse the already-authenticated NET_SESSION_TOKEN (admin, past the
+# must-change gate) for every alerts.* admin call below.
+
+CHANNEL_JSON="$(curl -fsS -X POST -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"smoke webhook","type":"webhook","enabled":true,"config":{"url":"'"${WEBHOOK_BASE_URL}"'/webhook","include_image":"true"}}' \
+  "${HUB_BASE_URL}/api/v1/alerts/channels")"
+CHANNEL_ID="$(echo "$CHANNEL_JSON" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+assert doc.get('id'), f'missing channel id: {doc!r}'
+assert doc.get('config', {}).get('url') != '***', 'url should not be redacted (not a secret field for webhook)'
+print(doc['id'])
+")"
+pass "POST /api/v1/alerts/channels creates a webhook channel (id=${CHANNEL_ID})"
+
+TEST_JSON="$(curl -fsS -X POST -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+  "${HUB_BASE_URL}/api/v1/alerts/channels/${CHANNEL_ID}/test")"
+echo "$TEST_JSON" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+assert doc.get('ok') is True, f\"test delivery ok={doc.get('ok')!r}, want True: {doc!r}\"
+"
+pass "POST /api/v1/alerts/channels/${CHANNEL_ID}/test -> ok:true"
+
+RULE_JSON="$(curl -fsS -X POST -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"smoke cpu rule","enabled":true,"metric":"cpu","host_id":"","operator":">=","threshold":0,"duration_sec":0,"cooldown_sec":0,"notify_resolved":false,"channel_ids":['"${CHANNEL_ID}"']}' \
+  "${HUB_BASE_URL}/api/v1/alerts/rules")"
+RULE_ID="$(echo "$RULE_JSON" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+assert doc.get('id'), f'missing rule id: {doc!r}'
+print(doc['id'])
+")"
+pass "POST /api/v1/alerts/rules creates a CPU>=0/duration=0 rule (id=${RULE_ID})"
+
+# The 30s scheduler tick (or the next ingest, whichever comes first)
+# will evaluate this rule and fire immediately (threshold 0, no
+# sustained window) for the smoke agent's host, delivering to the
+# webhook receiver above with a rendered chart image attached
+# (include_image=true).
+FIRING_LINE=""
+for _ in $(seq 1 90); do
+  if [ -s "$WEBHOOK_RECEIVED" ]; then
+    FIRING_LINE="$(grep -m1 'smoke cpu rule' "$WEBHOOK_RECEIVED" || true)"
+    if [ -n "$FIRING_LINE" ]; then
+      break
+    fi
+  fi
+  sleep 1
+done
+if [ -z "$FIRING_LINE" ]; then
+  echo "----- webhook receiver log -----" >&2
+  cat "$WEBHOOK_LOG" >&2 2>/dev/null || true
+  echo "----- webhook received (raw) -----" >&2
+  cat "$WEBHOOK_RECEIVED" >&2 2>/dev/null || true
+  echo "----- alert rules -----" >&2
+  curl -s -H "Authorization: Bearer ${NET_SESSION_TOKEN}" "${HUB_BASE_URL}/api/v1/alerts/rules" >&2 2>/dev/null || true
+  echo >&2
+  echo "----- alert events -----" >&2
+  curl -s -H "Authorization: Bearer ${NET_SESSION_TOKEN}" "${HUB_BASE_URL}/api/v1/alerts/events" >&2 2>/dev/null || true
+  echo >&2
+  fail "webhook receiver did not receive a firing message for 'smoke cpu rule' within 90s"
+fi
+pass "webhook receiver got a firing message referencing 'smoke cpu rule' within 90s"
+
+echo "$FIRING_LINE" | HOST_ID="$HOST_ID" python3 -c "
+import base64, json, os, sys
+
+doc = json.loads(sys.stdin.read())
+assert doc.get('title'), f'missing title: {doc!r}'
+b64 = doc.get('image_png_base64')
+assert b64, f'missing image_png_base64 (include_image=true was set): {doc!r}'
+png = base64.b64decode(b64)
+assert png[:8] == b'\x89PNG\r\n\x1a\n', f'decoded image does not start with PNG magic bytes: {png[:8]!r}'
+assert len(png) > 100, f'decoded PNG suspiciously small ({len(png)} bytes)'
+"
+pass "firing message's image_png_base64 decodes to a PNG (magic bytes + non-trivial size)"
+
+EVENTS_JSON="$(curl -fsS -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+  "${HUB_BASE_URL}/api/v1/alerts/events?host=${HOST_ID}")"
+echo "$EVENTS_JSON" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+events = doc.get('events', [])
+matching = [e for e in events if e.get('rule_name') == 'smoke cpu rule']
+assert matching, f'no event for smoke cpu rule in {events!r}'
+deliveries = matching[0].get('deliveries', [])
+assert deliveries, f'event has no deliveries recorded: {matching[0]!r}'
+assert any(d.get('ok') is True for d in deliveries), f'no delivery with ok=true: {deliveries!r}'
+"
+pass "GET /api/v1/alerts/events shows the firing event with a delivery ok=true"
+
+ACTIVE_JSON="$(curl -fsS -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+  "${HUB_BASE_URL}/api/v1/alerts/active")"
+echo "$ACTIVE_JSON" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+events = doc.get('events', [])
+assert any(e.get('rule_name') == 'smoke cpu rule' for e in events), f'smoke cpu rule not in active events: {events!r}'
+"
+pass "GET /api/v1/alerts/active lists the still-firing smoke cpu rule"
+
+# Clean up the rule so later scheduler ticks (during the remainder of
+# this script) stop generating more deliveries against a receiver we're
+# about to kill.
+curl -fsS -X DELETE -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+  "${HUB_BASE_URL}/api/v1/alerts/rules/${RULE_ID}" >/dev/null
+pass "DELETE /api/v1/alerts/rules/${RULE_ID} -> cleaned up"
+
+if kill -0 "$WEBHOOK_PID" 2>/dev/null; then
+  kill "$WEBHOOK_PID" 2>/dev/null || true
+  wait "$WEBHOOK_PID" 2>/dev/null || true
+fi
+WEBHOOK_PID=""
+
+echo "==> v0.5 inventory"
+
+INVENTORY_JSON=""
+for _ in $(seq 1 40); do
+  if INVENTORY_JSON="$(curl -fsS -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+      "${HUB_BASE_URL}/api/v1/hosts/${HOST_ID}/inventory" 2>/dev/null)"; then
+    break
+  fi
+  INVENTORY_JSON=""
+  sleep 1
+done
+if [ -z "$INVENTORY_JSON" ]; then
+  fail "GET /api/v1/hosts/${HOST_ID}/inventory never returned 200 within 40s"
+fi
+echo "$INVENTORY_JSON" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+ports = doc.get('ports', [])
+assert isinstance(ports, list) and len(ports) >= 1, f'expected >=1 listening port for the smoke agent, got {ports!r}'
+assert 'docker' in doc, 'missing docker field'
+"
+pass "GET /api/v1/hosts/${HOST_ID}/inventory returns >=1 listening port for the smoke agent"
 
 # ---------------------------------------------------------------------------
 # SIGTERM hub -> exits within 10s, DB file exists

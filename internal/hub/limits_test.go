@@ -3,7 +3,6 @@ package hub
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -142,11 +141,22 @@ func TestEffectiveLimits_HubOverrideAppliedInEgress(t *testing.T) {
 func TestAlerts_InboundFiresIndependentlyOfOutbound(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
-	notifier := &fakeNotifier{}
 	now := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)
+
+	store.setNotifyChannel(models.NotifyChannel{ID: 1, Name: "c1", Type: models.NotifyChannelWebhook, Enabled: true})
+	store.setAlertRule(models.AlertRule{
+		ID: 1, Name: "egress_out 80", Enabled: true, Metric: models.AlertMetricEgressOutPct,
+		Operator: models.AlertOperatorGTE, Threshold: 80, ChannelIDs: []int64{1},
+	})
+	store.setAlertRule(models.AlertRule{
+		ID: 2, Name: "egress_in 80", Enabled: true, Metric: models.AlertMetricEgressInPct,
+		Operator: models.AlertOperatorGTE, Threshold: 80, ChannelIDs: []int64{1},
+	})
+
 	opts := testOptions()
 	opts.Now = fixedNow(now)
-	s := New(opts, store, nil, notifier, nil, testLogger())
+	rec := &alertMessageRecorder{}
+	s, _ := newTestServerWithEngine(t, opts, store, rec.senderFactory())
 
 	const hostID = "host-inbound"
 	ingress := uint64(1000)
@@ -159,41 +169,40 @@ func TestAlerts_InboundFiresIndependentlyOfOutbound(t *testing.T) {
 	host.EgressLimitBytes = 0
 	report := models.AgentReport{Host: host, Samples: []models.Sample{{Timestamp: now.Unix(), NetTxBytes: 10, NetRxBytes: 850}}}
 	body, _ := json.Marshal(report)
-	rec := doRequest(t, s.Handler(), http.MethodPost, "/api/v1/agent/report", "203.0.113.1:1234", opts.AgentToken, body)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("ingest status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	httpRec := doRequest(t, s.Handler(), http.MethodPost, "/api/v1/agent/report", "203.0.113.1:1234", opts.AgentToken, body)
+	if httpRec.Code != http.StatusOK {
+		t.Fatalf("ingest status = %d, want 200 (body=%s)", httpRec.Code, httpRec.Body.String())
 	}
 	s.Wait()
 
-	if got := notifier.callCount(); got != 1 {
+	if got := rec.callCount(); got != 1 {
 		t.Fatalf("notify calls = %d, want 1 (inbound warning only, outbound unlimited)", got)
 	}
-
-	month := models.MonthOf(now)
-	firstOut, err := store.MarkAlertSent(t.Context(), hostID, month, models.DirectionOut, models.EgressWarning)
-	if err != nil {
-		t.Fatalf("MarkAlertSent(out): %v", err)
-	}
-	if !firstOut {
-		t.Error("expected outbound warning to NOT have been marked sent (outbound is unlimited)")
-	}
-	firstIn, err := store.MarkAlertSent(t.Context(), hostID, month, models.DirectionIn, models.EgressWarning)
-	if err != nil {
-		t.Fatalf("MarkAlertSent(in): %v", err)
-	}
-	if firstIn {
-		t.Error("expected inbound warning to already have been marked sent by afterIngest")
+	msgs := rec.messages()
+	if msgs[0].message.Fields[1].Value != string(models.AlertMetricEgressInPct) {
+		t.Errorf("fired rule metric = %q, want %q", msgs[0].message.Fields[1].Value, models.AlertMetricEgressInPct)
 	}
 }
 
 func TestAlerts_BothDirectionsFireSeparately(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
-	notifier := &fakeNotifier{}
 	now := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)
+
+	store.setNotifyChannel(models.NotifyChannel{ID: 1, Name: "c1", Type: models.NotifyChannelWebhook, Enabled: true})
+	store.setAlertRule(models.AlertRule{
+		ID: 1, Name: "egress_out 80", Enabled: true, Metric: models.AlertMetricEgressOutPct,
+		Operator: models.AlertOperatorGTE, Threshold: 80, ChannelIDs: []int64{1},
+	})
+	store.setAlertRule(models.AlertRule{
+		ID: 2, Name: "egress_in 80", Enabled: true, Metric: models.AlertMetricEgressInPct,
+		Operator: models.AlertOperatorGTE, Threshold: 80, ChannelIDs: []int64{1},
+	})
+
 	opts := testOptions()
 	opts.Now = fixedNow(now)
-	s := New(opts, store, nil, notifier, nil, testLogger())
+	rec := &alertMessageRecorder{}
+	s, _ := newTestServerWithEngine(t, opts, store, rec.senderFactory())
 
 	const hostID = "host-both"
 	ingress := uint64(1000)
@@ -206,30 +215,28 @@ func TestAlerts_BothDirectionsFireSeparately(t *testing.T) {
 	// tx 85% (warning), rx 85% (warning): 2 independent notifications.
 	report := models.AgentReport{Host: host, Samples: []models.Sample{{Timestamp: now.Unix(), NetTxBytes: 850, NetRxBytes: 850}}}
 	body, _ := json.Marshal(report)
-	rec := doRequest(t, s.Handler(), http.MethodPost, "/api/v1/agent/report", "203.0.113.1:1234", opts.AgentToken, body)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("ingest status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	httpRec := doRequest(t, s.Handler(), http.MethodPost, "/api/v1/agent/report", "203.0.113.1:1234", opts.AgentToken, body)
+	if httpRec.Code != http.StatusOK {
+		t.Fatalf("ingest status = %d, want 200 (body=%s)", httpRec.Code, httpRec.Body.String())
 	}
 	s.Wait()
 
-	if got := notifier.callCount(); got != 2 {
+	if got := rec.callCount(); got != 2 {
 		t.Fatalf("notify calls = %d, want 2 (one per direction)", got)
 	}
 
-	titles := make([]string, len(notifier.calls))
-	for i, c := range notifier.calls {
-		titles[i] = c.title
-	}
 	var sawOut, sawIn bool
-	for _, title := range titles {
-		if strings.Contains(title, "outbound") {
-			sawOut = true
-		}
-		if strings.Contains(title, "inbound") {
-			sawIn = true
+	for _, m := range rec.messages() {
+		for _, f := range m.message.Fields {
+			if f.Value == string(models.AlertMetricEgressOutPct) {
+				sawOut = true
+			}
+			if f.Value == string(models.AlertMetricEgressInPct) {
+				sawIn = true
+			}
 		}
 	}
 	if !sawOut || !sawIn {
-		t.Errorf("titles = %v, want one mentioning outbound and one mentioning inbound", titles)
+		t.Errorf("sawOut=%v sawIn=%v, want both true", sawOut, sawIn)
 	}
 }

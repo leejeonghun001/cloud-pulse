@@ -14,6 +14,12 @@ const rollupInterval = 1 * time.Minute
 // pruneInterval is how often the store's retention pruning is run.
 const pruneInterval = 1 * time.Hour
 
+// alertEvalInterval is how often the alerting engine re-evaluates every
+// rule against every host, independent of ingest-triggered evaluation
+// (SPEC-v0.5 §B: needed for host_down and sustained-window transitions
+// that must fire even without a fresh sample).
+const alertEvalInterval = 30 * time.Second
+
 // maxCollectTimeout caps how long a single collector run may take,
 // regardless of CloudInterval.
 const maxCollectTimeout = 2 * time.Minute
@@ -49,6 +55,14 @@ func (s *Server) RunBackground(ctx context.Context) {
 		defer wg.Done()
 		s.runUpdateCheckLoop(ctx, s.updateFirstDelayOrDefault(), s.updateIntervalOrDefault())
 	}()
+
+	if s.opts.Alerting != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.runAlertEvalLoop(ctx)
+		}()
+	}
 
 	wg.Wait()
 }
@@ -99,7 +113,36 @@ func (s *Server) runPruneLoop(ctx context.Context) {
 			if err := s.store.Prune(ctx, now); err != nil {
 				s.logger.Error("scheduler: prune failed", "error", err)
 			}
+			if err := s.store.PruneAlertEvents(ctx, now); err != nil {
+				s.logger.Error("scheduler: prune alert events failed", "error", err)
+			}
 			s.limiter.cleanup()
+		}
+	}
+}
+
+// runAlertEvalLoop periodically re-evaluates every enabled alert rule
+// against every host, independent of ingest-triggered evaluation (see
+// afterIngest in alerts.go). Only started when s.opts.Alerting is
+// non-nil (RunBackground checks this before spawning the goroutine that
+// calls this function).
+func (s *Server) runAlertEvalLoop(ctx context.Context) {
+	ticker := time.NewTicker(alertEvalInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			now := s.opts.now()
+			hosts, err := s.hostSnapshots(ctx, now)
+			if err != nil {
+				s.logger.Error("scheduler: build host snapshots for alert evaluation failed", "error", err)
+				continue
+			}
+			if err := s.opts.Alerting.Evaluate(ctx, now, hosts); err != nil {
+				s.logger.Error("scheduler: alert evaluation failed", "error", err)
+			}
 		}
 	}
 }

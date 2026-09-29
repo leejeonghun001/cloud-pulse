@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -26,6 +27,15 @@ type fakeStore struct {
 	settings map[string]string            // key: setting key
 	sessions map[string]models.Session    // key: IDHash
 
+	alertRules  map[int64]models.AlertRule
+	nextRuleID  int64
+	channels    map[int64]models.NotifyChannel
+	nextChanID  int64
+	alertStates map[string]models.AlertState // key: ruleID+"|"+hostID
+	alertEvents map[int64]models.AlertEvent
+	nextEventID int64
+	inventories map[string]models.Inventory // key: hostID
+
 	rollupErr   error
 	pruneErr    error
 	rollupCalls int
@@ -34,15 +44,20 @@ type fakeStore struct {
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
-		hosts:    make(map[string]models.HostRecord),
-		samples:  make(map[string][]models.Sample),
-		egress:   make(map[string]models.EgressRecord),
-		alerts:   make(map[string]bool),
-		buckets:  make(map[string]models.BucketStats),
-		history:  make(map[string][]models.BucketPoint),
-		limits:   make(map[string]models.HostLimits),
-		settings: make(map[string]string),
-		sessions: make(map[string]models.Session),
+		hosts:       make(map[string]models.HostRecord),
+		samples:     make(map[string][]models.Sample),
+		egress:      make(map[string]models.EgressRecord),
+		alerts:      make(map[string]bool),
+		buckets:     make(map[string]models.BucketStats),
+		history:     make(map[string][]models.BucketPoint),
+		limits:      make(map[string]models.HostLimits),
+		settings:    make(map[string]string),
+		sessions:    make(map[string]models.Session),
+		alertRules:  make(map[int64]models.AlertRule),
+		channels:    make(map[int64]models.NotifyChannel),
+		alertStates: make(map[string]models.AlertState),
+		alertEvents: make(map[int64]models.AlertEvent),
+		inventories: make(map[string]models.Inventory),
 	}
 }
 
@@ -396,6 +411,306 @@ func (f *fakeStore) setEgress(hostID, month string, tx, rx uint64) {
 	f.egress[egressKey(hostID, month)] = models.EgressRecord{HostID: hostID, Month: month, TxBytes: tx, RxBytes: rx}
 }
 
+// --- Alerting (SPEC-v0.5 §B) ---
+
+func (f *fakeStore) ListAlertRules(_ context.Context) ([]models.AlertRule, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]models.AlertRule, 0, len(f.alertRules))
+	for _, r := range f.alertRules {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+func (f *fakeStore) GetAlertRule(_ context.Context, id int64) (models.AlertRule, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r, ok := f.alertRules[id]
+	if !ok {
+		return models.AlertRule{}, models.ErrNotFound
+	}
+	return r, nil
+}
+
+func (f *fakeStore) CreateAlertRule(_ context.Context, r models.AlertRule) (models.AlertRule, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextRuleID++
+	r.ID = f.nextRuleID
+	now := time.Now().Unix()
+	r.CreatedAt, r.UpdatedAt = now, now
+	f.alertRules[r.ID] = r
+	return r, nil
+}
+
+func (f *fakeStore) UpdateAlertRule(_ context.Context, r models.AlertRule) (models.AlertRule, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	existing, ok := f.alertRules[r.ID]
+	if !ok {
+		return models.AlertRule{}, models.ErrNotFound
+	}
+	r.CreatedAt = existing.CreatedAt
+	r.UpdatedAt = time.Now().Unix()
+	f.alertRules[r.ID] = r
+	return r, nil
+}
+
+func (f *fakeStore) DeleteAlertRule(_ context.Context, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.alertRules, id)
+	return nil
+}
+
+func (f *fakeStore) ListNotifyChannels(_ context.Context) ([]models.NotifyChannel, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]models.NotifyChannel, 0, len(f.channels))
+	for _, c := range f.channels {
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+func (f *fakeStore) GetNotifyChannel(_ context.Context, id int64) (models.NotifyChannel, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, ok := f.channels[id]
+	if !ok {
+		return models.NotifyChannel{}, models.ErrNotFound
+	}
+	return c, nil
+}
+
+func (f *fakeStore) CreateNotifyChannel(_ context.Context, ch models.NotifyChannel) (models.NotifyChannel, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextChanID++
+	ch.ID = f.nextChanID
+	now := time.Now().Unix()
+	ch.CreatedAt, ch.UpdatedAt = now, now
+	f.channels[ch.ID] = ch
+	return ch, nil
+}
+
+func (f *fakeStore) UpdateNotifyChannel(_ context.Context, ch models.NotifyChannel) (models.NotifyChannel, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	existing, ok := f.channels[ch.ID]
+	if !ok {
+		return models.NotifyChannel{}, models.ErrNotFound
+	}
+	ch.CreatedAt = existing.CreatedAt
+	ch.UpdatedAt = time.Now().Unix()
+	f.channels[ch.ID] = ch
+	return ch, nil
+}
+
+func (f *fakeStore) DeleteNotifyChannel(_ context.Context, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.channels, id)
+	return nil
+}
+
+func alertStateKey(ruleID int64, hostID string) string {
+	return fmt.Sprintf("%d|%s", ruleID, hostID)
+}
+
+func (f *fakeStore) GetAlertState(_ context.Context, ruleID int64, hostID string) (models.AlertState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st, ok := f.alertStates[alertStateKey(ruleID, hostID)]
+	if !ok {
+		return models.AlertState{RuleID: ruleID, HostID: hostID, State: models.AlertStateOK}, nil
+	}
+	return st, nil
+}
+
+func (f *fakeStore) SetAlertState(_ context.Context, st models.AlertState) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.alertStates[alertStateKey(st.RuleID, st.HostID)] = st
+	return nil
+}
+
+func (f *fakeStore) ListAlertStates(_ context.Context) ([]models.AlertState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]models.AlertState, 0, len(f.alertStates))
+	for _, st := range f.alertStates {
+		if st.State == models.AlertStateOK {
+			continue
+		}
+		out = append(out, st)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].RuleID != out[j].RuleID {
+			return out[i].RuleID < out[j].RuleID
+		}
+		return out[i].HostID < out[j].HostID
+	})
+	return out, nil
+}
+
+func (f *fakeStore) DeleteAlertStatesForRule(_ context.Context, ruleID int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for key, st := range f.alertStates {
+		if st.RuleID == ruleID {
+			delete(f.alertStates, key)
+		}
+	}
+	return nil
+}
+
+func (f *fakeStore) CreateAlertEvent(_ context.Context, ev models.AlertEvent) (models.AlertEvent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextEventID++
+	ev.ID = f.nextEventID
+	if ev.Deliveries == nil {
+		ev.Deliveries = []models.Delivery{}
+	}
+	f.alertEvents[ev.ID] = ev
+	return ev, nil
+}
+
+func (f *fakeStore) UpdateAlertEvent(_ context.Context, ev models.AlertEvent) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.alertEvents[ev.ID]; !ok {
+		return models.ErrNotFound
+	}
+	if ev.Deliveries == nil {
+		ev.Deliveries = []models.Delivery{}
+	}
+	f.alertEvents[ev.ID] = ev
+	return nil
+}
+
+func (f *fakeStore) GetAlertEvent(_ context.Context, id int64) (models.AlertEvent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ev, ok := f.alertEvents[id]
+	if !ok {
+		return models.AlertEvent{}, models.ErrNotFound
+	}
+	return ev, nil
+}
+
+func (f *fakeStore) GetActiveAlertEvent(_ context.Context, ruleID int64, hostID string) (models.AlertEvent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, ev := range f.alertEvents {
+		if ev.RuleID == ruleID && ev.HostID == hostID && ev.State == models.AlertEventFiring {
+			return ev, nil
+		}
+	}
+	return models.AlertEvent{}, models.ErrNotFound
+}
+
+func (f *fakeStore) ListAlertEvents(_ context.Context, state models.AlertEventState, hostID string, before int64, limit int) ([]models.AlertEvent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]models.AlertEvent, 0, len(f.alertEvents))
+	for _, ev := range f.alertEvents {
+		if state != "" && ev.State != state {
+			continue
+		}
+		if hostID != "" && ev.HostID != hostID {
+			continue
+		}
+		if before != 0 && ev.StartedAt >= before {
+			continue
+		}
+		out = append(out, ev)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].StartedAt > out[j].StartedAt })
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (f *fakeStore) ListActiveAlertEvents(_ context.Context) ([]models.AlertEvent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]models.AlertEvent, 0)
+	for _, ev := range f.alertEvents {
+		if ev.State == models.AlertEventFiring {
+			out = append(out, ev)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].StartedAt > out[j].StartedAt })
+	return out, nil
+}
+
+func (f *fakeStore) PruneAlertEvents(_ context.Context, now time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	const retention = 180 * 24 * time.Hour
+	cutoff := now.Add(-retention).Unix()
+	for id, ev := range f.alertEvents {
+		if ev.State == models.AlertEventFiring {
+			continue
+		}
+		if ev.StartedAt < cutoff {
+			delete(f.alertEvents, id)
+		}
+	}
+	return nil
+}
+
+// --- Inventory (SPEC-v0.5 §C) ---
+
+func (f *fakeStore) GetHostInventory(_ context.Context, hostID string) (models.Inventory, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	inv, ok := f.inventories[hostID]
+	if !ok {
+		return models.Inventory{}, models.ErrNotFound
+	}
+	return inv, nil
+}
+
+func (f *fakeStore) SetHostInventory(_ context.Context, hostID string, inv models.Inventory) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.inventories[hostID] = inv
+	return nil
+}
+
+// setAlertRule directly stores a rule under its own ID, bypassing
+// CreateAlertRule's auto-increment, for tests that need a specific ID
+// (e.g. matching a channel reference fixture).
+func (f *fakeStore) setAlertRule(r models.AlertRule) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.alertRules[r.ID] = r
+	if r.ID > f.nextRuleID {
+		f.nextRuleID = r.ID
+	}
+}
+
+// setNotifyChannel directly stores a channel under its own ID,
+// bypassing CreateNotifyChannel's auto-increment, for the same reason as
+// setAlertRule.
+func (f *fakeStore) setNotifyChannel(ch models.NotifyChannel) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.channels[ch.ID] = ch
+	if ch.ID > f.nextChanID {
+		f.nextChanID = ch.ID
+	}
+}
+
+var errFakeStore = errors.New("fake store error")
+
 // fakeCollector is a BucketCollector test double.
 type fakeCollector struct {
 	name  string
@@ -444,5 +759,3 @@ func (n *fakeNotifier) callCount() int {
 	defer n.mu.Unlock()
 	return len(n.calls)
 }
-
-var errFakeStore = errors.New("fake store error")

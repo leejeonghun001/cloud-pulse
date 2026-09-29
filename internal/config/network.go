@@ -10,11 +10,6 @@ import (
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
 )
 
-// defaultListenPort is used by ParseListen/EnvNetworkConfig when a
-// listen address string omits its port (should not occur given
-// CP_LISTEN's own default of ":8090", but handled defensively).
-const defaultListenPort = 8090
-
 // ParseListen parses a CP_LISTEN-style address string (as accepted by
 // net.Listen("tcp", addr): ":8090", "127.0.0.1:8090", or
 // "[fd7a::1]:8090") into a models.NetworkConfig's Mode/Addresses/Port

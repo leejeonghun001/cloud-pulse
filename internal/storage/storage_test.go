@@ -35,6 +35,36 @@ type storeContract interface {
 	SetSetting(ctx context.Context, key, value string) error
 	Rollup(ctx context.Context, now time.Time) error
 	Prune(ctx context.Context, now time.Time) error
+	CreateSession(ctx context.Context, sess models.Session) error
+	GetSession(ctx context.Context, idHash string) (models.Session, error)
+	TouchSession(ctx context.Context, idHash string, lastSeen, expiresAt int64) error
+	DeleteSession(ctx context.Context, idHash string) error
+	DeleteSessionsExcept(ctx context.Context, keepIDHash string) (int, error)
+	ListSessions(ctx context.Context) ([]models.Session, error)
+	PruneSessions(ctx context.Context, now time.Time) error
+	ListAlertRules(ctx context.Context) ([]models.AlertRule, error)
+	GetAlertRule(ctx context.Context, id int64) (models.AlertRule, error)
+	CreateAlertRule(ctx context.Context, r models.AlertRule) (models.AlertRule, error)
+	UpdateAlertRule(ctx context.Context, r models.AlertRule) (models.AlertRule, error)
+	DeleteAlertRule(ctx context.Context, id int64) error
+	ListNotifyChannels(ctx context.Context) ([]models.NotifyChannel, error)
+	GetNotifyChannel(ctx context.Context, id int64) (models.NotifyChannel, error)
+	CreateNotifyChannel(ctx context.Context, ch models.NotifyChannel) (models.NotifyChannel, error)
+	UpdateNotifyChannel(ctx context.Context, ch models.NotifyChannel) (models.NotifyChannel, error)
+	DeleteNotifyChannel(ctx context.Context, id int64) error
+	GetAlertState(ctx context.Context, ruleID int64, hostID string) (models.AlertState, error)
+	SetAlertState(ctx context.Context, st models.AlertState) error
+	ListAlertStates(ctx context.Context) ([]models.AlertState, error)
+	DeleteAlertStatesForRule(ctx context.Context, ruleID int64) error
+	CreateAlertEvent(ctx context.Context, ev models.AlertEvent) (models.AlertEvent, error)
+	UpdateAlertEvent(ctx context.Context, ev models.AlertEvent) error
+	GetAlertEvent(ctx context.Context, id int64) (models.AlertEvent, error)
+	GetActiveAlertEvent(ctx context.Context, ruleID int64, hostID string) (models.AlertEvent, error)
+	ListAlertEvents(ctx context.Context, state models.AlertEventState, hostID string, before int64, limit int) ([]models.AlertEvent, error)
+	ListActiveAlertEvents(ctx context.Context) ([]models.AlertEvent, error)
+	PruneAlertEvents(ctx context.Context, now time.Time) error
+	GetHostInventory(ctx context.Context, hostID string) (models.Inventory, error)
+	SetHostInventory(ctx context.Context, hostID string, inv models.Inventory) error
 	Close() error
 }
 

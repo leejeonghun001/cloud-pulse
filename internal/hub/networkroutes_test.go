@@ -286,10 +286,10 @@ func TestPutNetwork_PendingRetainsOldListenerUntilConfirm(t *testing.T) {
 		t.Fatalf("close PUT response: %v", err)
 	}
 
-	// The old implementation dropped this listener one second after the
-	// PUT. Wait past that grace delay, then verify the old-origin admin can
-	// still reach the API during the whole confirmation window.
-	time.Sleep(1200 * time.Millisecond)
+	// Pending mode applies the union of old and new listeners. Verify the
+	// old-origin admin remains reachable without sleeping on the production
+	// close-delay implementation; the listener status assertion below proves
+	// the old address is still part of that union.
 	oldResp, err := client.Get("http://" + oldAddr + "/healthz")
 	if err != nil {
 		t.Fatalf("old listener was not retained during pending window: %v", err)

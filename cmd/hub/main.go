@@ -225,6 +225,9 @@ func runHub(cfg config.Hub) int {
 	}
 	listenMgr := listen.NewManager(httpSrv, logger)
 
+	alertEngine, wrappedAlertEngine, notifyFactory := buildAlerting(store, logger)
+	defer alertEngine.Close()
+
 	srv := hub.New(hub.Options{
 		AgentToken:      cfg.AgentToken,
 		UIToken:         cfg.UIToken,
@@ -236,8 +239,10 @@ func runHub(cfg config.Hub) int {
 		// NotifierFor left nil: hub.Options.notifierFor's default
 		// (hub.WebhookNotifier with its own 10s-timeout client) is used
 		// for both env- and settings-sourced webhook URLs.
-		UpdateSource: updateSource,
-		Listener:     listenMgr,
+		UpdateSource:  updateSource,
+		Listener:      listenMgr,
+		Alerting:      wrappedAlertEngine,
+		NotifyFactory: notifyFactory,
 	}, store, collectors, nil, web.Assets(), logger)
 	httpSrv.Handler = srv.Handler()
 

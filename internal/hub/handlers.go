@@ -108,6 +108,16 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if report.Inventory != nil {
+		inv := clampInventory(*report.Inventory)
+		if err := s.store.SetHostInventory(ctx, report.Host.ID, inv); err != nil {
+			// Inventory is supplementary (SPEC-v0.5 §C); a storage
+			// failure here must never fail metrics ingestion, which is
+			// the report's primary purpose.
+			s.logger.Error("ingest: set host inventory failed", "host_id", report.Host.ID, "error", err)
+		}
+	}
+
 	resp := models.IngestResponse{
 		Accepted:      inserted,
 		Duplicates:    len(valid) - inserted,
@@ -120,7 +130,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	s.recordAgentConn(report.Host.ID, report.Host.Hostname, r)
 
 	if len(valid) > 0 {
-		s.afterIngest(report.Host, now)
+		s.afterIngest(report.Host.ID, now)
 	}
 }
 
@@ -164,7 +174,7 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	summaries := make([]models.HostSummary, 0, len(records))
 	for _, rec := range records {
 		tx, rx := egressByHost[rec.Info.ID].TxBytes, egressByHost[rec.Info.ID].RxBytes
-		summaries = append(summaries, s.buildHostSummary(rec, limitsByHost[rec.Info.ID], tx, rx, now, s.opts.OfflineAfter))
+		summaries = append(summaries, s.buildHostSummary(ctx, rec, limitsByHost[rec.Info.ID], tx, rx, now, s.opts.OfflineAfter))
 	}
 
 	sort.Slice(summaries, func(i, j int) bool {
@@ -209,7 +219,7 @@ func (s *Server) handleGetHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	summary := s.buildHostSummary(rec, limits, tx, rx, now, s.opts.OfflineAfter)
+	summary := s.buildHostSummary(ctx, rec, limits, tx, rx, now, s.opts.OfflineAfter)
 	writeJSON(w, http.StatusOK, summary)
 }
 
@@ -378,6 +388,21 @@ func (s *Server) handleBuckets(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// clampInventory re-applies models.MaxInventoryPorts/
+// MaxInventoryContainers server-side, defense-in-depth against a
+// misbehaving or compromised agent sending an oversized payload — the
+// agent's own collector already caps these, but the hub must not trust
+// that unconditionally since AgentReport arrives over the network.
+func clampInventory(inv models.Inventory) models.Inventory {
+	if len(inv.Ports) > models.MaxInventoryPorts {
+		inv.Ports = inv.Ports[:models.MaxInventoryPorts]
+	}
+	if len(inv.Docker.Containers) > models.MaxInventoryContainers {
+		inv.Docker.Containers = inv.Docker.Containers[:models.MaxInventoryContainers]
+	}
+	return inv
+}
+
 // indexEgressByHost builds a hostID -> EgressRecord lookup from records.
 func indexEgressByHost(records []models.EgressRecord) map[string]models.EgressRecord {
 	out := make(map[string]models.EgressRecord, len(records))
@@ -419,9 +444,10 @@ func (s *Server) currentMonthEgress(ctx context.Context, hostID string, now time
 // buildHostSummary computes a HostSummary for rec at now given its
 // current-month tx/rx byte totals and hub-side limit overrides,
 // resolving effective outbound/inbound limits via
-// models.EffectiveLimits, and the available agent update (if any) via
-// s.agentUpdateFor.
-func (s *Server) buildHostSummary(rec models.HostRecord, limits models.HostLimits, tx, rx uint64, now time.Time, offlineAfter time.Duration) models.HostSummary {
+// models.EffectiveLimits, the available agent update (if any) via
+// s.agentUpdateFor, and the container/listening-port counters (if any
+// inventory has ever been reported) via s.store.GetHostInventory.
+func (s *Server) buildHostSummary(ctx context.Context, rec models.HostRecord, limits models.HostLimits, tx, rx uint64, now time.Time, offlineAfter time.Duration) models.HostSummary {
 	status := models.HostDown
 	if now.Sub(time.Unix(rec.LastSeen, 0)) <= offlineAfter {
 		status = models.HostUp
@@ -433,7 +459,7 @@ func (s *Server) buildHostSummary(rec models.HostRecord, limits models.HostLimit
 	egress.LimitSource = txSource
 	egress.RxLimitSource = rxSource
 
-	return models.HostSummary{
+	summary := models.HostSummary{
 		Host:     rec.Info,
 		Status:   status,
 		LastSeen: rec.LastSeen,
@@ -441,6 +467,22 @@ func (s *Server) buildHostSummary(rec models.HostRecord, limits models.HostLimit
 		Egress:   egress,
 		Update:   s.agentUpdateFor(rec.Info),
 	}
+
+	if inv, err := s.store.GetHostInventory(ctx, rec.Info.ID); err == nil {
+		containers := 0
+		for _, c := range inv.Docker.Containers {
+			if c.State == "running" {
+				containers++
+			}
+		}
+		ports := len(inv.Ports)
+		summary.ContainersRunning = &containers
+		summary.ListeningPorts = &ports
+	} else if !isNotFound(err) {
+		s.logger.Error("get host inventory for summary failed", "host_id", rec.Info.ID, "error", err)
+	}
+
+	return summary
 }
 
 // collectorStatuses returns a snapshot of all registered collectors'

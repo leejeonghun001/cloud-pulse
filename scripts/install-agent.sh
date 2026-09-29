@@ -29,6 +29,15 @@
 #   --provider auto|aws|oci|other
 #                         Set CP_PROVIDER (default: auto).
 #   --egress-limit-gb N    Set CP_EGRESS_LIMIT_GB.
+#   --docker                  Monitor Docker (or Podman) containers: adds
+#                         the agent's system user to the "docker" group
+#                         (root-equivalent access to the host — see the
+#                         warning printed by the interactive menu) and
+#                         sets CP_DOCKER=auto. Without this flag, Docker
+#                         collection still runs but reports
+#                         permission_denied against the default socket
+#                         (owned by root:docker) unless CP_DOCKER is set
+#                         to a Podman-style rootless socket path.
 #   --version vX.Y.Z        Install a specific release (default: latest).
 #   --prefix DIR            Binary install prefix (default: /usr/local).
 #   --uninstall              Stop/disable the service, remove the unit
@@ -117,6 +126,7 @@ OPT_HOST_ID=""
 OPT_INTERVAL=""
 OPT_PROVIDER=""
 OPT_EGRESS_LIMIT_GB=""
+OPT_DOCKER=0
 OPT_PREFIX="/usr/local"
 OPT_ACTION=""
 OPT_UNINSTALL=0
@@ -439,6 +449,10 @@ parse_args() {
         validate_env_value "$OPT_EGRESS_LIMIT_GB" --egress-limit-gb
         shift 2
         ;;
+      --docker)
+        OPT_DOCKER=1
+        shift
+        ;;
       --version)
         OPT_VERSION="${2:?--version requires an argument}"
         shift 2
@@ -594,14 +608,36 @@ download_and_verify() {
 ensure_system_user() {
   if [ "$IS_SANDBOX" -eq 1 ]; then
     log "sandbox: would run useradd --system --no-create-home --shell /usr/sbin/nologin -U ${CP_SERVICE_USER}"
+    if [ "$OPT_DOCKER" -eq 1 ]; then
+      log "sandbox: would run usermod -aG docker ${CP_SERVICE_USER}"
+    fi
     return
   fi
   if id "$CP_SERVICE_USER" >/dev/null 2>&1; then
     log "system user '${CP_SERVICE_USER}' already exists"
+  else
+    useradd --system --no-create-home --shell /usr/sbin/nologin --user-group "$CP_SERVICE_USER"
+    log "created system user/group '${CP_SERVICE_USER}'"
+  fi
+  ensure_docker_group_membership
+}
+
+# ensure_docker_group_membership — with --docker, add CP_SERVICE_USER to
+# the "docker" group (idempotent: usermod -aG is safe to re-run, and a
+# missing "docker" group — Docker/Podman not installed on this host —
+# is a non-fatal warning, not an install failure, since Docker
+# collection degrades gracefully to permission_denied/unavailable
+# either way).
+ensure_docker_group_membership() {
+  if [ "$OPT_DOCKER" -ne 1 ]; then
     return
   fi
-  useradd --system --no-create-home --shell /usr/sbin/nologin --user-group "$CP_SERVICE_USER"
-  log "created system user/group '${CP_SERVICE_USER}'"
+  if ! getent group docker >/dev/null 2>&1; then
+    log "warning: --docker given but no 'docker' group exists on this host (Docker/Podman not installed?); CP_DOCKER=auto will report permission_denied/unavailable until one does"
+    return
+  fi
+  usermod -aG docker "$CP_SERVICE_USER"
+  log "added '${CP_SERVICE_USER}' to the 'docker' group (root-equivalent access to this host — see README.md's Docker monitoring security note)"
 }
 
 # ---------------------------------------------------------------------------
@@ -675,11 +711,11 @@ rewrite_agent_env() {
   # resolved non-empty value needs activating. This never sources agent.env.
   local tmp_env="$1" hub_url="$2" token="$3" host_id="$4" interval="$5"
   local provider="$6" egress_limit="$7" net_exclude="$8" time_sync="$9"
-  local send_jitter="${10}" log_level="${11}" log_format="${12}"
+  local send_jitter="${10}" log_level="${11}" log_format="${12}" docker="${13}"
   local seen_hub=0 seen_token=0 seen_host=0 seen_interval=0 seen_provider=0
-  local seen_egress=0 seen_net=0 seen_time=0 seen_jitter=0 seen_log_level=0 seen_log_format=0
+  local seen_egress=0 seen_net=0 seen_time=0 seen_jitter=0 seen_log_level=0 seen_log_format=0 seen_docker=0
   local active_hub=0 active_token=0 active_host=0 active_interval=0 active_provider=0
-  local active_egress=0 active_net=0 active_time=0 active_jitter=0 active_log_level=0 active_log_format=0
+  local active_egress=0 active_net=0 active_time=0 active_jitter=0 active_log_level=0 active_log_format=0 active_docker=0
   local line normalized is_commented
 
   if [ -f "$ENV_FILE" ]; then
@@ -700,6 +736,7 @@ rewrite_agent_env() {
         CP_SEND_JITTER=*) active_jitter=1 ;;
         CP_LOG_LEVEL=*) active_log_level=1 ;;
         CP_LOG_FORMAT=*) active_log_format=1 ;;
+        CP_DOCKER=*) active_docker=1 ;;
       esac
     done < "$ENV_FILE"
 
@@ -792,6 +829,14 @@ rewrite_agent_env() {
             printf 'CP_LOG_FORMAT=%s\n' "$log_format"
           fi
           ;;
+        CP_DOCKER=*)
+          seen_docker=1
+          if [ "$is_commented" -eq 1 ]; then
+            if [ "$active_docker" -eq 1 ] || [ -z "$docker" ]; then printf '%s\n' "$line"; else printf 'CP_DOCKER=%s\n' "$docker"; fi
+          else
+            printf 'CP_DOCKER=%s\n' "$docker"
+          fi
+          ;;
         *) printf '%s\n' "$line" ;;
       esac
     done < "$ENV_FILE" > "$tmp_env"
@@ -822,11 +867,27 @@ rewrite_agent_env() {
     [ "$seen_jitter" -eq 1 ] || echo "#CP_SEND_JITTER=0s"
     [ "$seen_log_level" -eq 1 ] || echo "#CP_LOG_LEVEL=info"
     [ "$seen_log_format" -eq 1 ] || echo "#CP_LOG_FORMAT=text"
+    if [ "$seen_docker" -eq 0 ]; then
+      if [ -n "$docker" ]; then printf 'CP_DOCKER=%s\n' "$docker"; else echo "#CP_DOCKER=auto"; fi
+    fi
   } >> "$tmp_env"
 }
+# resolve_docker_value — --docker wins (always "auto"), else the
+# existing active CP_DOCKER value from agent.env is preserved on
+# upgrade, else empty (meaning: let the binary default to "auto" via an
+# inactive #CP_DOCKER= comment, same convention as every other optional
+# setting in this file).
+resolve_docker_value() {
+  if [ "$OPT_DOCKER" -eq 1 ]; then
+    echo "auto"
+    return
+  fi
+  env_get_existing CP_DOCKER
+}
+
 
 write_env_file() {
-  local hub_url token host_id interval provider egress_limit net_exclude time_sync send_jitter log_level log_format
+  local hub_url token host_id interval provider egress_limit net_exclude time_sync send_jitter log_level log_format docker
 
   if ! hub_url="$(resolve_required_value "$OPT_HUB_URL" CP_HUB_URL --hub-url)"; then exit 1; fi
   if ! token="$(resolve_required_value "$OPT_TOKEN" CP_AGENT_TOKEN --token)"; then exit 1; fi
@@ -841,10 +902,11 @@ write_env_file() {
   send_jitter="$(resolve_optional_value "" CP_SEND_JITTER CP_SEND_JITTER)"
   log_level="$(resolve_optional_value "" CP_LOG_LEVEL CP_LOG_LEVEL)"
   log_format="$(resolve_optional_value "" CP_LOG_FORMAT CP_LOG_FORMAT)"
+  docker="$(resolve_docker_value)"
 
   mkdir -p "$ETC_DIR"
   local tmp_env="${TMP_DIR}/agent.env"
-  rewrite_agent_env "$tmp_env" "$hub_url" "$token" "$host_id" "$interval" "$provider" "$egress_limit" "$net_exclude" "$time_sync" "$send_jitter" "$log_level" "$log_format"
+  rewrite_agent_env "$tmp_env" "$hub_url" "$token" "$host_id" "$interval" "$provider" "$egress_limit" "$net_exclude" "$time_sync" "$send_jitter" "$log_level" "$log_format" "$docker"
 
   install -m 0640 "$tmp_env" "$ENV_FILE"
   if [ "$IS_SANDBOX" -eq 1 ]; then
@@ -876,6 +938,25 @@ render_unit() {
   log "wrote ${UNIT_FILE}"
 }
 
+# detect_preserved_docker_flag — if this is a re-run (reinstall/upgrade)
+# that doesn't re-pass --docker, but the existing unit file already has
+# SupplementaryGroups=docker, treat this run as if --docker had been
+# given. Matches this script's "keeps settings" reinstall philosophy
+# (README.md's Upgrading section): a one-time --docker is meant to
+# persist across upgrades, not need repeating on every future re-run.
+# Must run before ensure_system_user so the docker-group membership is
+# (re-)applied consistently with the unit file every time, not just on
+# the run --docker was first given.
+detect_preserved_docker_flag() {
+  if [ "$OPT_DOCKER" -eq 1 ]; then
+    return
+  fi
+  if [ -f "$UNIT_FILE" ] && grep -q '^SupplementaryGroups=.*docker' "$UNIT_FILE" 2>/dev/null; then
+    OPT_DOCKER=1
+    log "preserving existing --docker setting from ${UNIT_FILE} (SupplementaryGroups=docker)"
+  fi
+}
+
 # render_unit_via_binary OUT_PATH — ask the freshly installed agent
 # binary to render its own systemd unit (SPEC-v0.3.1 B,
 # internal/systemdunit). See install-hub.sh's identical helper for the
@@ -886,13 +967,20 @@ render_unit_via_binary() {
   if [ ! -x "$BIN_PATH" ]; then
     return 1
   fi
-  timeout 10 "$BIN_PATH" systemd-unit print --bin-path "$BIN_PATH" --env-file "$ENV_FILE" \
-    --user "$CP_SERVICE_USER" --group "$CP_SERVICE_GROUP" >"$out_path" 2>/dev/null
+  if [ "$OPT_DOCKER" -eq 1 ]; then
+    timeout 10 "$BIN_PATH" systemd-unit print --bin-path "$BIN_PATH" --env-file "$ENV_FILE" \
+      --user "$CP_SERVICE_USER" --group "$CP_SERVICE_GROUP" --supplementary-groups docker >"$out_path" 2>/dev/null
+  else
+    timeout 10 "$BIN_PATH" systemd-unit print --bin-path "$BIN_PATH" --env-file "$ENV_FILE" \
+      --user "$CP_SERVICE_USER" --group "$CP_SERVICE_GROUP" >"$out_path" 2>/dev/null
+  fi
 }
 
 # render_unit_fallback OUT_PATH — bash heredoc fallback kept
 # byte-identical to internal/systemdunit.Render's agent template (see
-# SPEC-v0.3.1 B and the drift test in test-install.sh).
+# SPEC-v0.3.1 B and the drift test in test-install.sh). A
+# SupplementaryGroups=docker line is added right after Group= when
+# --docker was given (SPEC-v0.5 §C), matching Render's own placement.
 render_unit_fallback() {
   local out_path="$1"
   {
@@ -907,6 +995,9 @@ render_unit_fallback() {
     echo "ExecStart=${BIN_PATH}"
     echo "User=${CP_SERVICE_USER}"
     echo "Group=${CP_SERVICE_GROUP}"
+    if [ "$OPT_DOCKER" -eq 1 ]; then
+      echo "SupplementaryGroups=docker"
+    fi
     echo "Restart=on-failure"
     echo "RestartSec=5"
     echo
@@ -1089,6 +1180,9 @@ print_dry_run() {
   echo "  - verify sha256 against checksums.txt"
   echo "  - install -m 0755 to ${BIN_PATH}"
   echo "  - ensure system user/group '${CP_SERVICE_USER}' exists"
+  if [ "$OPT_DOCKER" -eq 1 ]; then
+    echo "  - add '${CP_SERVICE_USER}' to the 'docker' group (--docker: root-equivalent access)"
+  fi
   echo "  - write ${ENV_FILE} (mode 0640, owner root:${CP_SERVICE_GROUP})"
   echo "  - write ${UNIT_FILE}"
   echo "  - systemd-analyze verify the unit"
@@ -1179,6 +1273,16 @@ prompt_fresh_install_values() {
     validate_env_value "$answer" --host-id
     OPT_HOST_ID="$answer"
   fi
+
+  prompt_tty "Monitor Docker containers? (adds the agent to the docker group; docker group access is root-equivalent) [y/N]: "
+  if ! read_line_tty answer; then
+    err "unexpected EOF on /dev/tty"
+    exit 1
+  fi
+  case "$answer" in
+    [Yy]|[Yy][Ee][Ss]) OPT_DOCKER=1 ;;
+    *) ;;
+  esac
 }
 
 print_menu() {
@@ -1320,6 +1424,7 @@ run_install_flow() {
   TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cloud-pulse-agent-install.XXXXXX")"
   trap 'rm -rf "$TMP_DIR"' EXIT
 
+  detect_preserved_docker_flag
   download_and_verify
   ensure_system_user
   install_binary

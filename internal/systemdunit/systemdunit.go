@@ -73,6 +73,20 @@ type Params struct {
 	// for Binary == AgentBinary (the agent unit never had a
 	// StateDirectory/ReadWritePaths line).
 	ReadWritePath string
+	// SupplementaryGroups is meaningful only for Binary == AgentBinary
+	// (SPEC-v0.5 §C): when non-empty, renders a
+	// "SupplementaryGroups=<space-joined groups>" line right after
+	// Group=, letting the agent's unprivileged system user join
+	// additional groups — in practice just "docker", so the Docker
+	// Engine API's unix socket (owned by root:docker) becomes
+	// readable/writable without running the agent as root. Rendered
+	// verbatim (space-joined, no quoting) since systemd's
+	// SupplementaryGroups= takes a whitespace-separated list; callers
+	// (install-agent.sh's --docker flag, the CLI validating group
+	// names) are responsible for ensuring values contain no whitespace
+	// of their own. Ignored for Binary == HubBinary (the hub has no
+	// equivalent use case).
+	SupplementaryGroups []string
 }
 
 // userOrDefault and groupOrDefault apply Params' defaulting rule.
@@ -128,6 +142,28 @@ func validateParams(p Params) error {
 			return err
 		}
 	}
+	for _, g := range p.SupplementaryGroups {
+		if err := validateGroupName(g); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateGroupName rejects a supplementary group name that is empty or
+// contains whitespace/control characters — systemd's
+// SupplementaryGroups= is a whitespace-separated list, so any such
+// character in a single group name would silently split it into two
+// (or corrupt the rendered unit line) rather than erroring visibly.
+func validateGroupName(name string) error {
+	if name == "" {
+		return errors.New("supplementary group name must not be empty")
+	}
+	for _, r := range name {
+		if r <= 0x20 || r == 0x7f {
+			return fmt.Errorf("supplementary group name %q must not contain whitespace or control characters", name)
+		}
+	}
 	return nil
 }
 
@@ -177,6 +213,9 @@ func renderAgent(p Params) string {
 	writeLine(&b, "ExecStart="+p.BinPath)
 	writeLine(&b, "User="+p.userOrDefault())
 	writeLine(&b, "Group="+p.groupOrDefault())
+	if len(p.SupplementaryGroups) > 0 {
+		writeLine(&b, "SupplementaryGroups="+strings.Join(p.SupplementaryGroups, " "))
+	}
 	writeLine(&b, "Restart=on-failure")
 	writeLine(&b, "RestartSec=5")
 	writeLine(&b, "")
@@ -282,6 +321,11 @@ func ParseExisting(unit string) (Params, error) {
 			p.User = strings.TrimSpace(strings.TrimPrefix(line, "User="))
 		case strings.HasPrefix(line, "Group="):
 			p.Group = strings.TrimSpace(strings.TrimPrefix(line, "Group="))
+		case strings.HasPrefix(line, "SupplementaryGroups="):
+			value := strings.TrimSpace(strings.TrimPrefix(line, "SupplementaryGroups="))
+			if value != "" {
+				p.SupplementaryGroups = strings.Fields(value)
+			}
 		case strings.HasPrefix(line, "ReadWritePaths="):
 			p.ReadWritePath = strings.TrimSpace(strings.TrimPrefix(line, "ReadWritePaths="))
 		}
@@ -312,6 +356,11 @@ func ParseExisting(unit string) (Params, error) {
 	}
 	if p.ReadWritePath != "" {
 		if err := validatePathValue("read-write-path", p.ReadWritePath); err != nil {
+			return Params{}, fmt.Errorf("systemdunit: parse: %w", err)
+		}
+	}
+	for _, g := range p.SupplementaryGroups {
+		if err := validateGroupName(g); err != nil {
 			return Params{}, fmt.Errorf("systemdunit: parse: %w", err)
 		}
 	}

@@ -1,6 +1,9 @@
 package models
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestValidHostID(t *testing.T) {
 	t.Parallel()
@@ -15,7 +18,7 @@ func TestValidHostID(t *testing.T) {
 		{"dot_underscore_dash", "web.01_east-1", true},
 		{"unicode", "hôst-1", false},
 		{"space", "host 1", false},
-		{"exactly_128", string(make([]byte, 128, 128)), false}, // NUL bytes, invalid runes
+		{"exactly_128", string(make([]byte, 128)), false}, // NUL bytes, invalid runes
 		{"128_valid_chars", repeatChar('a', 128), true},
 		{"129_valid_chars", repeatChar('a', 129), false},
 		{"single_char", "a", true},
@@ -144,5 +147,50 @@ func TestDefaultEgressLimit(t *testing.T) {
 				t.Errorf("DefaultEgressLimit(%q) = %d, want %d", tc.p, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestHostSummaryJSON_InventoryCountersOmittedWhenNil(t *testing.T) {
+	t.Parallel()
+
+	s := HostSummary{Host: HostInfo{ID: "h1"}, Status: HostUp}
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatalf("Unmarshal raw: %v", err)
+	}
+	for _, field := range []string{"containers_running", "listening_ports"} {
+		if _, ok := raw[field]; ok {
+			t.Errorf("%s must be omitted when nil, got %s", field, b)
+		}
+	}
+}
+
+func TestHostSummaryJSON_InventoryCountersRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	running, ports := 3, 7
+	s := HostSummary{
+		Host:              HostInfo{ID: "h1"},
+		Status:            HostUp,
+		ContainersRunning: &running,
+		ListeningPorts:    &ports,
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded HostSummary
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.ContainersRunning == nil || *decoded.ContainersRunning != running {
+		t.Errorf("ContainersRunning = %v, want %d", decoded.ContainersRunning, running)
+	}
+	if decoded.ListeningPorts == nil || *decoded.ListeningPorts != ports {
+		t.Errorf("ListeningPorts = %v, want %d", decoded.ListeningPorts, ports)
 	}
 }

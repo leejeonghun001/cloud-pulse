@@ -130,8 +130,10 @@ func (m *Manager) Apply(ctx context.Context, addrs []string) ([]models.ListenerS
 	return statuses, nil
 }
 
-// closeAfterDelay closes e's listener (if any) after closeDelay,
-// off the calling goroutine so Apply never blocks on it.
+// closeAfterDelay closes e's listener (if any) after closeDelay, off the
+// calling goroutine so Apply never blocks on it. It is deliberately
+// untracked: the wait is bounded by closeDelay and Shutdown tolerates a late
+// Close racing with its listener cleanup.
 func (m *Manager) closeAfterDelay(addr string, e *entry) {
 	go func() {
 		time.Sleep(closeDelay)

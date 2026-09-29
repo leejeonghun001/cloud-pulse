@@ -197,6 +197,116 @@ func TestRender_CustomUserGroup(t *testing.T) {
 	}
 }
 
+// TestRender_Agent_SupplementaryGroups covers SPEC-v0.5 §C's
+// install-agent.sh --docker flag: a SupplementaryGroups= line appears
+// right after Group=, space-joined, only when non-empty.
+func TestRender_Agent_SupplementaryGroups(t *testing.T) {
+	got, err := Render(Params{
+		Binary:              AgentBinary,
+		BinPath:             "/usr/local/bin/cloud-pulse-agent",
+		EnvFile:             "/etc/cloud-pulse/agent.env",
+		SupplementaryGroups: []string{"docker"},
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	const want = `[Unit]
+Description=cloud-pulse agent (host metrics collector)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/cloud-pulse/agent.env
+ExecStart=/usr/local/bin/cloud-pulse-agent
+User=cloud-pulse
+Group=cloud-pulse
+SupplementaryGroups=docker
+Restart=on-failure
+RestartSec=5
+
+# --- sandboxing / hardening ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
+`
+	if got != want {
+		t.Fatalf("agent unit with SupplementaryGroups mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+// TestRender_Agent_SupplementaryGroups_MultipleAndSpaceJoined covers
+// multiple groups rendered space-joined on one line.
+func TestRender_Agent_SupplementaryGroups_MultipleAndSpaceJoined(t *testing.T) {
+	got, err := Render(Params{
+		Binary:              AgentBinary,
+		BinPath:             "/usr/local/bin/cloud-pulse-agent",
+		EnvFile:             "/etc/cloud-pulse/agent.env",
+		SupplementaryGroups: []string{"docker", "adm"},
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !strings.Contains(got, "SupplementaryGroups=docker adm\n") {
+		t.Fatalf("expected space-joined SupplementaryGroups= line, got:\n%s", got)
+	}
+}
+
+// TestRender_Hub_SupplementaryGroups_Ignored covers the doc comment's
+// claim that SupplementaryGroups is ignored for the hub binary.
+func TestRender_Hub_SupplementaryGroups_Ignored(t *testing.T) {
+	got, err := Render(Params{
+		Binary:              HubBinary,
+		BinPath:             "/usr/local/bin/cloud-pulse-hub",
+		EnvFile:             "/etc/cloud-pulse/hub.env",
+		SupplementaryGroups: []string{"docker"},
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if got != wantHubRealUnit {
+		t.Fatalf("hub unit should ignore SupplementaryGroups:\n--- got ---\n%s\n--- want ---\n%s", got, wantHubRealUnit)
+	}
+}
+
+// TestRender_RejectsInvalidSupplementaryGroupNames covers
+// validateGroupName's whitespace/control-character/empty rejection.
+func TestRender_RejectsInvalidSupplementaryGroupNames(t *testing.T) {
+	tests := []struct {
+		name   string
+		groups []string
+	}{
+		{"empty string", []string{""}},
+		{"embedded space", []string{"doc ker"}},
+		{"embedded newline", []string{"docker\nCP_EVIL=1"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Render(Params{
+				Binary:              AgentBinary,
+				BinPath:             "/usr/local/bin/cloud-pulse-agent",
+				EnvFile:             "/etc/cloud-pulse/agent.env",
+				SupplementaryGroups: tt.groups,
+			})
+			if err == nil {
+				t.Fatalf("Render with groups %q: expected error, got none", tt.groups)
+			}
+		})
+	}
+}
+
 func TestRender_ValidatesRequiredFields(t *testing.T) {
 	tests := []struct {
 		name string

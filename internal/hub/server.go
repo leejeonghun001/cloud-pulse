@@ -100,6 +100,106 @@ type Store interface {
 	// PruneSessions deletes sessions whose ExpiresAt is at or before
 	// now.
 	PruneSessions(ctx context.Context, now time.Time) error
+
+	// --- Alerting (SPEC-v0.5 §B) ---
+
+	// ListAlertRules returns every configured alert rule, sorted by ID.
+	ListAlertRules(ctx context.Context) ([]models.AlertRule, error)
+	// GetAlertRule returns one alert rule by id, or models.ErrNotFound.
+	GetAlertRule(ctx context.Context, id int64) (models.AlertRule, error)
+	// CreateAlertRule inserts r, ignoring r.ID, and returns the row with
+	// its assigned ID and CreatedAt/UpdatedAt populated.
+	CreateAlertRule(ctx context.Context, r models.AlertRule) (models.AlertRule, error)
+	// UpdateAlertRule replaces the stored rule matching r.ID with r
+	// (UpdatedAt refreshed to now), or returns models.ErrNotFound if no
+	// rule with that ID exists.
+	UpdateAlertRule(ctx context.Context, r models.AlertRule) (models.AlertRule, error)
+	// DeleteAlertRule removes the rule with id. Deleting a non-existent
+	// rule is not an error.
+	DeleteAlertRule(ctx context.Context, id int64) error
+
+	// ListNotifyChannels returns every configured notification channel,
+	// sorted by ID. Config values are returned unredacted; callers that
+	// expose them over the API must call models.NotifyChannel.Redacted.
+	ListNotifyChannels(ctx context.Context) ([]models.NotifyChannel, error)
+	// GetNotifyChannel returns one channel by id, or models.ErrNotFound.
+	GetNotifyChannel(ctx context.Context, id int64) (models.NotifyChannel, error)
+	// CreateNotifyChannel inserts ch, ignoring ch.ID, and returns the
+	// row with its assigned ID and CreatedAt/UpdatedAt populated.
+	CreateNotifyChannel(ctx context.Context, ch models.NotifyChannel) (models.NotifyChannel, error)
+	// UpdateNotifyChannel replaces the stored channel matching ch.ID
+	// with ch (UpdatedAt refreshed to now), or returns
+	// models.ErrNotFound if no channel with that ID exists. Callers are
+	// responsible for merging preserved secret fields (a request field
+	// omitted or equal to models.RedactedConfigValue) into ch before
+	// calling this method; the store itself performs no redaction
+	// merge.
+	UpdateNotifyChannel(ctx context.Context, ch models.NotifyChannel) (models.NotifyChannel, error)
+	// DeleteNotifyChannel removes the channel with id. Deleting a
+	// non-existent channel is not an error. Implementations do not
+	// cascade into alert_rules.channel_ids; callers (the alerting
+	// engine) must tolerate a rule referencing a since-deleted channel
+	// ID by skipping it.
+	DeleteNotifyChannel(ctx context.Context, id int64) error
+
+	// GetAlertState returns the persisted state-machine row for
+	// (ruleID, hostID), or a zero-value models.AlertState{RuleID,
+	// HostID, State: models.AlertStateOK} with a nil error if no row
+	// exists yet.
+	GetAlertState(ctx context.Context, ruleID int64, hostID string) (models.AlertState, error)
+	// SetAlertState upserts the state-machine row for (st.RuleID,
+	// st.HostID). Implementations key on the (rule_id, host_id) primary
+	// key.
+	SetAlertState(ctx context.Context, st models.AlertState) error
+	// ListAlertStates returns every persisted state-machine row whose
+	// State is not models.AlertStateOK (i.e. pending or firing), for
+	// the scheduler to re-evaluate on each tick without scanning every
+	// rule/host pair that has never fired.
+	ListAlertStates(ctx context.Context) ([]models.AlertState, error)
+	// DeleteAlertStatesForRule removes every state-machine row for
+	// ruleID, used when a rule is deleted so a stale firing/pending
+	// state doesn't linger.
+	DeleteAlertStatesForRule(ctx context.Context, ruleID int64) error
+
+	// CreateAlertEvent inserts ev, ignoring ev.ID, and returns the row
+	// with its assigned ID populated.
+	CreateAlertEvent(ctx context.Context, ev models.AlertEvent) (models.AlertEvent, error)
+	// UpdateAlertEvent replaces the stored event matching ev.ID with ev
+	// in full (state, deliveries, resolved_at, ...), or returns
+	// models.ErrNotFound if no event with that ID exists. Used both to
+	// append delivery results and to transition Firing -> Resolved.
+	UpdateAlertEvent(ctx context.Context, ev models.AlertEvent) error
+	// GetAlertEvent returns one event by id, or models.ErrNotFound.
+	GetAlertEvent(ctx context.Context, id int64) (models.AlertEvent, error)
+	// GetActiveAlertEvent returns the currently-firing event for
+	// (ruleID, hostID), or models.ErrNotFound if none is firing. Used to
+	// find the event a re-notification or resolution should update
+	// rather than creating a duplicate.
+	GetActiveAlertEvent(ctx context.Context, ruleID int64, hostID string) (models.AlertEvent, error)
+	// ListAlertEvents returns events matching the given filters, newest
+	// first, at most limit rows. state == "" matches any state; hostID
+	// == "" matches any host; before == 0 means no upper bound on
+	// StartedAt (otherwise StartedAt < before), for cursor-style
+	// pagination on repeated calls using the last row's StartedAt.
+	ListAlertEvents(ctx context.Context, state models.AlertEventState, hostID string, before int64, limit int) ([]models.AlertEvent, error)
+	// ListActiveAlertEvents returns every event currently in state
+	// models.AlertEventFiring, newest first.
+	ListActiveAlertEvents(ctx context.Context) ([]models.AlertEvent, error)
+	// PruneAlertEvents deletes resolved events older than the retention
+	// window as of now (180 days per SPEC-v0.5 §B). Events still firing
+	// are never pruned regardless of age.
+	PruneAlertEvents(ctx context.Context, now time.Time) error
+
+	// --- Inventory (SPEC-v0.5 §C) ---
+
+	// GetHostInventory returns the most recently stored inventory
+	// snapshot for hostID, or models.ErrNotFound if none has been
+	// collected yet.
+	GetHostInventory(ctx context.Context, hostID string) (models.Inventory, error)
+	// SetHostInventory replaces the stored inventory snapshot for
+	// hostID with inv (one row per host; upsert on host_id).
+	SetHostInventory(ctx context.Context, hostID string, inv models.Inventory) error
+
 	// Close releases any resources held by the store.
 	Close() error
 }
@@ -139,6 +239,51 @@ type ListenController interface {
 	Status() []models.ListenerStatus
 }
 
+// AlertEngine evaluates alert rules against host state and manages the
+// resulting firing/resolved lifecycle. Implementations live in
+// internal/alerting; the alerting stage wires the real engine into
+// Options.Alerting from cmd/hub. nil in tests/older code paths means
+// alert routes that need it respond as if no engine is configured (the
+// alerting stage's registerAlertRoutes handles this).
+type AlertEngine interface {
+	// Evaluate runs every enabled rule against hosts as of now,
+	// advancing each rule+host's persisted state machine and enqueuing
+	// any resulting notifications. Called after each successful ingest
+	// (scoped to that one host) and periodically by the scheduler
+	// (across every host, for host_down and sustained-window
+	// transitions that need to fire even without new samples).
+	Evaluate(ctx context.Context, now time.Time, hosts []models.HostSnapshot) error
+	// Preview reports whether rule is currently satisfied for each
+	// host, without altering any persisted state, for the rule editor's
+	// live preview and POST /api/v1/alerts/rules/{id}/preview.
+	Preview(ctx context.Context, now time.Time, rule models.AlertRule, hosts []models.HostSnapshot) (map[string]bool, error)
+}
+
+// NotifySenderFactory constructs a notification sender for a configured
+// channel, used by alert delivery and the channel-test endpoints.
+// Implementations live in internal/notify (notify.New adapted to this
+// signature); the alerting stage wires the real factory into
+// Options.NotifyFactory from cmd/hub. Returning an error (e.g. an
+// unrecognized channel Type or invalid Config) must not panic.
+type NotifySenderFactory func(ch models.NotifyChannel) (NotifySender, error)
+
+// NotifySender delivers one notification message to a channel.
+// internal/notify.Sender (adapted) and internal/alerting.Sender
+// (adapted) both satisfy this interface; it is redeclared here so
+// internal/hub does not need to import internal/notify or
+// internal/alerting's message types directly. msg is boxed as `any`
+// rather than a concrete type to avoid internal/hub importing either
+// package: the alerting stage's own adapter
+// (internal/hub/alertengine.go's notifySenderAdapter) unboxes msg as an
+// internal/alerting.Message before delegating to a real
+// internal/notify.Sender, and internal/hub's own callers (e.g.
+// alertroutes.go's channel-test endpoints) box an internal/alerting.Message
+// the same way — so every Send call in this codebase carries an
+// internal/alerting.Message, never a raw internal/notify.Message.
+type NotifySender interface {
+	Send(ctx context.Context, msg any) error
+}
+
 // Options configures a Server.
 type Options struct {
 	// AgentToken authenticates agent report ingestion.
@@ -169,6 +314,16 @@ type Options struct {
 	// nil, a hub.WebhookNotifier with a 10s-timeout client is used.
 	// Tests inject a fake to observe/short-circuit outbound HTTP calls.
 	NotifierFor func(url string) Notifier
+	// Alerting evaluates alert rules (SPEC-v0.5 §B). nil disables the
+	// alerts.* API's evaluation-dependent behavior (registerAlertRoutes
+	// itself is still called; the alerting stage's handlers must handle
+	// a nil Alerting gracefully, e.g. rule preview endpoints responding
+	// 501 or an empty result until wired).
+	Alerting AlertEngine
+	// NotifyFactory constructs a NotifySender for a configured channel,
+	// used by the channel-test endpoints and alert delivery. nil means
+	// no notification sending is available yet (pre-alerting-stage).
+	NotifyFactory NotifySenderFactory
 	// UpdateSource resolves the latest published cloud-pulse release
 	// tag for the background update checker. nil disables the checker
 	// entirely (RunBackground's update-check loop becomes a no-op) and
@@ -300,10 +455,28 @@ func (s *Server) Handler() http.Handler {
 }
 
 // Wait blocks until all in-flight background alert notifications have
-// completed. cmd/hub should call this after stopping the HTTP server and
-// canceling the background context, as part of a graceful shutdown.
+// completed: both legacy webhook-test-send goroutines (alertWG) and, if
+// s.opts.Alerting implements alertEngineWaiter (internal/alerting.Engine
+// does), its own async delivery worker's queue. cmd/hub should call this
+// after stopping the HTTP server and canceling the background context,
+// as part of a graceful shutdown, and tests use it to observe alert
+// delivery results synchronously.
 func (s *Server) Wait() {
 	s.alertWG.Wait()
+	if w, ok := s.opts.Alerting.(alertEngineWaiter); ok {
+		w.Wait()
+	}
+}
+
+// alertEngineWaiter is implemented by an AlertEngine whose notification
+// delivery is asynchronous (internal/alerting.Engine) and needs a way
+// for callers to synchronize on in-flight deliveries without importing
+// internal/alerting directly from this package (see AlertEngine's doc
+// comment on the same internal/hub/internal/alerting decoupling
+// rationale). An AlertEngine that doesn't implement this (e.g. a test
+// fake) simply makes Wait a no-op for that part.
+type alertEngineWaiter interface {
+	Wait()
 }
 
 // effectiveWebhookURL resolves the webhook URL alerts and the test-send
@@ -358,6 +531,8 @@ func (s *Server) routes() *http.ServeMux {
 
 	s.registerAuthRoutes(mux)
 	s.registerNetworkRoutes(mux)
+	s.registerAlertRoutes(mux)
+	s.registerInventoryRoutes(mux)
 
 	// No catch-all is registered for the bare pattern "/api/" or "/":
 	// doing so with no method restriction would make it match every

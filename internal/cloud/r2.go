@@ -78,6 +78,8 @@ func r2ActionClass(actionType string) string {
 		return "a"
 	case r2ClassBActions[actionType]:
 		return "b"
+	case r2FreeActions[actionType]:
+		return ""
 	default:
 		return ""
 	}

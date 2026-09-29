@@ -45,6 +45,10 @@ type Agent struct {
 	// a sample and sending it, to spread simultaneous sends across a
 	// fleet. 0 (default) disables jitter. Always <= Interval/2.
 	SendJitter time.Duration
+	// Docker is the resolved CP_DOCKER setting: "off", "auto" (probe the
+	// platform default Docker socket), or an explicit socket path/URL.
+	// See loadDocker for the exact parsing/normalization rule.
+	Docker string
 }
 
 // DefaultAgentNetExclude returns the default network interface exclusion
@@ -64,7 +68,8 @@ func DefaultAgentNetExclude() []string {
 // default auto), CP_EGRESS_LIMIT_GB (unset -> provider default), CP_NET_EXCLUDE
 // (comma-separated globs), CP_LOG_LEVEL, CP_LOG_FORMAT, CP_TIME_SYNC
 // (hub|local, default hub), CP_SEND_JITTER (default 0, must be
-// <= CP_INTERVAL/2).
+// <= CP_INTERVAL/2), CP_DOCKER (auto|off|<socket path/URL>, default
+// auto).
 func LoadAgent(l LookupFunc, hostname string) (Agent, error) {
 	cfg := Agent{}
 
@@ -120,7 +125,27 @@ func LoadAgent(l LookupFunc, hostname string) (Agent, error) {
 	}
 	cfg.SendJitter = sendJitter
 
+	cfg.Docker = loadDocker(l)
+
 	return cfg, nil
+}
+
+// loadDocker reads CP_DOCKER, defaulting to "auto". Recognized special
+// values are "auto" (probe the platform default Docker socket) and
+// "off" (disable Docker collection entirely); any other value is
+// treated as an explicit socket path or "unix://" URL, passed through
+// unmodified for internal/agent's dockerClient to resolve. There is
+// deliberately no validation here beyond defaulting — an invalid path
+// surfaces as DockerStatusUnavailable/DockerStatusError at collection
+// time (see models.DockerInfo), not a config load error, since a
+// typo'd or since-removed socket path shouldn't prevent the agent from
+// starting and reporting every other metric.
+func loadDocker(l LookupFunc) string {
+	v := strings.TrimSpace(getString(l, "CP_DOCKER", "auto"))
+	if v == "" {
+		return "auto"
+	}
+	return v
 }
 
 // loadTimeSync reads and validates CP_TIME_SYNC (hub|local,

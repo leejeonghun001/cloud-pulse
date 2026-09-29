@@ -169,4 +169,12 @@ type HostSummary struct {
 	// when no update is known or the host's agent version doesn't
 	// parse.
 	Update *AgentUpdate `json:"update,omitempty"`
+	// ContainersRunning is the count of Docker containers in state
+	// "running" from the host's latest inventory, omitted when no
+	// inventory has been collected yet.
+	ContainersRunning *int `json:"containers_running,omitempty"`
+	// ListeningPorts is the count of listening ports from the host's
+	// latest inventory, omitted when no inventory has been collected
+	// yet.
+	ListeningPorts *int `json:"listening_ports,omitempty"`
 }

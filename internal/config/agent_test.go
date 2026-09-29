@@ -485,6 +485,41 @@ func TestLoadAgent_SendJitter(t *testing.T) {
 	})
 }
 
+func TestLoadAgent_Docker(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		value string // "" means CP_DOCKER unset
+		want  string
+	}{
+		{"unset_defaults_to_auto", "", "auto"},
+		{"explicit_auto", "auto", "auto"},
+		{"off", "off", "off"},
+		{"explicit_socket_path", "/tmp/podman.sock", "/tmp/podman.sock"},
+		{"unix_url", "unix:///tmp/podman.sock", "unix:///tmp/podman.sock"},
+		{"empty_string_defaults_to_auto", "   ", "auto"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			env := validAgentEnv()
+			if tc.value != "" {
+				env["CP_DOCKER"] = tc.value
+			}
+			cfg, err := LoadAgent(mapLookup(env), "host")
+			if err != nil {
+				t.Fatalf("LoadAgent: %v", err)
+			}
+			if cfg.Docker != tc.want {
+				t.Errorf("Docker = %q, want %q", cfg.Docker, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadAgent_LogSettings(t *testing.T) {
 	t.Parallel()
 

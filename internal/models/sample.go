@@ -54,6 +54,12 @@ type Sample struct {
 type AgentReport struct {
 	Host    HostInfo `json:"host"`
 	Samples []Sample `json:"samples"`
+	// Inventory is the agent's latest listening-ports/Docker snapshot,
+	// included when it has changed since the last report or every 10
+	// minutes, whichever comes first. Omitted entirely by agents older
+	// than v0.5.0's inventory support; a hub older than v0.5.0 ignores
+	// this field.
+	Inventory *Inventory `json:"inventory,omitempty"`
 }
 
 // IngestResponse is returned by the hub after processing an AgentReport.
@@ -90,4 +96,8 @@ type APIError struct {
 	// clients don't need to read response headers. Omitted for
 	// responses that aren't rate-limited.
 	RetryAfterSeconds int `json:"retry_after_seconds,omitempty"`
+	// Details holds field-level validation error messages (e.g.
+	// {"threshold": "must be greater than 0"}) for a 400 response,
+	// omitted when the error isn't field-scoped validation.
+	Details map[string]string `json:"details,omitempty"`
 }

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/leejeonghun001/cloud-pulse/internal/systemdunit"
@@ -55,9 +56,10 @@ func runSystemdUnitPrint(args []string) int {
 	envFile := fs.String("env-file", "", "absolute path to the agent's EnvironmentFile (required)")
 	user := fs.String("user", "", "service User= override (default: cloud-pulse)")
 	group := fs.String("group", "", "service Group= override (default: cloud-pulse)")
+	supplementaryGroups := fs.String("supplementary-groups", "", "comma-separated SupplementaryGroups= list, e.g. \"docker\" (SPEC-v0.5 §C --docker)")
 	_ = fs.String("read-write-path", "", "ignored for the agent (no StateDirectory/ReadWritePaths in its unit)")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: cloud-pulse-agent systemd-unit print --bin-path P --env-file E [--user U --group G]")
+		fmt.Fprintln(os.Stderr, "usage: cloud-pulse-agent systemd-unit print --bin-path P --env-file E [--user U --group G] [--supplementary-groups G1,G2]")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -65,11 +67,12 @@ func runSystemdUnitPrint(args []string) int {
 	}
 
 	unit, err := systemdunit.Render(systemdunit.Params{
-		Binary:  systemdunit.AgentBinary,
-		BinPath: *binPath,
-		EnvFile: *envFile,
-		User:    *user,
-		Group:   *group,
+		Binary:              systemdunit.AgentBinary,
+		BinPath:             *binPath,
+		EnvFile:             *envFile,
+		User:                *user,
+		Group:               *group,
+		SupplementaryGroups: splitNonEmpty(*supplementaryGroups),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cloud-pulse-agent: systemd-unit print: %v\n", err)
@@ -104,4 +107,20 @@ func runSystemdUnitApply(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// splitNonEmpty splits a comma-separated list into its non-empty,
+// whitespace-trimmed elements, returning nil (not an empty slice) when
+// csv is empty or contains only commas/whitespace — so an unset
+// --supplementary-groups flag renders no SupplementaryGroups= line at
+// all rather than an empty one.
+func splitNonEmpty(csv string) []string {
+	var out []string
+	for _, part := range strings.Split(csv, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }

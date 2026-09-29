@@ -64,6 +64,23 @@ type ReporterOptions struct {
 	// "newer agent available" log notice (see updateNotifier). Tests
 	// inject a fake; nil uses time.Now.
 	UpdateNow func() time.Time
+	// Inventory, if non-nil, is consulted before every outbound batch to
+	// decide whether to attach a fresh models.Inventory snapshot to that
+	// AgentReport (SPEC-v0.5 §C: sent when changed since the last report
+	// or every 10 minutes, whichever comes first — see
+	// inventoryReportHook for the exact decision). nil disables inventory
+	// reporting entirely (the field is simply omitted, matching a
+	// pre-v0.5.0 agent).
+	Inventory InventoryProvider
+}
+
+// InventoryProvider supplies the Reporter with the agent's current
+// inventory snapshot. internal/agent.InventoryCollector.Collect matches
+// this signature via a small adapter in cmd/agent (kept as an interface
+// here so Reporter's tests can inject a fake without touching gopsutil
+// or a real Docker socket).
+type InventoryProvider interface {
+	Collect(ctx context.Context, now time.Time) (models.Inventory, error)
 }
 
 // Reporter buffers collected samples in memory and periodically flushes
@@ -78,6 +95,7 @@ type Reporter struct {
 	clock        *HubClock
 	logClockWarn func(offset time.Duration)
 	updateNotice *updateNotifier
+	inventory    *inventoryReportHook
 
 	mu      sync.Mutex
 	samples []models.Sample
@@ -111,6 +129,7 @@ func NewReporter(opts ReporterOptions) *Reporter {
 		clock:        opts.Clock,
 		logClockWarn: opts.LogClockWarn,
 		updateNotice: newUpdateNotifier(opts.UpdateNow),
+		inventory:    newInventoryReportHook(opts.Inventory),
 	}
 }
 
@@ -147,13 +166,19 @@ func (r *Reporter) Buffered() int {
 // later batches are kept for the next Flush call and Flush returns the
 // error.
 func (r *Reporter) Flush(ctx context.Context, host models.HostInfo) error {
+	inv := r.inventory.next(ctx, r.logger)
+	first := true
 	for {
 		batch := r.peekBatch()
 		if len(batch) == 0 {
 			return nil
 		}
 
-		status, serverTimeMs, latestVersion, t0, t1, err := r.postBatch(ctx, host, batch)
+		var reportInv *models.Inventory
+		if first {
+			reportInv = inv
+		}
+		status, serverTimeMs, latestVersion, t0, t1, err := r.postBatch(ctx, host, batch, reportInv)
 		if err != nil {
 			return fmt.Errorf("agent: flush: %w", err)
 		}
@@ -164,6 +189,10 @@ func (r *Reporter) Flush(ctx context.Context, host models.HostInfo) error {
 				r.clock.Observe(t0, t1, serverTimeMs, r.logClockWarn)
 			}
 			r.updateNotice.Observe(r.logger, latestVersion)
+			if first && reportInv != nil {
+				r.inventory.markSent(*reportInv)
+			}
+			first = false
 			r.dropBatch(len(batch))
 		case status == http.StatusUnauthorized || status == http.StatusForbidden:
 			return ErrUnauthorized
@@ -173,6 +202,7 @@ func (r *Reporter) Flush(ctx context.Context, host models.HostInfo) error {
 			return fmt.Errorf("agent: flush: hub returned status %d", status)
 		case status >= 400:
 			r.logger.WarnContext(ctx, "dropping batch rejected by hub", "status", status, "sample_count", len(batch))
+			first = false
 			r.dropBatch(len(batch))
 		default:
 			return fmt.Errorf("agent: flush: hub returned unexpected status %d", status)
@@ -206,15 +236,15 @@ func (r *Reporter) dropBatch(n int) {
 	r.samples = r.samples[n:]
 }
 
-// postBatch sends a single AgentReport batch and returns the HTTP status
-// code, the response's server_time_ms (0 if absent/unparsable/non-2xx),
-// its latest_version (empty if absent/non-2xx), and the local send (t0)
-// / receive (t1) timestamps bracketing the request, for clock offset
-// estimation. A non-nil error indicates the request could not be
-// completed (network error, non-HTTP failure); it does not indicate an
-// HTTP error status.
-func (r *Reporter) postBatch(ctx context.Context, host models.HostInfo, batch []models.Sample) (status int, serverTimeMs int64, latestVersion string, t0, t1 time.Time, err error) {
-	report := models.AgentReport{Host: host, Samples: batch}
+// postBatch sends a single AgentReport batch (optionally carrying inv as
+// its Inventory field) and returns the HTTP status code, the response's
+// server_time_ms (0 if absent/unparsable/non-2xx), its latest_version
+// (empty if absent/non-2xx), and the local send (t0) / receive (t1)
+// timestamps bracketing the request, for clock offset estimation. A
+// non-nil error indicates the request could not be completed (network
+// error, non-HTTP failure); it does not indicate an HTTP error status.
+func (r *Reporter) postBatch(ctx context.Context, host models.HostInfo, batch []models.Sample, inv *models.Inventory) (status int, serverTimeMs int64, latestVersion string, t0, t1 time.Time, err error) {
+	report := models.AgentReport{Host: host, Samples: batch, Inventory: inv}
 	body, err := json.Marshal(report)
 	if err != nil {
 		return 0, 0, "", time.Time{}, time.Time{}, fmt.Errorf("agent: marshal report: %w", err)

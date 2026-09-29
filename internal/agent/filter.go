@@ -17,8 +17,8 @@ import (
 func cpuPercent(prev, cur cpu.TimesStat) float64 {
 	// Linux reports guest ticks in User/ Nice as well as Guest/GuestNice.
 	// Exclude the duplicate fields from the total before calculating busy time.
-	prevTotal := prev.Total() - prev.Guest - prev.GuestNice
-	curTotal := cur.Total() - cur.Guest - cur.GuestNice
+	prevTotal := cpuTotal(prev) - prev.Guest - prev.GuestNice
+	curTotal := cpuTotal(cur) - cur.Guest - cur.GuestNice
 	totalDelta := curTotal - prevTotal
 	if totalDelta <= 0 {
 		return 0
@@ -36,6 +36,15 @@ func cpuPercent(prev, cur cpu.TimesStat) float64 {
 		return 100
 	}
 	return pct
+}
+
+// cpuTotal returns the sum of every CPU tick field that gopsutil's
+// deprecated TimesStat.Total method currently includes. Keeping the sum
+// locally avoids depending on that deprecated helper while making guest-tick
+// de-duplication in cpuPercent explicit at the call site.
+func cpuTotal(stat cpu.TimesStat) float64 {
+	return stat.User + stat.System + stat.Idle + stat.Nice + stat.Iowait +
+		stat.Irq + stat.Softirq + stat.Steal + stat.Guest + stat.GuestNice
 }
 
 // counterDelta computes cur-prev for a monotonic uint64 counter, returning

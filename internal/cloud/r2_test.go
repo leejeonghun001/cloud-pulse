@@ -13,6 +13,30 @@ import (
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
 )
 
+func TestR2ActionClass(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		action string
+		want   string
+	}{
+		{action: "PutObject", want: "a"},
+		{action: "GetObject", want: "b"},
+		{action: "DeleteObject", want: ""},
+		{action: "DeleteBucket", want: ""},
+		{action: "AbortMultipartUpload", want: ""},
+		{action: "unknown", want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.action, func(t *testing.T) {
+			t.Parallel()
+			if got := r2ActionClass(tc.action); got != tc.want {
+				t.Errorf("r2ActionClass(%q) = %q, want %q", tc.action, got, tc.want)
+			}
+		})
+	}
+}
+
 // r2FakeRow is a helper for building fake operations/storage rows.
 type r2OpRow struct {
 	actionType string

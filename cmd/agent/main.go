@@ -146,6 +146,7 @@ func runAgent() int {
 		Logger:       logger,
 		Clock:        clock,
 		LogClockWarn: logClockOffsetWarning(logger),
+		Inventory:    agent.NewInventoryCollector(agent.InventoryCollectorOptions{Docker: cfg.Docker, Logger: logger}),
 	})
 
 	hostInfoFunc := func(ctx context.Context) models.HostInfo {

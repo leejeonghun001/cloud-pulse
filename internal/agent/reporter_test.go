@@ -2,17 +2,123 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
 )
+
+// reporterFakeInventoryProvider is a minimal InventoryProvider for
+// Reporter-level tests, returning a fixed sequence of snapshots.
+type reporterFakeInventoryProvider struct {
+	invs []models.Inventory
+	idx  int
+}
+
+func (f *reporterFakeInventoryProvider) Collect(context.Context, time.Time) (models.Inventory, error) {
+	i := f.idx
+	if i >= len(f.invs) {
+		i = len(f.invs) - 1
+	}
+	f.idx++
+	return f.invs[i], nil
+}
+
+func TestReporter_Flush_AttachesInventoryOnFirstReport(t *testing.T) {
+	t.Parallel()
+
+	var gotReport models.AgentReport
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotReport); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	inv := models.Inventory{CollectedAt: 100, Ports: []models.ListeningPort{{Proto: "tcp", Port: 80}}}
+	r := NewReporter(ReporterOptions{HubURL: srv.URL, Token: "tok", Inventory: &reporterFakeInventoryProvider{invs: []models.Inventory{inv}}})
+	r.Enqueue(models.Sample{Timestamp: 1})
+
+	if err := r.Flush(t.Context(), models.HostInfo{ID: "h1"}); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if gotReport.Inventory == nil {
+		t.Fatal("first report should carry an Inventory")
+	}
+	if len(gotReport.Inventory.Ports) != 1 || gotReport.Inventory.Ports[0].Port != 80 {
+		t.Errorf("got inventory %+v, want the scripted snapshot", gotReport.Inventory)
+	}
+}
+
+func TestReporter_Flush_OmitsInventoryWhenUnchangedOnSecondReport(t *testing.T) {
+	t.Parallel()
+
+	var reports []models.AgentReport
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var rep models.AgentReport
+		if err := json.NewDecoder(r.Body).Decode(&rep); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		reports = append(reports, rep)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	inv := models.Inventory{Ports: []models.ListeningPort{{Proto: "tcp", Port: 80}}}
+	provider := &reporterFakeInventoryProvider{invs: []models.Inventory{inv, inv}}
+	r := NewReporter(ReporterOptions{HubURL: srv.URL, Token: "tok", Inventory: provider})
+
+	r.Enqueue(models.Sample{Timestamp: 1})
+	if err := r.Flush(t.Context(), models.HostInfo{ID: "h1"}); err != nil {
+		t.Fatalf("Flush #1: %v", err)
+	}
+
+	r.Enqueue(models.Sample{Timestamp: 2})
+	if err := r.Flush(t.Context(), models.HostInfo{ID: "h1"}); err != nil {
+		t.Fatalf("Flush #2: %v", err)
+	}
+
+	if len(reports) != 2 {
+		t.Fatalf("got %d reports, want 2", len(reports))
+	}
+	if reports[0].Inventory == nil {
+		t.Error("first report should carry an Inventory")
+	}
+	if reports[1].Inventory != nil {
+		t.Error("second report should omit Inventory (unchanged, not yet stale)")
+	}
+}
+
+func TestReporter_Flush_NoInventoryProviderOmitsField(t *testing.T) {
+	t.Parallel()
+
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = b
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	r := NewReporter(ReporterOptions{HubURL: srv.URL, Token: "tok"})
+	r.Enqueue(models.Sample{Timestamp: 1})
+	if err := r.Flush(t.Context(), models.HostInfo{ID: "h1"}); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if strings.Contains(string(gotBody), "\"inventory\"") {
+		t.Errorf("body should omit the inventory field entirely when no provider is configured: %s", gotBody)
+	}
+}
 
 func TestReporter_FlushEmptyBufferNoRequest(t *testing.T) {
 	t.Parallel()

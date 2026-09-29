@@ -584,6 +584,52 @@ test_agent_dry_run() {
   assert_file_absent "agent --dry-run does not write agent.env" "${sandbox}/etc/cloud-pulse/agent.env"
 }
 
+# test_agent_docker_flag — SPEC-v0.5 §C: --docker adds
+# SupplementaryGroups=docker to the rendered unit and sets
+# CP_DOCKER=auto in agent.env; a reinstall without re-passing --docker
+# preserves both (detect_preserved_docker_flag).
+test_agent_docker_flag() {
+  echo "==> testing install-agent.sh --docker flag (unit SupplementaryGroups + CP_DOCKER + preservation on reinstall)"
+  local sandbox="${TMP_ROOT}/sandbox-agent-docker"
+  mkdir -p "$sandbox"
+  local unit_file="${sandbox}/etc/systemd/system/cloud-pulse-agent.service"
+  local env_file="${sandbox}/etc/cloud-pulse/agent.env"
+
+  local out
+  out="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$sandbox" \
+    timeout 60 bash scripts/install-agent.sh --hub-url "http://127.0.0.1:${SERVER_PORT}" --token "$HUB_TOKEN" --docker 2>&1)" || {
+    fail "install-agent.sh --docker sandbox install exited 0"
+    echo "$out" >&2
+    return
+  }
+  pass "install-agent.sh --docker sandbox install exited 0"
+
+  assert_file_contains "agent unit has SupplementaryGroups=docker after --docker" "$unit_file" "SupplementaryGroups=docker"
+  assert_file_contains "agent.env has CP_DOCKER=auto after --docker" "$env_file" "CP_DOCKER=auto"
+  assert_contains "install-agent.sh --docker logs the usermod/docker-group action" "$out" "docker"
+
+  # Reinstall without --docker must preserve both.
+  local out2
+  out2="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$sandbox" \
+    timeout 60 bash scripts/install-agent.sh 2>&1)" || {
+    fail "install-agent.sh reinstall (no --docker) after --docker exited 0"
+    echo "$out2" >&2
+    return
+  }
+  pass "install-agent.sh reinstall (no --docker) after --docker exited 0"
+  assert_file_contains "agent unit still has SupplementaryGroups=docker after reinstall without --docker" "$unit_file" "SupplementaryGroups=docker"
+  assert_file_contains "agent.env still has CP_DOCKER=auto after reinstall without --docker" "$env_file" "CP_DOCKER=auto"
+  assert_contains "reinstall logs preserving the --docker setting" "$out2" "preserving existing --docker setting"
+}
+
+test_agent_no_docker_flag_omits_supplementary_groups() {
+  echo "==> testing install-agent.sh without --docker omits SupplementaryGroups and CP_DOCKER stays commented"
+  local unit_file="${SANDBOX_AGENT}/etc/systemd/system/cloud-pulse-agent.service"
+  local env_file="${SANDBOX_AGENT}/etc/cloud-pulse/agent.env"
+  assert_not_contains "agent unit has no SupplementaryGroups= without --docker" "$(cat "$unit_file")" "SupplementaryGroups"
+  assert_file_contains "agent.env has CP_DOCKER commented out without --docker" "$env_file" "#CP_DOCKER=auto"
+}
+
 test_agent_uninstall_and_purge() {
   echo "==> testing install-agent.sh --uninstall (keeps env) and --purge (removes env)"
   local bin="${SANDBOX_AGENT}/usr/local/bin/cloud-pulse-agent"
@@ -887,6 +933,16 @@ test_systemd_unit_render_drift() {
     > "${TMP_ROOT}/agent-heredoc.unit"
   assert_exit0 "agent unit: systemd-unit print == heredoc fallback (diff)" \
     diff "${TMP_ROOT}/agent-bin.unit" "${TMP_ROOT}/agent-heredoc.unit"
+
+  # --docker (SPEC-v0.5 §C): SupplementaryGroups=docker line.
+  timeout 10 "$agent_bin" systemd-unit print --bin-path /usr/local/bin/cloud-pulse-agent \
+    --env-file /etc/cloud-pulse/agent.env --user cloud-pulse --group cloud-pulse \
+    --supplementary-groups docker \
+    > "${TMP_ROOT}/agent-docker-bin.unit"
+  render_agent_fallback_standalone /usr/local/bin/cloud-pulse-agent /etc/cloud-pulse/agent.env docker \
+    > "${TMP_ROOT}/agent-docker-heredoc.unit"
+  assert_exit0 "agent unit (--docker): systemd-unit print == heredoc fallback (diff)" \
+    diff "${TMP_ROOT}/agent-docker-bin.unit" "${TMP_ROOT}/agent-docker-heredoc.unit"
 }
 
 # render_hub_fallback_standalone BIN_PATH ENV_FILE DATA_DIR — reproduce
@@ -949,8 +1005,11 @@ render_hub_fallback_standalone() {
 
 # render_agent_fallback_standalone BIN_PATH ENV_FILE — reproduce
 # install-agent.sh's render_unit_fallback() in an isolated subshell.
+# DOCKER_GROUP (optional 3rd arg, e.g. "docker") renders a
+# SupplementaryGroups= line right after Group=, matching Render's own
+# placement (SPEC-v0.5 §C).
 render_agent_fallback_standalone() {
-  local bin_path="$1" env_file="$2"
+  local bin_path="$1" env_file="$2" docker_group="${3:-}"
   echo "[Unit]"
   echo "Description=cloud-pulse agent (host metrics collector)"
   echo "After=network-online.target"
@@ -962,6 +1021,9 @@ render_agent_fallback_standalone() {
   echo "ExecStart=${bin_path}"
   echo "User=cloud-pulse"
   echo "Group=cloud-pulse"
+  if [ -n "$docker_group" ]; then
+    echo "SupplementaryGroups=${docker_group}"
+  fi
   echo "Restart=on-failure"
   echo "RestartSec=5"
   echo
@@ -1151,11 +1213,13 @@ test_agent_menu_fresh_install() {
   mkdir -p "$sandbox"
   local log="${TMP_ROOT}/menu-agent-fresh.log"
   local fake_token="abcdefabcdefabcdefabcdefabcdefab"
-  # 1=Install, hub URL, hidden token, Enter (default host-id).
+  # 1=Install, hub URL, hidden token, Enter (default host-id), Enter
+  # (default N to the "Monitor Docker containers?" prompt).
   local status=0
   run_in_pty 60 "1
 http://127.0.0.1:${SERVER_PORT}
 ${fake_token}
+
 
 " "$log" \
     "CP_RELEASE_BASE_URL=http://127.0.0.1:${SERVER_PORT} CP_INSTALL_ROOT=${sandbox} bash scripts/install-agent.sh" || status=$?
@@ -1186,6 +1250,10 @@ ${fake_token}
   assert_not_contains "prompt line for the agent token is not followed by a re-echoed value" \
     "$(grep -A1 'Agent token (input hidden)' "$log" | tail -n1)" "$fake_token"
   assert_contains "menu prompts for the hidden agent token" "$(cat "$log")" "Agent token (input hidden)"
+  assert_contains "menu prompts for Docker monitoring with the root-equivalence warning" "$(cat "$log")" \
+    "Monitor Docker containers? (adds the agent to the docker group; docker group access is root-equivalent)"
+  assert_not_contains "agent.env has no active CP_DOCKER after declining the Docker prompt (default N)" \
+    "$(grep '^CP_DOCKER=' "${sandbox}/etc/cloud-pulse/agent.env" || true)" "CP_DOCKER="
 }
 
 test_agent_menu_uninstall_keeps_env() {
@@ -1687,11 +1755,13 @@ main() {
 
   test_agent_missing_required_flags
   test_agent_install
+  test_agent_no_docker_flag_omits_supplementary_groups
   test_agent_upgrade_keeps_values
   test_agent_upgrade_from_legacy_stub
   test_agent_unknown_arch
   test_agent_checksum_mismatch
   test_agent_dry_run
+  test_agent_docker_flag
 
   test_hub_rejects_malicious_values
   test_agent_rejects_malicious_values
