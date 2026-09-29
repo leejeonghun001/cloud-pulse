@@ -77,25 +77,70 @@ curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scr
   | sudo bash
 ```
 
-This downloads the correct `cloud-pulse-hub` release binary for your
-OS/arch, verifies its sha256 against the release's `checksums.txt`,
+**Run at a real terminal with no flags**, this shows an interactive menu
+(all prompts read from `/dev/tty`, never from stdin — the same command
+works correctly even though stdin is the piped script itself):
+
+```
+cloud-pulse hub installer
+  Status: not installed
+  1) Install      (설치)
+  2) Reinstall    (재설치: latest version, keeps settings, tokens and data)
+  3) Uninstall    (삭제)
+  0) Exit
+Select [1-3, 0]:
+```
+
+- **1) Install** prompts for the listen port, whether to enable the web
+  Settings page (generates `CP_UI_TOKEN`), and an optional alert webhook
+  URL, then installs.
+- **2) Reinstall** is the upgrade/migration path for an existing install
+  of any version (see [Upgrading](#upgrading)): shows current → target
+  version, confirms, keeps every existing token/setting/data file, and
+  offers to enable the Settings page if it isn't already.
+- **3) Uninstall** confirms, then asks separately whether to also purge
+  config/tokens/data.
+
+**Piping any flag, or running with no tty** (CI, `curl | bash -s --
+<flag>`, cron) skips the menu entirely and never blocks — this is the
+scriptable/automation path:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scripts/install-hub.sh \
+  | sudo bash -s -- --install --yes
+```
+
+Non-interactive action flags: `--install` (fails if already installed),
+`--reinstall` (fails if not installed), `--uninstall` (`--purge` to also
+remove config/data), and `-y`/`--yes` (assume default confirmation
+answers; never blocks on a prompt). With no action flag at all, behavior
+is the historical "auto" mode: install if not installed, reinstall if
+already installed.
+
+Either path downloads the correct `cloud-pulse-hub` release binary for
+your OS/arch, verifies its sha256 against the release's `checksums.txt`,
 installs it under `/usr/local/bin`, creates an unprivileged `cloud-pulse`
 system user, generates `CP_AGENT_TOKEN`, writes `/etc/cloud-pulse/hub.env`
 (mode `0640`), and installs+starts a hardened systemd unit. At the end it
-prints a ready-to-copy agent install one-liner with the hub's Tailscale/LAN
-IP and the generated token filled in:
+prints an agent one-liner with the hub's Tailscale/LAN IP and the agent
+token filled in, plus the web UI token if one was generated **this run**
+(shown once — see [Settings UI](#settings-ui)):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scripts/install-agent.sh \
   | sudo bash -s -- --hub-url http://<hub-ip>:8090 --token <printed-token>
 ```
 
-- **Upgrade**: re-run the same installer command; the binary and systemd
-  unit are replaced, `hub.env`/`agent.env` secrets are preserved unless you
-  pass an explicit flag to change them.
-- **Uninstall**: add `--uninstall` (stops/disables the service, removes the
-  binary and unit; config and data are kept). Add `--purge` as well to also
-  remove `/etc/cloud-pulse/*.env` and (hub only) the data directory.
+- **Upgrade**: choose **2) Reinstall** from the menu, or pass
+  `--reinstall` non-interactively; the binary and systemd unit are
+  replaced, `hub.env`/`agent.env` secrets are preserved unless you pass an
+  explicit flag to change them. See [Upgrading](#upgrading) for the full
+  migration story and why, past v0.3.1, you generally won't need to
+  re-run the installer again at all.
+- **Uninstall**: choose **3) Uninstall** from the menu, or pass
+  `--uninstall` (stops/disables the service, removes the binary and
+  unit; config and data are kept). Add `--purge` as well to also remove
+  `/etc/cloud-pulse/*.env` and (hub only) the data directory.
 - **Dry run**: add `--dry-run` to any invocation to print the actions that
   would be taken without changing anything.
 - Run either script with `--help` for the full flag list.
@@ -251,6 +296,23 @@ Exit codes: `0` success or already up to date, `10` (`--check` only) an
 update is available, `1` error. See
 [Upgrading](#upgrading) for full behavior and the legacy migration path.
 
+### Hub `systemd-unit` subcommand (`cloud-pulse-hub systemd-unit`)
+
+Single source of truth (`internal/systemdunit`) for rendering and
+updating the hub's own systemd unit; both installers and `update` (since
+v0.3.1) call into this instead of maintaining their own unit templates.
+
+| Usage | Purpose |
+|---|---|
+| `cloud-pulse-hub systemd-unit print --bin-path P --env-file E [--user U --group G] [--read-write-path D]` | Print a rendered unit file to stdout; `--read-write-path` renders `ReadWritePaths=D` for sandbox installs instead of `StateDirectory=cloud-pulse` |
+| `cloud-pulse-hub systemd-unit apply [--unit-path /etc/systemd/system/cloud-pulse-hub.service] [--no-reload]` | Re-render an already-installed unit file in place if it has drifted from the current template; backs up the previous content to `<unit-path>.bak`, then runs `systemctl daemon-reload` unless `--no-reload` |
+
+Both are dispatched before flag parsing/config loading, the same as
+`update`. `print` is what the installers' `render_unit()` calls on a
+freshly downloaded v0.3.1+ binary, falling back to a built-in bash
+heredoc only if that call fails (kept byte-identical to `Render`'s
+output, checked by a drift test in `scripts/test-install.sh`).
+
 ### Agent environment variables (`CP_*`)
 
 | Variable | Default | Notes |
@@ -289,6 +351,17 @@ and `CP_RELEASE_BASE_URL` (see the hub env table above) also override the
 agent binary's own `update` subcommand — both binaries read the same two
 variables via the shared `internal/selfupdate` package, so a mirror/
 air-gapped override only needs to be set once per environment.
+
+### Agent `systemd-unit` subcommand (`cloud-pulse-agent systemd-unit`)
+
+Same shape as the hub's (see above), rendering `cloud-pulse-agent.service`
+instead. `print` ignores `--read-write-path` (the agent unit has no
+`StateDirectory=`/`ReadWritePaths=` line at all).
+
+| Usage | Purpose |
+|---|---|
+| `cloud-pulse-agent systemd-unit print --bin-path P --env-file E [--user U --group G]` | Print a rendered unit file to stdout |
+| `cloud-pulse-agent systemd-unit apply [--unit-path /etc/systemd/system/cloud-pulse-agent.service] [--no-reload]` | Re-render an already-installed unit file in place if drifted; backs up to `<unit-path>.bak`, then `systemctl daemon-reload` unless `--no-reload` |
 
 ## Egress accounting
 
@@ -381,16 +454,38 @@ single reference: **the hub's clock**.
 
 ## Upgrading
 
-### v0.3.0 and later: the built-in `update` subcommand
+### v0.3.1 and later: `2) Reinstall` (or `--reinstall`) once, then `update` forever
 
-Both binaries ship a self-update subcommand, dispatched before any flag
-parsing or config loading, so it works even on an otherwise unconfigured
-install (no `CP_AGENT_TOKEN`/`CP_HUB_URL` required):
+Starting with v0.3.1, **`update` handles both the binary and the systemd
+unit**, so re-running the installer is no longer needed after the first
+time you reach v0.3.1. If you're upgrading an existing install of *any*
+version (v0.1.x/v0.2.x/v0.3.0), run the installer one more time — at a
+terminal, choose **2) Reinstall** from the menu; non-interactively, pass
+`--reinstall`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scripts/install-hub.sh \
+  | sudo bash -s -- --reinstall
+curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scripts/install-agent.sh \
+  | sudo bash -s -- --reinstall
+```
+
+This keeps every existing token/setting/data file untouched, re-renders
+the systemd unit (via the freshly downloaded binary's own
+`systemd-unit print`, see below), and prints `Upgraded vA → vB` plus,
+the first time this crosses the v0.3.0 boundary, "This install now
+includes the built-in updater." **From that point on**, the two
+`update` subcommands are the only thing you need — including for future
+systemd-unit template changes:
 
 ```bash
 sudo cloud-pulse-hub update
 sudo cloud-pulse-agent update
 ```
+
+Both binaries ship a self-update subcommand, dispatched before any flag
+parsing or config loading, so it works even on an otherwise unconfigured
+install (no `CP_AGENT_TOKEN`/`CP_HUB_URL` required).
 
 Flags (identical on both binaries):
 
@@ -418,13 +513,24 @@ What `update` does, in order:
 4. Atomically replaces the running binary (temp file staged in the same
    directory, then renamed over the original — never a window where the
    binary is missing or partially written).
-5. If running as root on Linux with `systemctl` available and a
-   `cloud-pulse-hub.service`/`cloud-pulse-agent.service` unit installed
-   and currently active, runs `systemctl restart` on it. If the unit
-   exists but is inactive, it's deliberately left stopped rather than
-   started. In every other case (not root, no systemd, `--no-restart`,
-   Windows/macOS/FreeBSD), it prints a reminder to restart manually —
-   the binary is still updated either way.
+5. **Applies any systemd unit changes** (new since v0.3.1): only when
+   running as root on Linux with `systemctl` available, an existing
+   `cloud-pulse-hub.service`/`cloud-pulse-agent.service` unit file, and
+   the tag just installed is ≥ `v0.3.1` (so the newly installed binary
+   is guaranteed to ship the `systemd-unit` subcommand itself), runs
+   `<binary> systemd-unit apply --unit-path <unit>` — this re-renders
+   the unit from the same `internal/systemdunit.Render` template used by
+   the installers, backs up the previous unit alongside it
+   (`<unit>.bak`), and reloads systemd if anything changed. A failure
+   here is printed as a warning but never fails the update — the binary
+   replacement already succeeded, and restart still proceeds against
+   whichever unit file is currently on disk.
+6. If running as root on Linux with `systemctl` available and the unit
+   installed and currently active, runs `systemctl restart` on it. If
+   the unit exists but is inactive, it's deliberately left stopped
+   rather than started. In every other case (not root, no systemd,
+   `--no-restart`, Windows/macOS/FreeBSD), it prints a reminder to
+   restart manually — the binary is still updated either way.
 
 Recommended order for a fleet: **upgrade the hub first, then agents**:
 
@@ -439,34 +545,42 @@ Old agents keep working against a new hub unmodified (see D-048 in
 upgrade every agent in lockstep — the dashboard will simply show them as
 outdated in the meantime.
 
-### Upgrading from v0.1.x / v0.2.x (no `update` subcommand yet)
+### Upgrading from v0.1.x / v0.2.x / v0.3.0 (no unit-syncing `update` yet)
 
 Versions before v0.3.0 don't have the `update` subcommand at all — an old
 binary given `update` as its first argument just ignores it and fails
 during normal config loading (`CP_AGENT_TOKEN is required`, etc.), since
 that dispatch didn't exist yet and can't be added retroactively to an
-already-installed binary.
+already-installed binary. A v0.3.0 binary has `update`, but that
+`update` only replaces the binary — it doesn't know how to touch the
+systemd unit, since `internal/systemdunit`/`systemd-unit apply` didn't
+exist until v0.3.1.
 
-To move a v0.1.x/v0.2.x install onto v0.3.0+, run the same installer
-one-liner you used originally, once, with **no flags**:
+To move any pre-v0.3.1 install (v0.1.x, v0.2.x, or v0.3.0) onto v0.3.1+,
+run the same installer one-liner you used originally, once — at a
+terminal, choose **2) Reinstall**; non-interactively, pass `--reinstall`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scripts/install-hub.sh \
-  | sudo bash
+  | sudo bash -s -- --reinstall
 curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scripts/install-agent.sh \
-  | sudo bash
+  | sudo bash -s -- --reinstall
 ```
 
 This is the same idempotent re-run-to-upgrade path described in
 [Quick start](#quick-start): it downloads the current release, replaces
-the binary, and re-renders the systemd unit, while **preserving**
-`hub.env`/`agent.env` (tokens, settings, per-host data) untouched unless
-you pass an explicit flag to change one. The installer detects the
-previous version before replacing the binary and prints an
-`Upgraded vA → vB` line plus, the first time this crosses the v0.3.0
-boundary, "This install now includes the built-in updater." From that
-point on, `sudo cloud-pulse-hub update` / `sudo cloud-pulse-agent update`
-is all you need for future upgrades — no more re-running the installer.
+the binary, and re-renders the systemd unit (via the freshly downloaded
+binary's own `systemd-unit print`, falling back to a built-in heredoc
+only if that call fails, e.g. an explicit `--version` pin older than
+v0.3.1), while **preserving** `hub.env`/`agent.env` (tokens, settings,
+per-host data) untouched unless you pass an explicit flag to change one.
+The installer detects the previous version before replacing the binary
+and prints an `Upgraded vA → vB` line plus, the first time this crosses
+the v0.3.0 boundary, "This install now includes the built-in updater."
+From that point on, `sudo cloud-pulse-hub update` / `sudo
+cloud-pulse-agent update` is all you need for future upgrades — **no
+more re-running the installer, even for future systemd-unit template
+changes**.
 
 The dashboard's per-host update badge (see below) always shows the
 correct command for that specific agent — the legacy installer one-liner
@@ -527,17 +641,32 @@ ever falling back to an open read — there is no way to reveal the agent
 token or change limits/webhook settings on a hub that hasn't opted into
 UI authentication.
 
-**Enabling it on an existing install** (one that was set up without
-`CP_UI_TOKEN`):
+**Enabling it on an existing install**: choose **2) Reinstall** from the
+menu (prompts "The web Settings page is disabled (no UI token). Enable
+it now?" when one isn't already set), or pass a flag non-interactively:
 
-1. Generate a token: `cloud-pulse-hub -gen-token`.
-2. Add `CP_UI_TOKEN=<token>` to `/etc/cloud-pulse/hub.env`.
-3. `sudo systemctl restart cloud-pulse-hub`.
+```bash
+curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scripts/install-hub.sh \
+  | sudo bash -s -- --reinstall --generate-ui-token
+```
 
-(Or re-run `install-hub.sh` with a flag that supplies/generates a UI
-token, per its `--help` output.) Once set, every read endpoint and the
-dashboard itself will prompt for that token, and the Settings page
-becomes reachable.
+- `--generate-ui-token` is **idempotent**: it generates a token only if
+  `CP_UI_TOKEN` isn't already set, and leaves an existing one unchanged
+  — safe to pass on every reinstall/upgrade without rotating the token
+  operators already have.
+- `--rotate-ui-token` always generates a **new** token, replacing any
+  existing one (use this to invalidate a token you suspect has leaked).
+- Either way, a token that was newly generated or rotated **this run**
+  is printed exactly once in the final summary (`Web UI token: ...`);
+  an unchanged existing token instead prints a hint to read it from
+  `hub.env` (`sudo grep CP_UI_TOKEN /etc/cloud-pulse/hub.env`) rather
+  than ever re-printing its value.
+
+Manual alternative (no installer re-run): generate a token with
+`cloud-pulse-hub -gen-token`, add `CP_UI_TOKEN=<token>` to
+`/etc/cloud-pulse/hub.env`, then `sudo systemctl restart cloud-pulse-hub`.
+Once set, every read endpoint and the dashboard itself will prompt for
+that token, and the Settings page becomes reachable.
 
 ## REST API
 

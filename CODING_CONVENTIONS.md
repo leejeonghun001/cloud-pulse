@@ -217,6 +217,29 @@ Dependency direction rules:
   hub's existing alert history reads correctly under the new schema
   without a separate backfill step.
 
+## Config / env-file backward compatibility
+
+- **A config/env-file change must never break an existing, unmodified
+  `hub.env`/`agent.env` written by an older installer or by hand.** New
+  `CP_*` variables get a default that reproduces the pre-existing
+  behavior when the variable is absent — the same additive-only
+  contract D-048 applies to the JSON API applies here to on-disk config.
+  Nothing in `internal/config` may require a variable that didn't exist
+  before to be present for an old env file to keep loading.
+- **Every value the installers write into an env file goes through
+  `validate_env_value` first** (see the Shell scripts section above) —
+  this is also what keeps `hub.env`/`agent.env` forward-compatible with
+  `systemd-unit`'s `ParseExisting`/`Apply` (D-057/D-058): those only
+  parse `ExecStart=`/`EnvironmentFile=`/`User=`/`Group=`/
+  `ReadWritePaths=` out of the *unit* file, never the env file's
+  contents, so an env file's own shape is never a factor in whether a
+  future `systemd-unit apply` succeeds.
+- **`update`'s `systemd-unit apply` (D-058) never touches the env
+  file.** It only rewrites the unit file (`ExecStart=`, hardening
+  directives, etc.); secrets/settings in `hub.env`/`agent.env` are
+  untouched by any self-update path — the only way they change is an
+  explicit installer flag or a manual edit.
+
 ## No secrets logged
 
 ## Dependencies
@@ -294,6 +317,30 @@ Dependency direction rules:
   "sandbox: would run ..." line; everything else (download, checksum,
   file installation, unit rendering, `systemd-analyze verify`) runs for
   real against the sandboxed paths.
+- **Interactive prompts (menu, confirmations, hidden token input) read
+  from and write to `/dev/tty` only, never the script's own
+  stdin/stdout.** A `curl | sudo bash` invocation's stdin is the script
+  body itself — reading a prompt answer from stdin there would read
+  installer source text, not a keystroke. Use the existing
+  `prompt_tty`/`read_line_tty`/`read_hidden_tty`/`confirm_tty` helpers
+  for any new prompt; gate whether the menu/prompts run at all on
+  `tty_available()` (checks `CP_NONINTERACTIVE` and that `/dev/tty` opens
+  for both read and write), never on whether stdin looks like a tty. See
+  D-056. Any new non-interactive test case in `scripts/test-install.sh`
+  must still set `CP_NONINTERACTIVE=1` so it can never block if it
+  happens to run with a real terminal attached; new interactive cases
+  drive a real pty via util-linux `script` so `/dev/tty` actually exists.
+- **Systemd unit content is owned exclusively by
+  `internal/systemdunit.Render`.** Neither installer script may hand-edit
+  its `render_unit_fallback()` heredoc without making the identical
+  change in `internal/systemdunit`'s `renderHub`/`renderAgent` first —
+  the heredoc exists only as a fallback for a pre-v0.3.1 binary (or an
+  explicit `--version` pin to one) and must stay byte-identical to
+  `Render`'s output, verified by `scripts/test-install.sh`'s hard-diff
+  drift test (`CP_INSTALL_FORCE_SCRIPT_UNIT=1`). See D-057. A change that
+  touches one template without the other will fail that test, by
+  design — do not soften the drift test's comparison to make such a
+  change pass; fix the mismatched template instead.
 
 ## Test portability (cross-OS CI matrix)
 
