@@ -120,6 +120,11 @@ func (db *DB) Prune(ctx context.Context, now time.Time) error {
 		{`DELETE FROM metrics_5m WHERE ts < ?`, nowTS - int64(fiveMRetention.Seconds())},
 		{`DELETE FROM metrics_1h WHERE ts < ?`, nowTS - int64(oneHRetention.Seconds())},
 		{`DELETE FROM bucket_stats WHERE ts < ?`, nowTS - int64(bucketRetention.Seconds())},
+		// Expired dashboard sessions (see PruneSessions): kept in the
+		// same transaction/schedule as the other retention deletes
+		// rather than a separate call, per SPEC-v0.4 §1 ("Prune expired
+		// in Prune()").
+		{`DELETE FROM sessions WHERE expires_at <= ?`, nowTS},
 	}
 	for _, s := range stmts {
 		if _, err := tx.ExecContext(ctx, s.query, s.cut); err != nil {

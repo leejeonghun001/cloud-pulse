@@ -85,4 +85,9 @@ type APIError struct {
 	// Code is a machine-readable error identifier (e.g.
 	// "admin_disabled"), omitted when there is no specific code.
 	Code string `json:"code,omitempty"`
+	// RetryAfterSeconds accompanies a 429 rate-limited response,
+	// mirroring the Retry-After header in the JSON body so browser
+	// clients don't need to read response headers. Omitted for
+	// responses that aren't rate-limited.
+	RetryAfterSeconds int `json:"retry_after_seconds,omitempty"`
 }
