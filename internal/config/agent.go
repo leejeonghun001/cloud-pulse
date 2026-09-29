@@ -37,6 +37,14 @@ type Agent struct {
 	LogLevel string
 	// LogFormat is one of text|json.
 	LogFormat string
+	// TimeSync is "hub" (default) or "local". "hub" synchronizes sample
+	// timestamps to the hub's wall clock via HubClock; "local" uses the
+	// agent's own clock unmodified.
+	TimeSync string
+	// SendJitter is the maximum random delay inserted between collecting
+	// a sample and sending it, to spread simultaneous sends across a
+	// fleet. 0 (default) disables jitter. Always <= Interval/2.
+	SendJitter time.Duration
 }
 
 // DefaultAgentNetExclude returns the default network interface exclusion
@@ -54,7 +62,9 @@ func DefaultAgentNetExclude() []string {
 // (required, >=16 chars), CP_HOST_ID (default: sanitized hostname),
 // CP_INTERVAL (default 15s, min 5s), CP_PROVIDER (auto|aws|oci|other,
 // default auto), CP_EGRESS_LIMIT_GB (unset -> provider default), CP_NET_EXCLUDE
-// (comma-separated globs), CP_LOG_LEVEL, CP_LOG_FORMAT.
+// (comma-separated globs), CP_LOG_LEVEL, CP_LOG_FORMAT, CP_TIME_SYNC
+// (hub|local, default hub), CP_SEND_JITTER (default 0, must be
+// <= CP_INTERVAL/2).
 func LoadAgent(l LookupFunc, hostname string) (Agent, error) {
 	cfg := Agent{}
 
@@ -98,7 +108,44 @@ func LoadAgent(l LookupFunc, hostname string) (Agent, error) {
 	cfg.LogLevel = getString(l, "CP_LOG_LEVEL", "info")
 	cfg.LogFormat = getString(l, "CP_LOG_FORMAT", "text")
 
+	timeSync, err := loadTimeSync(l)
+	if err != nil {
+		return Agent{}, err
+	}
+	cfg.TimeSync = timeSync
+
+	sendJitter, err := loadSendJitter(l, interval)
+	if err != nil {
+		return Agent{}, err
+	}
+	cfg.SendJitter = sendJitter
+
 	return cfg, nil
+}
+
+// loadTimeSync reads and validates CP_TIME_SYNC (hub|local,
+// case-insensitive), defaulting to "hub".
+func loadTimeSync(l LookupFunc) (string, error) {
+	v := strings.ToLower(getString(l, "CP_TIME_SYNC", "hub"))
+	switch v {
+	case "hub", "local":
+		return v, nil
+	default:
+		return "", fmt.Errorf("config: CP_TIME_SYNC must be one of hub|local, got %q", v)
+	}
+}
+
+// loadSendJitter reads CP_SEND_JITTER (a time.Duration string), defaulting
+// to 0 (disabled). It must be >= 0 and <= interval/2.
+func loadSendJitter(l LookupFunc, interval time.Duration) (time.Duration, error) {
+	jitter, err := getDuration(l, "CP_SEND_JITTER", 0, 0)
+	if err != nil {
+		return 0, err
+	}
+	if max := interval / 2; jitter > max {
+		return 0, fmt.Errorf("config: CP_SEND_JITTER (%s) must be <= half the interval (%s)", jitter, max)
+	}
+	return jitter, nil
 }
 
 // loadHubURL reads and validates CP_HUB_URL: required, http/https scheme,

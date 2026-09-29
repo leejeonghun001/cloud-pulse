@@ -367,6 +367,124 @@ func TestLoadAgent_NetExclude(t *testing.T) {
 	})
 }
 
+func TestLoadAgent_TimeSync(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		timeSync string
+		want     string
+		wantErr  bool
+	}{
+		{"default", "", "hub", false},
+		{"hub", "hub", "hub", false},
+		{"local", "local", "local", false},
+		{"case_insensitive", "LOCAL", "local", false},
+		{"invalid", "ntp", "", true},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			env := validAgentEnv()
+			if tc.timeSync != "" {
+				env["CP_TIME_SYNC"] = tc.timeSync
+			}
+			cfg, err := LoadAgent(mapLookup(env), "host")
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("LoadAgent err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if tc.wantErr {
+				if !strings.HasPrefix(err.Error(), "config:") {
+					t.Errorf("error %q must be prefixed with config:", err.Error())
+				}
+				return
+			}
+			if cfg.TimeSync != tc.want {
+				t.Errorf("TimeSync = %q, want %q", cfg.TimeSync, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadAgent_SendJitter(t *testing.T) {
+	t.Parallel()
+
+	t.Run("default_zero", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := LoadAgent(mapLookup(validAgentEnv()), "host")
+		if err != nil {
+			t.Fatalf("LoadAgent: %v", err)
+		}
+		if cfg.SendJitter != 0 {
+			t.Errorf("SendJitter = %v, want 0", cfg.SendJitter)
+		}
+	})
+
+	t.Run("within_half_interval_ok", func(t *testing.T) {
+		t.Parallel()
+		env := validAgentEnv()
+		env["CP_INTERVAL"] = "30s"
+		env["CP_SEND_JITTER"] = "10s"
+		cfg, err := LoadAgent(mapLookup(env), "host")
+		if err != nil {
+			t.Fatalf("LoadAgent: %v", err)
+		}
+		if cfg.SendJitter != 10*time.Second {
+			t.Errorf("SendJitter = %v, want 10s", cfg.SendJitter)
+		}
+	})
+
+	t.Run("exactly_half_interval_ok", func(t *testing.T) {
+		t.Parallel()
+		env := validAgentEnv()
+		env["CP_INTERVAL"] = "30s"
+		env["CP_SEND_JITTER"] = "15s"
+		cfg, err := LoadAgent(mapLookup(env), "host")
+		if err != nil {
+			t.Fatalf("LoadAgent: %v", err)
+		}
+		if cfg.SendJitter != 15*time.Second {
+			t.Errorf("SendJitter = %v, want 15s", cfg.SendJitter)
+		}
+	})
+
+	t.Run("above_half_interval_errors", func(t *testing.T) {
+		t.Parallel()
+		env := validAgentEnv()
+		env["CP_INTERVAL"] = "30s"
+		env["CP_SEND_JITTER"] = "16s"
+		_, err := LoadAgent(mapLookup(env), "host")
+		if err == nil {
+			t.Fatal("expected error for CP_SEND_JITTER above half the interval")
+		}
+		if !strings.HasPrefix(err.Error(), "config:") {
+			t.Errorf("error %q must be prefixed with config:", err.Error())
+		}
+	})
+
+	t.Run("negative_errors", func(t *testing.T) {
+		t.Parallel()
+		env := validAgentEnv()
+		env["CP_SEND_JITTER"] = "-1s"
+		_, err := LoadAgent(mapLookup(env), "host")
+		if err == nil {
+			t.Fatal("expected error for negative CP_SEND_JITTER")
+		}
+	})
+
+	t.Run("unparsable_errors", func(t *testing.T) {
+		t.Parallel()
+		env := validAgentEnv()
+		env["CP_SEND_JITTER"] = "banana"
+		_, err := LoadAgent(mapLookup(env), "host")
+		if err == nil {
+			t.Fatal("expected error for unparsable CP_SEND_JITTER")
+		}
+	})
+}
+
 func TestLoadAgent_LogSettings(t *testing.T) {
 	t.Parallel()
 

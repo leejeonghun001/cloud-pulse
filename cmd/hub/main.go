@@ -186,21 +186,17 @@ func runHub(cfg config.Hub) int {
 
 	collectors := buildCollectors(cfg)
 
-	var notifier hub.Notifier
-	if cfg.AlertWebhookURL != "" {
-		notifier = hub.WebhookNotifier{
-			URL:    cfg.AlertWebhookURL,
-			Client: &http.Client{Timeout: httpClientTimeout},
-		}
-	}
-
 	srv := hub.New(hub.Options{
-		AgentToken:    cfg.AgentToken,
-		UIToken:       cfg.UIToken,
-		AllowedCIDRs:  cfg.AllowedCIDRs,
-		OfflineAfter:  cfg.OfflineAfter,
-		CloudInterval: cfg.CloudInterval,
-	}, store, collectors, notifier, web.Assets(), logger)
+		AgentToken:      cfg.AgentToken,
+		UIToken:         cfg.UIToken,
+		AllowedCIDRs:    cfg.AllowedCIDRs,
+		OfflineAfter:    cfg.OfflineAfter,
+		CloudInterval:   cfg.CloudInterval,
+		AlertWebhookURL: cfg.AlertWebhookURL,
+		// NotifierFor left nil: hub.Options.notifierFor's default
+		// (hub.WebhookNotifier with its own 10s-timeout client) is used
+		// for both env- and settings-sourced webhook URLs.
+	}, store, collectors, nil, web.Assets(), logger)
 
 	logStartupSummary(logger, cfg, collectors)
 

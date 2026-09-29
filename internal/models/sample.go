@@ -61,9 +61,24 @@ type IngestResponse struct {
 	Accepted   int `json:"accepted"`
 	Duplicates int `json:"duplicates"`
 	Rejected   int `json:"rejected"`
+	// ServerTimeMs is the hub's wall clock (unix milliseconds) at the
+	// moment the response was produced, used by agents to synchronize
+	// their clock to the hub's.
+	ServerTimeMs int64 `json:"server_time_ms"`
+}
+
+// TimeResponse is returned by the hub's time-sync endpoint so agents can
+// estimate their clock offset from the hub without submitting a report.
+type TimeResponse struct {
+	// ServerTimeMs is the hub's wall clock (unix milliseconds) at the
+	// moment the response was produced.
+	ServerTimeMs int64 `json:"server_time_ms"`
 }
 
 // APIError is the JSON body of a hub error response.
 type APIError struct {
 	Error string `json:"error"`
+	// Code is a machine-readable error identifier (e.g.
+	// "admin_disabled"), omitted when there is no specific code.
+	Code string `json:"code,omitempty"`
 }

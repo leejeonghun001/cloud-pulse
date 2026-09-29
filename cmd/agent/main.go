@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -118,10 +119,21 @@ func runAgent() int {
 		NetExclude: cfg.NetExclude,
 		Logger:     logger,
 	})
+
+	var clock *agent.HubClock
+	if cfg.TimeSync == "hub" {
+		clock = &agent.HubClock{}
+		syncCtx, syncCancel := context.WithTimeout(ctx, 20*time.Second)
+		clock.SyncInitial(syncCtx, nil, cfg.HubURL, logger, logClockOffsetWarning(logger))
+		syncCancel()
+	}
+
 	reporter := agent.NewReporter(agent.ReporterOptions{
-		HubURL: cfg.HubURL,
-		Token:  cfg.Token,
-		Logger: logger,
+		HubURL:       cfg.HubURL,
+		Token:        cfg.Token,
+		Logger:       logger,
+		Clock:        clock,
+		LogClockWarn: logClockOffsetWarning(logger),
 	})
 
 	hostInfoFunc := func(ctx context.Context) models.HostInfo {
@@ -132,14 +144,29 @@ func runAgent() int {
 		"host_id", cfg.HostID,
 		"hub_url", cfg.HubURL,
 		"interval", cfg.Interval,
+		"time_sync", cfg.TimeSync,
 		"version", version.Version,
 	)
 
-	if err := agent.Run(ctx, collector, reporter, hostInfoFunc, cfg.Interval, logger); err != nil {
+	runOpts := agent.RunOptions{
+		Logger: logger,
+		Clock:  clock,
+		Jitter: cfg.SendJitter,
+	}
+	if err := agent.RunWithOptions(ctx, collector, reporter, hostInfoFunc, cfg.Interval, runOpts); err != nil {
 		fmt.Fprintf(os.Stderr, "cloud-pulse-agent: run: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+// logClockOffsetWarning returns a HubClock warning callback that logs at
+// warn level via logger. Extracted so both the initial sync and every
+// subsequent Reporter.Flush observation log identically.
+func logClockOffsetWarning(logger *slog.Logger) func(offset time.Duration) {
+	return func(offset time.Duration) {
+		logger.Warn("agent clock differs from hub; timestamps are corrected to hub time", "offset", offset)
+	}
 }
 
 // loadConfig loads agent configuration from the environment.

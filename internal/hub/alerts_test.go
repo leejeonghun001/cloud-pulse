@@ -110,7 +110,7 @@ func TestAlerts_JumpAcrossThresholdsFiresEveryLevel(t *testing.T) {
 	}
 	month := models.MonthOf(now)
 	for _, level := range []models.EgressLevel{models.EgressWarning, models.EgressCritical, models.EgressExceeded} {
-		first, err := store.MarkAlertSent(t.Context(), hostID, month, level)
+		first, err := store.MarkAlertSent(t.Context(), hostID, month, models.DirectionOut, level)
 		if err != nil {
 			t.Fatalf("MarkAlertSent(%s): %v", level, err)
 		}
@@ -134,7 +134,7 @@ func TestAlerts_NotifierNilSafe(t *testing.T) {
 	s.Wait()
 	// No panic, no notifier call possible; just verify the alert was
 	// still recorded so a later notifier wouldn't double-fire.
-	first, err := store.MarkAlertSent(t.Context(), hostID, models.MonthOf(now), models.EgressCritical)
+	first, err := store.MarkAlertSent(t.Context(), hostID, models.MonthOf(now), models.DirectionOut, models.EgressCritical)
 	if err != nil {
 		t.Fatalf("MarkAlertSent: %v", err)
 	}

@@ -179,26 +179,64 @@ func TestSample_DisksOmittedWhenNil(t *testing.T) {
 func TestAPIError_JSON(t *testing.T) {
 	t.Parallel()
 
-	e := APIError{Error: "bad request"}
-	b, err := json.Marshal(e)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-	if string(b) != `{"error":"bad request"}` {
-		t.Errorf("Marshal(APIError) = %s, want {\"error\":\"bad request\"}", b)
-	}
+	t.Run("code_omitted_when_empty", func(t *testing.T) {
+		t.Parallel()
+		e := APIError{Error: "bad request"}
+		b, err := json.Marshal(e)
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+		if string(b) != `{"error":"bad request"}` {
+			t.Errorf("Marshal(APIError) = %s, want {\"error\":\"bad request\"}", b)
+		}
+	})
+
+	t.Run("code_present_when_set", func(t *testing.T) {
+		t.Parallel()
+		e := APIError{Error: "settings are disabled", Code: "admin_disabled"}
+		b, err := json.Marshal(e)
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+		want := `{"error":"settings are disabled","code":"admin_disabled"}`
+		if string(b) != want {
+			t.Errorf("Marshal(APIError) = %s, want %s", b, want)
+		}
+	})
 }
 
 func TestIngestResponse_JSON(t *testing.T) {
 	t.Parallel()
 
-	r := IngestResponse{Accepted: 1, Duplicates: 2, Rejected: 3}
+	r := IngestResponse{Accepted: 1, Duplicates: 2, Rejected: 3, ServerTimeMs: 1700000000123}
 	b, err := json.Marshal(r)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	want := `{"accepted":1,"duplicates":2,"rejected":3}`
+	want := `{"accepted":1,"duplicates":2,"rejected":3,"server_time_ms":1700000000123}`
 	if string(b) != want {
 		t.Errorf("Marshal(IngestResponse) = %s, want %s", b, want)
+	}
+}
+
+func TestTimeResponse_JSON(t *testing.T) {
+	t.Parallel()
+
+	r := TimeResponse{ServerTimeMs: 1700000000123}
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	want := `{"server_time_ms":1700000000123}`
+	if string(b) != want {
+		t.Errorf("Marshal(TimeResponse) = %s, want %s", b, want)
+	}
+
+	var got TimeResponse
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got != r {
+		t.Errorf("round-trip = %+v, want %+v", got, r)
 	}
 }

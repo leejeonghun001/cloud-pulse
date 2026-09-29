@@ -108,15 +108,23 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := models.IngestResponse{
-		Accepted:   inserted,
-		Duplicates: len(valid) - inserted,
-		Rejected:   rejected,
+		Accepted:     inserted,
+		Duplicates:   len(valid) - inserted,
+		Rejected:     rejected,
+		ServerTimeMs: s.opts.now().UnixMilli(),
 	}
 	writeJSON(w, http.StatusOK, resp)
 
 	if len(valid) > 0 {
 		s.afterIngest(report.Host, now)
 	}
+}
+
+// handleAgentTime responds with the hub's current wall clock so agents
+// can estimate their clock offset: GET /api/v1/agent/time. It requires
+// the agent token and performs no database access.
+func (s *Server) handleAgentTime(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, models.TimeResponse{ServerTimeMs: s.opts.now().UnixMilli()})
 }
 
 // handleListHosts responds with all known hosts, sorted by hostname:
@@ -132,15 +140,27 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	month := models.MonthOf(now)
+	egressRecords, err := s.store.ListEgress(ctx, month)
+	if err != nil {
+		s.logger.Error("list egress failed", "month", month, "error", err)
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		return
+	}
+	egressByHost := indexEgressByHost(egressRecords)
+
+	limits, err := s.store.ListHostLimits(ctx)
+	if err != nil {
+		s.logger.Error("list host limits failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		return
+	}
+	limitsByHost := indexLimitsByHost(limits)
+
 	summaries := make([]models.HostSummary, 0, len(records))
 	for _, rec := range records {
-		summary, err := s.hostSummary(ctx, rec, now)
-		if err != nil {
-			s.logger.Error("compute host summary failed", "host_id", rec.Info.ID, "error", err)
-			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
-			return
-		}
-		summaries = append(summaries, summary)
+		tx, rx := egressByHost[rec.Info.ID].TxBytes, egressByHost[rec.Info.ID].RxBytes
+		summaries = append(summaries, buildHostSummary(rec, limitsByHost[rec.Info.ID], tx, rx, now, s.opts.OfflineAfter))
 	}
 
 	sort.Slice(summaries, func(i, j int) bool {
@@ -171,12 +191,21 @@ func (s *Server) handleGetHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	summary, err := s.hostSummary(ctx, rec, now)
+	tx, rx, err := s.currentMonthEgress(ctx, id, now)
 	if err != nil {
 		s.logger.Error("compute host summary failed", "host_id", id, "error", err)
 		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
 		return
 	}
+
+	limits, err := s.store.GetHostLimits(ctx, id)
+	if err != nil {
+		s.logger.Error("get host limits failed", "host_id", id, "error", err)
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		return
+	}
+
+	summary := buildHostSummary(rec, limits, tx, rx, now, s.opts.OfflineAfter)
 	writeJSON(w, http.StatusOK, summary)
 }
 
@@ -269,15 +298,26 @@ func (s *Server) handleEgress(w http.ResponseWriter, r *http.Request) {
 		hostByID[h.Info.ID] = h
 	}
 
+	limits, err := s.store.ListHostLimits(ctx)
+	if err != nil {
+		s.logger.Error("list host limits failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		return
+	}
+	limitsByHost := indexLimitsByHost(limits)
+
 	entries := make([]egressHostEntry, 0, len(records))
 	for _, rec := range records {
-		limit := uint64(0)
+		agentLimit := uint64(0)
 		hostname := rec.HostID
 		if h, ok := hostByID[rec.HostID]; ok {
-			limit = h.Info.EgressLimitBytes
+			agentLimit = h.Info.EgressLimitBytes
 			hostname = h.Info.Hostname
 		}
-		usage := models.ComputeEgress(month, rec.TxBytes, rec.RxBytes, limit, now)
+		txLimit, rxLimit, txSource, rxSource := models.EffectiveLimits(agentLimit, limitsByHost[rec.HostID])
+		usage := models.ComputeEgress(month, rec.TxBytes, rec.RxBytes, txLimit, rxLimit, now)
+		usage.LimitSource = txSource
+		usage.RxLimitSource = rxSource
 		entries = append(entries, egressHostEntry{
 			HostID:   rec.HostID,
 			Hostname: hostname,
@@ -334,29 +374,59 @@ func (s *Server) handleBuckets(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// hostSummary computes a HostSummary for rec at now, including its
-// current-month egress usage.
-func (s *Server) hostSummary(ctx context.Context, rec models.HostRecord, now time.Time) (models.HostSummary, error) {
+// indexEgressByHost builds a hostID -> EgressRecord lookup from records.
+func indexEgressByHost(records []models.EgressRecord) map[string]models.EgressRecord {
+	out := make(map[string]models.EgressRecord, len(records))
+	for _, r := range records {
+		out[r.HostID] = r
+	}
+	return out
+}
+
+// indexLimitsByHost builds a hostID -> HostLimits lookup from limits.
+// A host absent from limits (no stored override) resolves to the zero
+// value via the map's zero-value semantics, which callers pass to
+// models.EffectiveLimits as HostLimits{} (both pointers nil, same
+// meaning as "no override").
+func indexLimitsByHost(limits []models.HostLimits) map[string]models.HostLimits {
+	out := make(map[string]models.HostLimits, len(limits))
+	for _, l := range limits {
+		out[l.HostID] = l
+	}
+	return out
+}
+
+// currentMonthEgress returns hostID's tx/rx byte accumulators for the
+// current month (now), or zero if the host has no egress record yet.
+func (s *Server) currentMonthEgress(ctx context.Context, hostID string, now time.Time) (tx, rx uint64, err error) {
+	month := models.MonthOf(now)
+	records, err := s.store.ListEgress(ctx, month)
+	if err != nil {
+		return 0, 0, fmt.Errorf("hub: list egress for host summary: %w", err)
+	}
+	for _, r := range records {
+		if r.HostID == hostID {
+			return r.TxBytes, r.RxBytes, nil
+		}
+	}
+	return 0, 0, nil
+}
+
+// buildHostSummary computes a HostSummary for rec at now given its
+// current-month tx/rx byte totals and hub-side limit overrides,
+// resolving effective outbound/inbound limits via
+// models.EffectiveLimits.
+func buildHostSummary(rec models.HostRecord, limits models.HostLimits, tx, rx uint64, now time.Time, offlineAfter time.Duration) models.HostSummary {
 	status := models.HostDown
-	if now.Sub(time.Unix(rec.LastSeen, 0)) <= s.opts.OfflineAfter {
+	if now.Sub(time.Unix(rec.LastSeen, 0)) <= offlineAfter {
 		status = models.HostUp
 	}
 
 	month := models.MonthOf(now)
-	records, err := s.store.ListEgress(ctx, month)
-	if err != nil {
-		return models.HostSummary{}, fmt.Errorf("hub: list egress for host summary: %w", err)
-	}
-
-	var tx, rx uint64
-	for _, r := range records {
-		if r.HostID == rec.Info.ID {
-			tx, rx = r.TxBytes, r.RxBytes
-			break
-		}
-	}
-
-	egress := models.ComputeEgress(month, tx, rx, rec.Info.EgressLimitBytes, now)
+	txLimit, rxLimit, txSource, rxSource := models.EffectiveLimits(rec.Info.EgressLimitBytes, limits)
+	egress := models.ComputeEgress(month, tx, rx, txLimit, rxLimit, now)
+	egress.LimitSource = txSource
+	egress.RxLimitSource = rxSource
 
 	return models.HostSummary{
 		Host:     rec.Info,
@@ -364,7 +434,7 @@ func (s *Server) hostSummary(ctx context.Context, rec models.HostRecord, now tim
 		LastSeen: rec.LastSeen,
 		Latest:   rec.Latest,
 		Egress:   egress,
-	}, nil
+	}
 }
 
 // collectorStatuses returns a snapshot of all registered collectors'

@@ -16,12 +16,14 @@ import (
 type fakeStore struct {
 	mu sync.Mutex
 
-	hosts   map[string]models.HostRecord
-	samples map[string][]models.Sample     // hostID -> samples, sorted by ts ascending
-	egress  map[string]models.EgressRecord // key: hostID+"|"+month
-	alerts  map[string]bool                // key: hostID+"|"+month+"|"+level
-	buckets map[string]models.BucketStats  // key: provider+"|"+bucket
-	history map[string][]models.BucketPoint
+	hosts    map[string]models.HostRecord
+	samples  map[string][]models.Sample     // hostID -> samples, sorted by ts ascending
+	egress   map[string]models.EgressRecord // key: hostID+"|"+month
+	alerts   map[string]bool                // key: hostID+"|"+month+"|"+direction+"|"+level
+	buckets  map[string]models.BucketStats  // key: provider+"|"+bucket
+	history  map[string][]models.BucketPoint
+	limits   map[string]models.HostLimits // key: hostID
+	settings map[string]string            // key: setting key
 
 	rollupErr   error
 	pruneErr    error
@@ -31,12 +33,14 @@ type fakeStore struct {
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
-		hosts:   make(map[string]models.HostRecord),
-		samples: make(map[string][]models.Sample),
-		egress:  make(map[string]models.EgressRecord),
-		alerts:  make(map[string]bool),
-		buckets: make(map[string]models.BucketStats),
-		history: make(map[string][]models.BucketPoint),
+		hosts:    make(map[string]models.HostRecord),
+		samples:  make(map[string][]models.Sample),
+		egress:   make(map[string]models.EgressRecord),
+		alerts:   make(map[string]bool),
+		buckets:  make(map[string]models.BucketStats),
+		history:  make(map[string][]models.BucketPoint),
+		limits:   make(map[string]models.HostLimits),
+		settings: make(map[string]string),
 	}
 }
 
@@ -44,8 +48,8 @@ func egressKey(hostID, month string) string {
 	return hostID + "|" + month
 }
 
-func alertKey(hostID, month string, level models.EgressLevel) string {
-	return hostID + "|" + month + "|" + string(level)
+func alertKey(hostID, month string, dir models.Direction, level models.EgressLevel) string {
+	return hostID + "|" + month + "|" + string(dir) + "|" + string(level)
 }
 
 func bucketKey(provider models.StorageProvider, bucket string) string {
@@ -221,15 +225,68 @@ func (f *fakeStore) BucketHistory(_ context.Context, provider models.StorageProv
 	return out, nil
 }
 
-func (f *fakeStore) MarkAlertSent(_ context.Context, hostID, month string, level models.EgressLevel) (bool, error) {
+func (f *fakeStore) MarkAlertSent(_ context.Context, hostID, month string, dir models.Direction, level models.EgressLevel) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	key := alertKey(hostID, month, level)
+	key := alertKey(hostID, month, dir, level)
 	if f.alerts[key] {
 		return false, nil
 	}
 	f.alerts[key] = true
 	return true, nil
+}
+
+func (f *fakeStore) GetHostLimits(_ context.Context, hostID string) (models.HostLimits, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	l, ok := f.limits[hostID]
+	if !ok {
+		return models.HostLimits{HostID: hostID}, nil
+	}
+	return l, nil
+}
+
+func (f *fakeStore) ListHostLimits(_ context.Context) ([]models.HostLimits, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]models.HostLimits, 0, len(f.limits))
+	for _, l := range f.limits {
+		out = append(out, l)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].HostID < out[j].HostID })
+	return out, nil
+}
+
+func (f *fakeStore) SetHostLimits(_ context.Context, l models.HostLimits) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if l.EgressLimitBytes == nil && l.IngressLimitBytes == nil {
+		delete(f.limits, l.HostID)
+		return nil
+	}
+	if l.UpdatedAt == 0 {
+		l.UpdatedAt = time.Now().Unix()
+	}
+	f.limits[l.HostID] = l
+	return nil
+}
+
+func (f *fakeStore) GetSetting(_ context.Context, key string) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	v, ok := f.settings[key]
+	return v, ok, nil
+}
+
+func (f *fakeStore) SetSetting(_ context.Context, key, value string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if value == "" {
+		delete(f.settings, key)
+		return nil
+	}
+	f.settings[key] = value
+	return nil
 }
 
 func (f *fakeStore) Rollup(_ context.Context, _ time.Time) error {

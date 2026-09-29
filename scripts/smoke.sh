@@ -298,6 +298,118 @@ assert 'error' in doc, 'missing error field in 404 body'
 pass "GET /api/v1/nope -> 404 JSON"
 
 # ---------------------------------------------------------------------------
+# v0.2: ingest response server_time_ms is within 5s of local time
+# ---------------------------------------------------------------------------
+
+REPORT_RESP="$(curl -fsS -X POST \
+  -H "Authorization: Bearer ${AGENT_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"host":{"id":"'"${HOST_ID}"'"},"samples":[]}' \
+  "${HUB_BASE_URL}/api/v1/agent/report")"
+NOW_MS="$(($(date +%s%N) / 1000000))"
+echo "$REPORT_RESP" | NOW_MS="$NOW_MS" python3 -c "
+import json, os, sys
+doc = json.load(sys.stdin)
+now_ms = int(os.environ['NOW_MS'])
+server_ms = doc.get('server_time_ms')
+assert isinstance(server_ms, int) and server_ms > 0, f'missing/invalid server_time_ms: {server_ms!r}'
+diff = abs(now_ms - server_ms)
+assert diff <= 5000, f'server_time_ms differs from local time by {diff}ms, want <=5000ms'
+"
+pass "POST /api/v1/agent/report response server_time_ms within 5s of local time"
+
+# ---------------------------------------------------------------------------
+# v0.2: GET /api/v1/agent/time — agent-token gated
+# ---------------------------------------------------------------------------
+
+AGENT_TIME_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
+  -H "Authorization: Bearer ${AGENT_TOKEN}" \
+  "${HUB_BASE_URL}/api/v1/agent/time")"
+if [ "$AGENT_TIME_STATUS" != "200" ]; then
+  fail "GET /api/v1/agent/time with agent token returned ${AGENT_TIME_STATUS}, want 200"
+fi
+pass "GET /api/v1/agent/time with agent token -> 200"
+
+AGENT_TIME_NOAUTH_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
+  "${HUB_BASE_URL}/api/v1/agent/time")"
+if [ "$AGENT_TIME_NOAUTH_STATUS" != "401" ]; then
+  fail "GET /api/v1/agent/time without token returned ${AGENT_TIME_NOAUTH_STATUS}, want 401"
+fi
+pass "GET /api/v1/agent/time without token -> 401"
+
+# ---------------------------------------------------------------------------
+# v0.2: admin settings endpoints (hub runs WITH CP_UI_TOKEN)
+# ---------------------------------------------------------------------------
+
+SETTINGS_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
+  -H "Authorization: Bearer ${UI_TOKEN}" \
+  "${HUB_BASE_URL}/api/v1/settings")"
+if [ "$SETTINGS_STATUS" != "200" ]; then
+  fail "GET /api/v1/settings with ui token returned ${SETTINGS_STATUS}, want 200"
+fi
+pass "GET /api/v1/settings with ui token -> 200"
+
+SETTINGS_NOAUTH_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
+  "${HUB_BASE_URL}/api/v1/settings")"
+if [ "$SETTINGS_NOAUTH_STATUS" != "401" ]; then
+  fail "GET /api/v1/settings without token returned ${SETTINGS_NOAUTH_STATUS}, want 401"
+fi
+pass "GET /api/v1/settings without token -> 401"
+
+AGENT_TOKEN_VIEW="$(curl -fsS -H "Authorization: Bearer ${UI_TOKEN}" "${HUB_BASE_URL}/api/v1/settings/agent-token")"
+echo "$AGENT_TOKEN_VIEW" | AGENT_TOKEN="$AGENT_TOKEN" python3 -c "
+import json, os, sys
+doc = json.load(sys.stdin)
+want = os.environ['AGENT_TOKEN']
+assert doc.get('agent_token') == want, f\"agent_token {doc.get('agent_token')!r} != {want!r}\"
+assert doc.get('install_command'), 'missing install_command'
+"
+pass "GET /api/v1/settings/agent-token returns the agent token"
+
+# ---------------------------------------------------------------------------
+# v0.2: PUT /api/v1/hosts/{id}/limits — hub override applied
+# ---------------------------------------------------------------------------
+
+LIMITS_PUT_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
+  -X PUT \
+  -H "Authorization: Bearer ${UI_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"egress_limit_bytes": 1073741824, "ingress_limit_bytes": 2147483648}' \
+  "${HUB_BASE_URL}/api/v1/hosts/${HOST_ID}/limits")"
+if [ "$LIMITS_PUT_STATUS" != "200" ]; then
+  fail "PUT /api/v1/hosts/${HOST_ID}/limits returned ${LIMITS_PUT_STATUS}, want 200"
+fi
+pass "PUT /api/v1/hosts/${HOST_ID}/limits -> 200"
+
+HOSTS_AFTER_LIMITS_JSON="$(curl -fsS -H "Authorization: Bearer ${UI_TOKEN}" "${HUB_BASE_URL}/api/v1/hosts")"
+echo "$HOSTS_AFTER_LIMITS_JSON" | HOST_ID="$HOST_ID" python3 -c "
+import json, os, sys
+doc = json.load(sys.stdin)
+host_id = os.environ['HOST_ID']
+hosts = [h for h in doc['hosts'] if h['host']['id'] == host_id]
+assert len(hosts) == 1, f'expected exactly 1 host {host_id!r}, got {len(hosts)}'
+egress = hosts[0]['egress']
+assert egress.get('limit_bytes') == 1073741824, f\"limit_bytes {egress.get('limit_bytes')!r} != 1073741824\"
+assert egress.get('rx_limit_bytes') == 2147483648, f\"rx_limit_bytes {egress.get('rx_limit_bytes')!r} != 2147483648\"
+assert egress.get('limit_source') == 'hub', f\"limit_source {egress.get('limit_source')!r} != 'hub'\"
+"
+pass "GET /api/v1/hosts shows egress.limit_bytes=1073741824, rx_limit_bytes=2147483648, limit_source=hub"
+
+# ---------------------------------------------------------------------------
+# v0.2: agent sample ts values are multiples of the interval (5s)
+# ---------------------------------------------------------------------------
+
+echo "$METRICS_JSON" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+ts = doc['ts']
+assert len(ts) >= 1, f'len(ts)={len(ts)} not >= 1'
+bad = [t for t in ts if t % 5 != 0]
+assert not bad, f'ts values not multiples of 5s interval: {bad}'
+"
+pass "agent sample ts values in metrics are all multiples of 5s"
+
+# ---------------------------------------------------------------------------
 # SIGTERM hub -> exits within 10s, DB file exists
 # ---------------------------------------------------------------------------
 

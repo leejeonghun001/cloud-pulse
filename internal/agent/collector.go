@@ -75,22 +75,46 @@ func NewCollector(src Source, opts CollectorOptions) *Collector {
 	}
 }
 
-// Collect gathers a single Sample snapshot. It only returns an error if ctx
-// is done; individual metric failures are logged at debug level and result
-// in zero values for that metric, never a failed Sample. Rates and deltas
-// are 0 on the first call.
+// Collect gathers a single Sample snapshot timestamped at the current
+// time (c.now()). It only returns an error if ctx is done; individual
+// metric failures are logged at debug level and result in zero values for
+// that metric, never a failed Sample. Rates and deltas are 0 on the first
+// call.
 func (c *Collector) Collect(ctx context.Context) (models.Sample, error) {
 	if err := ctx.Err(); err != nil {
 		return models.Sample{}, fmt.Errorf("agent: collect: %w", err)
 	}
-
 	now := c.now()
+	return c.collect(ctx, now, now), nil
+}
+
+// CollectAt gathers a single Sample snapshot, stamping it with ts instead
+// of the current time. This lets Run align every sample's Timestamp to a
+// shared hub-clock boundary while rate/delta math still uses the real
+// monotonic time elapsed since the previous call (via c.now(), not ts),
+// so rates remain accurate even if ts values are adjusted for clock
+// alignment. It only returns an error if ctx is done; individual metric
+// failures are logged at debug level and result in zero values for that
+// metric, never a failed Sample. Rates and deltas are 0 on the first call.
+func (c *Collector) CollectAt(ctx context.Context, ts time.Time) (models.Sample, error) {
+	if err := ctx.Err(); err != nil {
+		return models.Sample{}, fmt.Errorf("agent: collect: %w", err)
+	}
+	return c.collect(ctx, c.now(), ts), nil
+}
+
+// collect is the shared implementation behind Collect and CollectAt. now
+// is read exactly once from c.now() by the caller and used for
+// elapsed-time rate math (real monotonic time since the previous call);
+// ts is the value stamped onto the Sample's Timestamp field, which may
+// differ from now when called via CollectAt for hub-clock alignment.
+func (c *Collector) collect(ctx context.Context, now, ts time.Time) models.Sample {
 	var elapsed float64
 	if !c.prevTime.IsZero() {
 		elapsed = now.Sub(c.prevTime).Seconds()
 	}
 
-	sample := models.Sample{Timestamp: now.Unix()}
+	sample := models.Sample{Timestamp: ts.Unix()}
 
 	c.collectCPU(ctx, &sample)
 	c.collectLoad(ctx, &sample)
@@ -101,7 +125,7 @@ func (c *Collector) Collect(ctx context.Context) (models.Sample, error) {
 	c.collectUptime(ctx, &sample)
 
 	c.prevTime = now
-	return sample, nil
+	return sample
 }
 
 func (c *Collector) collectCPU(ctx context.Context, sample *models.Sample) {

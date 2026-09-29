@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -26,7 +27,12 @@ type storeContract interface {
 	SaveBucketStats(ctx context.Context, stats []models.BucketStats) error
 	LatestBuckets(ctx context.Context) ([]models.BucketStats, error)
 	BucketHistory(ctx context.Context, provider models.StorageProvider, bucket string, since int64) ([]models.BucketPoint, error)
-	MarkAlertSent(ctx context.Context, hostID, month string, level models.EgressLevel) (bool, error)
+	MarkAlertSent(ctx context.Context, hostID, month string, dir models.Direction, level models.EgressLevel) (bool, error)
+	GetHostLimits(ctx context.Context, hostID string) (models.HostLimits, error)
+	ListHostLimits(ctx context.Context) ([]models.HostLimits, error)
+	SetHostLimits(ctx context.Context, l models.HostLimits) error
+	GetSetting(ctx context.Context, key string) (value string, ok bool, err error)
+	SetSetting(ctx context.Context, key, value string) error
 	Rollup(ctx context.Context, now time.Time) error
 	Prune(ctx context.Context, now time.Time) error
 	Close() error
@@ -582,7 +588,7 @@ func TestMarkAlertSent_FirstThenSecond(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 
-	first, err := db.MarkAlertSent(ctx, "h1", "2026-01", models.EgressWarning)
+	first, err := db.MarkAlertSent(ctx, "h1", "2026-01", models.DirectionOut, models.EgressWarning)
 	if err != nil {
 		t.Fatalf("MarkAlertSent 1: %v", err)
 	}
@@ -590,7 +596,7 @@ func TestMarkAlertSent_FirstThenSecond(t *testing.T) {
 		t.Fatalf("first call: first = false, want true")
 	}
 
-	second, err := db.MarkAlertSent(ctx, "h1", "2026-01", models.EgressWarning)
+	second, err := db.MarkAlertSent(ctx, "h1", "2026-01", models.DirectionOut, models.EgressWarning)
 	if err != nil {
 		t.Fatalf("MarkAlertSent 2: %v", err)
 	}
@@ -598,13 +604,395 @@ func TestMarkAlertSent_FirstThenSecond(t *testing.T) {
 		t.Fatalf("second call: first = true, want false")
 	}
 
-	// A different level for the same host/month is independent.
-	third, err := db.MarkAlertSent(ctx, "h1", "2026-01", models.EgressCritical)
+	// A different level for the same host/month/direction is independent.
+	third, err := db.MarkAlertSent(ctx, "h1", "2026-01", models.DirectionOut, models.EgressCritical)
 	if err != nil {
 		t.Fatalf("MarkAlertSent 3: %v", err)
 	}
 	if !third {
 		t.Fatalf("different level: first = false, want true")
+	}
+}
+
+func TestMarkAlertSent_DirectionIndependence(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	// Same host/month/level but opposite directions must be tracked
+	// independently: marking "out" must not affect "in".
+	firstOut, err := db.MarkAlertSent(ctx, "h1", "2026-02", models.DirectionOut, models.EgressWarning)
+	if err != nil {
+		t.Fatalf("MarkAlertSent out: %v", err)
+	}
+	if !firstOut {
+		t.Fatalf("first out call: first = false, want true")
+	}
+
+	firstIn, err := db.MarkAlertSent(ctx, "h1", "2026-02", models.DirectionIn, models.EgressWarning)
+	if err != nil {
+		t.Fatalf("MarkAlertSent in: %v", err)
+	}
+	if !firstIn {
+		t.Fatalf("first in call: first = false, want true (direction must be independent of out)")
+	}
+
+	secondOut, err := db.MarkAlertSent(ctx, "h1", "2026-02", models.DirectionOut, models.EgressWarning)
+	if err != nil {
+		t.Fatalf("MarkAlertSent out again: %v", err)
+	}
+	if secondOut {
+		t.Fatalf("second out call: first = true, want false")
+	}
+
+	secondIn, err := db.MarkAlertSent(ctx, "h1", "2026-02", models.DirectionIn, models.EgressWarning)
+	if err != nil {
+		t.Fatalf("MarkAlertSent in again: %v", err)
+	}
+	if secondIn {
+		t.Fatalf("second in call: first = true, want false")
+	}
+}
+
+func TestHostLimits_CRUD(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	// No row yet: GetHostLimits returns a zero-value HostLimits with the
+	// requested HostID and nil pointers, not an error.
+	got, err := db.GetHostLimits(ctx, "h1")
+	if err != nil {
+		t.Fatalf("GetHostLimits (missing): %v", err)
+	}
+	if got.HostID != "h1" || got.EgressLimitBytes != nil || got.IngressLimitBytes != nil {
+		t.Fatalf("GetHostLimits (missing) = %+v, want HostID=h1 and nil pointers", got)
+	}
+
+	egress := uint64(1000)
+	ingress := uint64(0) // explicitly unlimited, distinct from nil (no override)
+	if err := db.SetHostLimits(ctx, models.HostLimits{
+		HostID:            "h1",
+		EgressLimitBytes:  &egress,
+		IngressLimitBytes: &ingress,
+	}); err != nil {
+		t.Fatalf("SetHostLimits: %v", err)
+	}
+
+	got, err = db.GetHostLimits(ctx, "h1")
+	if err != nil {
+		t.Fatalf("GetHostLimits: %v", err)
+	}
+	if got.EgressLimitBytes == nil || *got.EgressLimitBytes != 1000 {
+		t.Fatalf("EgressLimitBytes = %v, want 1000", got.EgressLimitBytes)
+	}
+	if got.IngressLimitBytes == nil || *got.IngressLimitBytes != 0 {
+		t.Fatalf("IngressLimitBytes = %v, want pointer to 0 (explicitly unlimited, not nil)", got.IngressLimitBytes)
+	}
+	if got.UpdatedAt == 0 {
+		t.Fatalf("UpdatedAt = 0, want auto-set to current time")
+	}
+
+	// Explicit UpdatedAt is preserved as given.
+	if err := db.SetHostLimits(ctx, models.HostLimits{
+		HostID:            "h1",
+		EgressLimitBytes:  &egress,
+		IngressLimitBytes: &ingress,
+		UpdatedAt:         12345,
+	}); err != nil {
+		t.Fatalf("SetHostLimits with explicit UpdatedAt: %v", err)
+	}
+	got, err = db.GetHostLimits(ctx, "h1")
+	if err != nil {
+		t.Fatalf("GetHostLimits after update: %v", err)
+	}
+	if got.UpdatedAt != 12345 {
+		t.Fatalf("UpdatedAt = %d, want 12345", got.UpdatedAt)
+	}
+
+	// Both nil deletes the row, reverting to the no-override state.
+	if err := db.SetHostLimits(ctx, models.HostLimits{HostID: "h1"}); err != nil {
+		t.Fatalf("SetHostLimits delete: %v", err)
+	}
+	got, err = db.GetHostLimits(ctx, "h1")
+	if err != nil {
+		t.Fatalf("GetHostLimits after delete: %v", err)
+	}
+	if got.EgressLimitBytes != nil || got.IngressLimitBytes != nil {
+		t.Fatalf("GetHostLimits after delete = %+v, want nil pointers", got)
+	}
+}
+
+func TestHostLimits_OnlyOneFieldSet(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	egress := uint64(5000)
+	// Only EgressLimitBytes set; IngressLimitBytes stays nil (no
+	// override), which must NOT trigger the both-nil delete path.
+	if err := db.SetHostLimits(ctx, models.HostLimits{
+		HostID:           "h2",
+		EgressLimitBytes: &egress,
+	}); err != nil {
+		t.Fatalf("SetHostLimits: %v", err)
+	}
+
+	got, err := db.GetHostLimits(ctx, "h2")
+	if err != nil {
+		t.Fatalf("GetHostLimits: %v", err)
+	}
+	if got.EgressLimitBytes == nil || *got.EgressLimitBytes != 5000 {
+		t.Fatalf("EgressLimitBytes = %v, want 5000", got.EgressLimitBytes)
+	}
+	if got.IngressLimitBytes != nil {
+		t.Fatalf("IngressLimitBytes = %v, want nil", got.IngressLimitBytes)
+	}
+}
+
+func TestHostLimits_32BitSafeLargeValues(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	// 1<<62 is the spec's documented ceiling for values that must round-
+	// trip through SQLite's signed 64-bit INTEGER without overflow or
+	// truncation, including on 32-bit platforms where int/uint default
+	// to 32 bits (these are explicitly uint64/int64 typed, but this
+	// guards against any accidental narrowing).
+	big := uint64(1) << 62
+	if err := db.SetHostLimits(ctx, models.HostLimits{
+		HostID:            "h3",
+		EgressLimitBytes:  &big,
+		IngressLimitBytes: &big,
+	}); err != nil {
+		t.Fatalf("SetHostLimits: %v", err)
+	}
+
+	got, err := db.GetHostLimits(ctx, "h3")
+	if err != nil {
+		t.Fatalf("GetHostLimits: %v", err)
+	}
+	if got.EgressLimitBytes == nil || *got.EgressLimitBytes != big {
+		t.Fatalf("EgressLimitBytes = %v, want %d", got.EgressLimitBytes, big)
+	}
+	if got.IngressLimitBytes == nil || *got.IngressLimitBytes != big {
+		t.Fatalf("IngressLimitBytes = %v, want %d", got.IngressLimitBytes, big)
+	}
+}
+
+func TestListHostLimits_SortedByHostID(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	e1, e2, e3 := uint64(100), uint64(200), uint64(300)
+	for id, v := range map[string]*uint64{"zeta": &e3, "alpha": &e1, "mid": &e2} {
+		if err := db.SetHostLimits(ctx, models.HostLimits{HostID: id, EgressLimitBytes: v}); err != nil {
+			t.Fatalf("SetHostLimits(%s): %v", id, err)
+		}
+	}
+
+	limits, err := db.ListHostLimits(ctx)
+	if err != nil {
+		t.Fatalf("ListHostLimits: %v", err)
+	}
+	if len(limits) != 3 {
+		t.Fatalf("got %d limits, want 3", len(limits))
+	}
+	want := []string{"alpha", "mid", "zeta"}
+	for i, w := range want {
+		if limits[i].HostID != w {
+			t.Fatalf("limits[%d].HostID = %q, want %q", i, limits[i].HostID, w)
+		}
+	}
+}
+
+func TestSettings_CRUD(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	// Unset key: ok=false, no error.
+	_, ok, err := db.GetSetting(ctx, "alert_webhook_url")
+	if err != nil {
+		t.Fatalf("GetSetting (missing): %v", err)
+	}
+	if ok {
+		t.Fatalf("GetSetting (missing) ok = true, want false")
+	}
+
+	if err := db.SetSetting(ctx, "alert_webhook_url", "https://example.com/hook"); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+	value, ok, err := db.GetSetting(ctx, "alert_webhook_url")
+	if err != nil {
+		t.Fatalf("GetSetting: %v", err)
+	}
+	if !ok || value != "https://example.com/hook" {
+		t.Fatalf("GetSetting = (%q, %v), want (https://example.com/hook, true)", value, ok)
+	}
+
+	// Overwriting replaces the value.
+	if err := db.SetSetting(ctx, "alert_webhook_url", "https://example.com/other"); err != nil {
+		t.Fatalf("SetSetting overwrite: %v", err)
+	}
+	value, ok, err = db.GetSetting(ctx, "alert_webhook_url")
+	if err != nil {
+		t.Fatalf("GetSetting after overwrite: %v", err)
+	}
+	if !ok || value != "https://example.com/other" {
+		t.Fatalf("GetSetting after overwrite = (%q, %v), want (https://example.com/other, true)", value, ok)
+	}
+
+	// Empty value deletes the setting.
+	if err := db.SetSetting(ctx, "alert_webhook_url", ""); err != nil {
+		t.Fatalf("SetSetting empty: %v", err)
+	}
+	_, ok, err = db.GetSetting(ctx, "alert_webhook_url")
+	if err != nil {
+		t.Fatalf("GetSetting after delete: %v", err)
+	}
+	if ok {
+		t.Fatalf("GetSetting after delete ok = true, want false")
+	}
+}
+
+func TestSettings_KeysIndependent(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	if err := db.SetSetting(ctx, "key_a", "value_a"); err != nil {
+		t.Fatalf("SetSetting key_a: %v", err)
+	}
+	if err := db.SetSetting(ctx, "key_b", "value_b"); err != nil {
+		t.Fatalf("SetSetting key_b: %v", err)
+	}
+
+	// Deleting one key must not affect the other.
+	if err := db.SetSetting(ctx, "key_a", ""); err != nil {
+		t.Fatalf("SetSetting delete key_a: %v", err)
+	}
+	_, ok, err := db.GetSetting(ctx, "key_a")
+	if err != nil {
+		t.Fatalf("GetSetting key_a: %v", err)
+	}
+	if ok {
+		t.Fatalf("key_a ok = true after delete, want false")
+	}
+	value, ok, err := db.GetSetting(ctx, "key_b")
+	if err != nil {
+		t.Fatalf("GetSetting key_b: %v", err)
+	}
+	if !ok || value != "value_b" {
+		t.Fatalf("key_b = (%q, %v), want (value_b, true)", value, ok)
+	}
+}
+
+// TestOpen_UpgradeFrom0001PreservesAlertsSent verifies migration 0002's
+// alerts_sent rebuild: a database created with only migration 0001
+// applied (schema_migrations has only version 1, and an alerts_sent row
+// exists in the pre-0002 schema without a direction column) must, after
+// storage.Open applies 0002, end up with that row preserved under
+// direction 'out'.
+func TestOpen_UpgradeFrom0001PreservesAlertsSent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy.db")
+
+	// Build a database that has gone through exactly migration 0001,
+	// bypassing the embedded-migration runner so we control the schema
+	// version precisely (simulating a real v0.1 database on disk).
+	legacyDSN := "file:" + filepath.ToSlash(path) +
+		"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)"
+	legacy, err := sql.Open("sqlite", legacyDSN)
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+
+	migration0001, err := migrationFS.ReadFile("migrations/0001_init.sql")
+	if err != nil {
+		_ = legacy.Close()
+		t.Fatalf("read 0001 migration: %v", err)
+	}
+	if _, err := legacy.ExecContext(ctx, string(migration0001)); err != nil {
+		_ = legacy.Close()
+		t.Fatalf("apply 0001 migration: %v", err)
+	}
+	if _, err := legacy.ExecContext(ctx, `CREATE TABLE schema_migrations (
+		version    INTEGER PRIMARY KEY,
+		applied_at INTEGER NOT NULL
+	)`); err != nil {
+		_ = legacy.Close()
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+	if _, err := legacy.ExecContext(ctx,
+		`INSERT INTO schema_migrations (version, applied_at) VALUES (1, ?)`, time.Now().Unix(),
+	); err != nil {
+		_ = legacy.Close()
+		t.Fatalf("insert schema_migrations row: %v", err)
+	}
+	// Pre-0002 alerts_sent has no direction column at all.
+	if _, err := legacy.ExecContext(ctx,
+		`INSERT INTO alerts_sent (host_id, month, level, sent_at) VALUES ('h1', '2026-01', 'warning', 1000)`,
+	); err != nil {
+		_ = legacy.Close()
+		t.Fatalf("insert legacy alerts_sent row: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	// Now open through the normal path: migration 0002 must apply and
+	// preserve the row with direction='out'.
+	db, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open (upgrade): %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+
+	row := db.sql.QueryRowContext(ctx,
+		`SELECT direction, sent_at FROM alerts_sent WHERE host_id = ? AND month = ? AND level = ?`,
+		"h1", "2026-01", "warning",
+	)
+	var direction string
+	var sentAt int64
+	if err := row.Scan(&direction, &sentAt); err != nil {
+		t.Fatalf("scan upgraded alerts_sent row: %v", err)
+	}
+	if direction != "out" {
+		t.Fatalf("direction = %q, want %q", direction, "out")
+	}
+	if sentAt != 1000 {
+		t.Fatalf("sent_at = %d, want 1000 (preserved)", sentAt)
+	}
+
+	// The MarkAlertSent method must also work post-upgrade, including
+	// treating the pre-existing 'out' row as already sent.
+	first, err := db.MarkAlertSent(ctx, "h1", "2026-01", models.DirectionOut, models.EgressWarning)
+	if err != nil {
+		t.Fatalf("MarkAlertSent post-upgrade: %v", err)
+	}
+	if first {
+		t.Fatalf("MarkAlertSent post-upgrade: first = true, want false (row pre-existed)")
+	}
+
+	// A second application of migrate() (simulating a second process
+	// start) must be a no-op and not error or duplicate rows.
+	if err := db.migrate(ctx); err != nil {
+		t.Fatalf("re-migrate: %v", err)
+	}
+	var count int
+	if err := db.sql.QueryRowContext(ctx, `SELECT COUNT(*) FROM alerts_sent`).Scan(&count); err != nil {
+		t.Fatalf("count alerts_sent: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("alerts_sent row count = %d, want 1", count)
 	}
 }
 

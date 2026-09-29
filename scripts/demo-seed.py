@@ -8,14 +8,20 @@ testing of the dashboard.
 
 Two independent modes, usable together or separately:
 
-  --hub URL --token TOKEN
+  --hub URL --token TOKEN [--ui-token UI_TOKEN]
       POSTs AgentReport payloads for ~6 fake hosts (mixed aws/oci/other
       providers, one host reported as "down" by only posting samples
       with an old last-seen timestamp) to <URL>/api/v1/agent/report.
       Each host gets ~2 hours of 15s-interval samples with sine+noise
-      curves so charts look realistic, and a tx-byte curve tuned per
-      host to land in a specific egress level (ok/warning/critical/
-      exceeded) against its egress_limit_bytes.
+      curves so charts look realistic, a tx-byte curve tuned per host to
+      land in a specific outbound egress level (ok/warning/critical/
+      exceeded) against its egress_limit_bytes, and an rx-byte curve
+      tuned per host to land in a specific inbound level against
+      whatever inbound limit ends up effective for it. When --ui-token
+      is also given (must match the hub's CP_UI_TOKEN), a few hosts also
+      get hub-side outbound/inbound limit overrides applied via
+      PUT /api/v1/hosts/{id}/limits (an admin endpoint), so the settings
+      page's limits editor and "hub override" badges have real data.
 
   --db PATH
       Inserts demo rows directly into the bucket_stats table (see
@@ -35,6 +41,7 @@ import sqlite3
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 
@@ -68,6 +75,17 @@ class DemoHost:
     mem_total: int = 8 * GIB
     disk_total: int = 100 * GIB
     seed: int = field(default_factory=lambda: random.randint(0, 1_000_000))
+    # Hub-side limit overrides exercised via PUT /api/v1/hosts/{id}/limits
+    # when --ui-token is given (see apply_hub_limit_overrides). None means
+    # "don't touch this host's overrides" (leave whatever's already
+    # stored, or unset if never seeded before).
+    hub_egress_override_gib: float | None = None
+    hub_ingress_override_gib: float | None = None
+    # ingress_level drives how large the inbound (rx) byte curve is
+    # relative to whatever inbound limit ends up effective for this
+    # host (agent-reported default is always unlimited, so this only
+    # visibly matters once a hub ingress override is applied above).
+    ingress_level: str = "ok"
 
 
 DEMO_HOSTS = [
@@ -85,6 +103,12 @@ DEMO_HOSTS = [
         cpu_amp=12,
         mem_total=8 * GIB,
         disk_total=80 * GIB,
+        # Hub override tightens the agent's 100 GiB AWS default down to
+        # 50 GiB outbound, and adds a 20 GiB inbound limit — demonstrates
+        # both directions' hub-override badge and bar at once.
+        hub_egress_override_gib=50,
+        hub_ingress_override_gib=20,
+        ingress_level="warning",
     ),
     DemoHost(
         host_id="demo-aws-db-01",
@@ -100,6 +124,7 @@ DEMO_HOSTS = [
         cpu_amp=20,
         mem_total=32 * GIB,
         disk_total=500 * GIB,
+        ingress_level="ok",
     ),
     DemoHost(
         host_id="demo-oci-app-01",
@@ -115,6 +140,11 @@ DEMO_HOSTS = [
         cpu_amp=25,
         mem_total=16 * GIB,
         disk_total=200 * GIB,
+        # Explicitly-unlimited hub override (0 GiB = unlimited), overriding
+        # OCI's 10 TiB provider default — exercises the "0 means
+        # unlimited" override path end to end.
+        hub_egress_override_gib=0,
+        ingress_level="ok",
     ),
     DemoHost(
         host_id="demo-other-nas-01",
@@ -130,6 +160,7 @@ DEMO_HOSTS = [
         cpu_amp=8,
         mem_total=4 * GIB,
         disk_total=2 * TIB,
+        ingress_level="ok",
     ),
     DemoHost(
         host_id="demo-aws-cache-01",
@@ -145,6 +176,10 @@ DEMO_HOSTS = [
         cpu_amp=15,
         mem_total=8 * GIB,
         disk_total=40 * GIB,
+        # Inbound-only hub override at a level that lands "exceeded" too,
+        # so both directions show red on the same host card.
+        hub_ingress_override_gib=5,
+        ingress_level="exceeded",
     ),
     DemoHost(
         host_id="demo-oci-offline-01",
@@ -161,6 +196,7 @@ DEMO_HOSTS = [
         cpu_amp=10,
         mem_total=8 * GIB,
         disk_total=100 * GIB,
+        ingress_level="ok",
     ),
 ]
 
@@ -179,6 +215,16 @@ def egress_level_target_fraction(level: str) -> float:
         "critical": 0.97,
         "exceeded": 1.12,
     }[level]
+
+
+def ingress_limit_bytes_for(host: "DemoHost") -> int:
+    """Returns the illustrative inbound limit used to size this host's
+    rx-byte curve: the hub ingress override in bytes if one is
+    configured, else an arbitrary baseline (inbound is unlimited by
+    default agent-side, so there's no provider default to target)."""
+    if host.hub_ingress_override_gib is not None and host.hub_ingress_override_gib > 0:
+        return int(host.hub_ingress_override_gib * GIB)
+    return 20 * GIB
 
 
 def build_samples(host: DemoHost, now: int) -> list[dict]:
@@ -202,6 +248,10 @@ def build_samples(host: DemoHost, now: int) -> list[dict]:
         # Unlimited: pick an arbitrary illustrative total.
         target_tx_total = 5 * GIB
     tx_per_sample = max(target_tx_total // max(n, 1), 1)
+
+    rx_limit = ingress_limit_bytes_for(host)
+    target_rx_total = int(rx_limit * egress_level_target_fraction(host.ingress_level))
+    rx_per_sample = max(target_rx_total // max(n, 1), 1)
 
     prev_net_total_rx = 0
     prev_net_total_tx = 0
@@ -228,7 +278,7 @@ def build_samples(host: DemoHost, now: int) -> list[dict]:
         disk_used_pct = max(1.0, min(97.0, disk_used_pct))
         disk_used = int(host.disk_total * disk_used_pct / 100)
 
-        net_rx_bps = max(0.0, 200_000 + 150_000 * math.sin(phase + 2.0) + rng.uniform(-20000, 20000))
+        net_rx_bps = max(0.0, rx_per_sample / SAMPLE_INTERVAL_SECONDS + rng.uniform(-5000, 5000))
         net_tx_bps = max(0.0, tx_per_sample / SAMPLE_INTERVAL_SECONDS + rng.uniform(-5000, 5000))
 
         disk_read_bps = max(0.0, 50_000 + 40_000 * math.sin(phase * 0.7) + rng.uniform(-5000, 5000))
@@ -319,7 +369,59 @@ def post_report(hub_url: str, token: str, host: DemoHost, samples: list[dict], t
             raise SystemExit(f"error: POST report for {host.host_id} failed: {e}")
 
 
-def seed_hub(hub_url: str, token: str, db_path: str | None = None) -> None:
+def apply_hub_limit_overrides(hub_url: str, ui_token: str, host: DemoHost, timeout: float = 10.0) -> str | None:
+    """Applies host's hub_egress_override_gib/hub_ingress_override_gib via
+    PUT /api/v1/hosts/{id}/limits (an admin endpoint gated behind
+    CP_UI_TOKEN — see SPEC-v0.2's 'Settings/token endpoints are ADMIN
+    endpoints' decision). Returns a short status string for logging, or
+    None if this host has no overrides configured (both fields None) and
+    the call was skipped.
+
+    GiB values are converted to bytes (1 GiB = 2^30, matching
+    CP_EGRESS_LIMIT_GB / the settings UI's units); 0 GiB is sent as the
+    integer 0 (explicitly unlimited), not omitted."""
+    if host.hub_egress_override_gib is None and host.hub_ingress_override_gib is None:
+        return None
+
+    body: dict[str, int | None] = {
+        "egress_limit_bytes": (
+            int(host.hub_egress_override_gib * GIB) if host.hub_egress_override_gib is not None else None
+        ),
+        "ingress_limit_bytes": (
+            int(host.hub_ingress_override_gib * GIB) if host.hub_ingress_override_gib is not None else None
+        ),
+    }
+    req = urllib.request.Request(
+        url=hub_url.rstrip("/") + f"/api/v1/hosts/{urllib.parse.quote(host.host_id, safe='')}/limits",
+        data=json.dumps(body).encode("utf-8"),
+        method="PUT",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {ui_token}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            resp.read()
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace")
+        raise SystemExit(f"error: PUT limits for {host.host_id} failed: HTTP {e.code}: {detail}")
+    except urllib.error.URLError as e:
+        raise SystemExit(f"error: PUT limits for {host.host_id} failed: {e}")
+
+    parts = []
+    if host.hub_egress_override_gib is not None:
+        parts.append(
+            "egress=" + ("unlimited" if host.hub_egress_override_gib == 0 else f"{host.hub_egress_override_gib}GiB")
+        )
+    if host.hub_ingress_override_gib is not None:
+        parts.append(
+            "ingress=" + ("unlimited" if host.hub_ingress_override_gib == 0 else f"{host.hub_ingress_override_gib}GiB")
+        )
+    return ", ".join(parts)
+
+
+def seed_hub(hub_url: str, token: str, db_path: str | None = None, ui_token: str | None = None) -> None:
     now = int(time.time())
     print(f"==> seeding hub {hub_url} with {len(DEMO_HOSTS)} demo hosts")
     down_host_ids: list[str] = []
@@ -330,7 +432,21 @@ def seed_hub(hub_url: str, token: str, db_path: str | None = None) -> None:
         print(f"    {host.host_id:24s} {host.provider:6s} {len(samples):4d} samples  [{state}]")
         if host.down:
             down_host_ids.append(host.host_id)
+
+        if ui_token:
+            override_summary = apply_hub_limit_overrides(hub_url, ui_token, host)
+            if override_summary:
+                print(f"        hub limit override applied: {override_summary}")
     print("==> hub seeding complete")
+
+    if not ui_token and any(
+        h.hub_egress_override_gib is not None or h.hub_ingress_override_gib is not None for h in DEMO_HOSTS
+    ):
+        print(
+            "    note: pass --ui-token (matching the hub's CP_UI_TOKEN) to also "
+            "exercise PUT /api/v1/hosts/{id}/limits and seed hub-side outbound/"
+            "inbound overrides for a few demo hosts."
+        )
 
     if down_host_ids:
         if db_path:
@@ -482,6 +598,16 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--hub", help="Hub base URL, e.g. http://127.0.0.1:8090")
     parser.add_argument("--token", help="CP_AGENT_TOKEN for the target hub")
     parser.add_argument("--db", help="Path to the hub's SQLite database file")
+    parser.add_argument(
+        "--ui-token",
+        help=(
+            "CP_UI_TOKEN for the target hub. When given, also seeds hub-side "
+            "outbound/inbound limit overrides for a few demo hosts via "
+            "PUT /api/v1/hosts/{id}/limits (an admin endpoint), so the "
+            "settings page's limits editor and the 'hub override' badges "
+            "have real data to show."
+        ),
+    )
     args = parser.parse_args(argv)
 
     print(DEMO_BANNER)
@@ -489,10 +615,13 @@ def main(argv: list[str]) -> int:
     if not args.hub and not args.db:
         parser.error("at least one of --hub (with --token) or --db is required")
 
+    if args.ui_token and not args.hub:
+        parser.error("--ui-token requires --hub")
+
     if args.hub:
         if not args.token:
             parser.error("--token is required when --hub is given")
-        seed_hub(args.hub, args.token, args.db)
+        seed_hub(args.hub, args.token, args.db, args.ui_token)
 
     if args.db:
         seed_db(args.db)

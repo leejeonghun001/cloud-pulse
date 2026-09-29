@@ -52,17 +52,27 @@ type ReporterOptions struct {
 	// BatchSize is the max number of samples sent per HTTP request
 	// (default 100).
 	BatchSize int
+	// Clock, if non-nil, receives an Observe call after every successful
+	// (2xx) report response using that response's server_time_ms, so the
+	// agent's notion of hub time improves continuously during normal
+	// operation (not just at startup).
+	Clock *HubClock
+	// LogClockWarn, if non-nil, is forwarded to Clock.Observe as its
+	// logWarn callback.
+	LogClockWarn func(offset time.Duration)
 }
 
 // Reporter buffers collected samples in memory and periodically flushes
 // them to the hub over HTTP, in batches, retrying on transient failures.
 type Reporter struct {
-	hubURL     string
-	token      string
-	client     *http.Client
-	logger     *slog.Logger
-	bufferSize int
-	batchSize  int
+	hubURL       string
+	token        string
+	client       *http.Client
+	logger       *slog.Logger
+	bufferSize   int
+	batchSize    int
+	clock        *HubClock
+	logClockWarn func(offset time.Duration)
 
 	mu      sync.Mutex
 	samples []models.Sample
@@ -87,12 +97,14 @@ func NewReporter(opts ReporterOptions) *Reporter {
 		batchSize = defaultBatchSize
 	}
 	return &Reporter{
-		hubURL:     opts.HubURL,
-		token:      opts.Token,
-		client:     client,
-		logger:     logger,
-		bufferSize: bufferSize,
-		batchSize:  batchSize,
+		hubURL:       opts.HubURL,
+		token:        opts.Token,
+		client:       client,
+		logger:       logger,
+		bufferSize:   bufferSize,
+		batchSize:    batchSize,
+		clock:        opts.Clock,
+		logClockWarn: opts.LogClockWarn,
 	}
 }
 
@@ -135,13 +147,16 @@ func (r *Reporter) Flush(ctx context.Context, host models.HostInfo) error {
 			return nil
 		}
 
-		status, err := r.postBatch(ctx, host, batch)
+		status, serverTimeMs, t0, t1, err := r.postBatch(ctx, host, batch)
 		if err != nil {
 			return fmt.Errorf("agent: flush: %w", err)
 		}
 
 		switch {
 		case status >= 200 && status < 300:
+			if r.clock != nil && serverTimeMs > 0 {
+				r.clock.Observe(t0, t1, serverTimeMs, r.logClockWarn)
+			}
 			r.dropBatch(len(batch))
 		case status == http.StatusUnauthorized || status == http.StatusForbidden:
 			return ErrUnauthorized
@@ -185,14 +200,16 @@ func (r *Reporter) dropBatch(n int) {
 }
 
 // postBatch sends a single AgentReport batch and returns the HTTP status
-// code. A non-nil error indicates the request could not be completed
-// (network error, non-HTTP failure); it does not indicate an HTTP error
-// status.
-func (r *Reporter) postBatch(ctx context.Context, host models.HostInfo, batch []models.Sample) (int, error) {
+// code, the response's server_time_ms (0 if absent/unparsable/non-2xx),
+// and the local send (t0) / receive (t1) timestamps bracketing the
+// request, for clock offset estimation. A non-nil error indicates the
+// request could not be completed (network error, non-HTTP failure); it
+// does not indicate an HTTP error status.
+func (r *Reporter) postBatch(ctx context.Context, host models.HostInfo, batch []models.Sample) (status int, serverTimeMs int64, t0, t1 time.Time, err error) {
 	report := models.AgentReport{Host: host, Samples: batch}
 	body, err := json.Marshal(report)
 	if err != nil {
-		return 0, fmt.Errorf("agent: marshal report: %w", err)
+		return 0, 0, time.Time{}, time.Time{}, fmt.Errorf("agent: marshal report: %w", err)
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, requestTimeout)
@@ -200,20 +217,31 @@ func (r *Reporter) postBatch(ctx context.Context, host models.HostInfo, batch []
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, r.hubURL+reportPath, bytes.NewReader(body))
 	if err != nil {
-		return 0, fmt.Errorf("agent: build request: %w", err)
+		return 0, 0, time.Time{}, time.Time{}, fmt.Errorf("agent: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+r.token)
 	req.Header.Set("User-Agent", "cloud-pulse-agent/"+version.Version)
 
+	t0 = time.Now()
 	resp, err := r.client.Do(req)
+	t1 = time.Now()
 	if err != nil {
-		return 0, fmt.Errorf("agent: post report: %w", err)
+		return 0, 0, t0, t1, fmt.Errorf("agent: post report: %w", err)
 	}
 	defer func() {
 		_ = resp.Body.Close() // response fully drained below; close error is not actionable
 	}()
-	_, _ = io.Copy(io.Discard, resp.Body) // drain body so the connection can be reused
 
-	return resp.StatusCode, nil
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		var ir models.IngestResponse
+		if decErr := json.NewDecoder(resp.Body).Decode(&ir); decErr == nil {
+			serverTimeMs = ir.ServerTimeMs
+		}
+		_, _ = io.Copy(io.Discard, resp.Body) // drain any remainder so the connection can be reused
+		return resp.StatusCode, serverTimeMs, t0, t1, nil
+	}
+
+	_, _ = io.Copy(io.Discard, resp.Body) // drain body so the connection can be reused
+	return resp.StatusCode, 0, t0, t1, nil
 }

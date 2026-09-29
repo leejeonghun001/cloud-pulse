@@ -160,7 +160,7 @@ func TestComputeEgress(t *testing.T) {
 		tx := uint64(10 * GiB)
 		limit := uint64(100 * GiB)
 
-		got := ComputeEgress("2026-01", tx, 0, limit, now)
+		got := ComputeEgress("2026-01", tx, 0, limit, 0, now)
 
 		if got.Month != "2026-01" {
 			t.Errorf("Month = %q, want 2026-01", got.Month)
@@ -180,22 +180,62 @@ func TestComputeEgress(t *testing.T) {
 		if got.ProjectedTxBytes != wantProjected {
 			t.Errorf("ProjectedTxBytes = %d, want %d", got.ProjectedTxBytes, wantProjected)
 		}
+		if got.LimitSource != "agent" {
+			t.Errorf("LimitSource = %q, want agent", got.LimitSource)
+		}
+		if got.RxLimitSource != "none" {
+			t.Errorf("RxLimitSource = %q, want none", got.RxLimitSource)
+		}
 	})
 
-	t.Run("past_month_projection_equals_tx", func(t *testing.T) {
+	t.Run("rx_mirrors_tx_logic_independently", func(t *testing.T) {
 		t.Parallel()
-		tx := uint64(5 * GiB)
+		start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		now := start.Add(240 * time.Hour)
+		tx, txLimit := uint64(1*GiB), uint64(0) // tx unlimited
+		rx, rxLimit := uint64(96*GiB), uint64(100*GiB)
+
+		got := ComputeEgress("2026-01", tx, rx, txLimit, rxLimit, now)
+
+		if got.Percent != 0 || got.Level != EgressOK {
+			t.Errorf("tx (unlimited) Percent/Level = %v/%q, want 0/ok", got.Percent, got.Level)
+		}
+		wantRxPercent := float64(rx) / float64(rxLimit) * 100
+		if got.RxPercent != wantRxPercent {
+			t.Errorf("RxPercent = %v, want %v", got.RxPercent, wantRxPercent)
+		}
+		if got.RxLevel != EgressCritical {
+			t.Errorf("RxLevel = %q, want critical (96%% is >= 95%%)", got.RxLevel)
+		}
+		wantProjectedRx := uint64(float64(rx) * 744.0 / 240.0)
+		if got.ProjectedRxBytes != wantProjectedRx {
+			t.Errorf("ProjectedRxBytes = %d, want %d", got.ProjectedRxBytes, wantProjectedRx)
+		}
+		if got.RxBytes != rx {
+			t.Errorf("RxBytes = %d, want %d", got.RxBytes, rx)
+		}
+	})
+
+	t.Run("past_month_projection_equals_tx_and_rx", func(t *testing.T) {
+		t.Parallel()
+		tx, rx := uint64(5*GiB), uint64(3*GiB)
 		now := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC) // exactly month end for Feb 2026
-		got := ComputeEgress("2026-02", tx, 0, 100*GiB, now)
+		got := ComputeEgress("2026-02", tx, rx, 100*GiB, 100*GiB, now)
 		if got.ProjectedTxBytes != tx {
 			t.Errorf("ProjectedTxBytes = %d, want %d (past month end)", got.ProjectedTxBytes, tx)
+		}
+		if got.ProjectedRxBytes != rx {
+			t.Errorf("ProjectedRxBytes = %d, want %d (past month end)", got.ProjectedRxBytes, rx)
 		}
 
 		// Well past month end too.
 		now2 := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-		got2 := ComputeEgress("2026-02", tx, 0, 100*GiB, now2)
+		got2 := ComputeEgress("2026-02", tx, rx, 100*GiB, 100*GiB, now2)
 		if got2.ProjectedTxBytes != tx {
 			t.Errorf("ProjectedTxBytes = %d, want %d (far past month end)", got2.ProjectedTxBytes, tx)
+		}
+		if got2.ProjectedRxBytes != rx {
+			t.Errorf("ProjectedRxBytes = %d, want %d (far past month end)", got2.ProjectedRxBytes, rx)
 		}
 	})
 
@@ -204,7 +244,7 @@ func TestComputeEgress(t *testing.T) {
 		// now == month start exactly => elapsed 0, clamped to 1h.
 		start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 		tx := uint64(1 * GiB)
-		got := ComputeEgress("2026-04", tx, 0, 100*GiB, start)
+		got := ComputeEgress("2026-04", tx, 0, 100*GiB, 0, start)
 
 		monthDuration := 30 * 24 * time.Hour // April has 30 days
 		wantProjected := uint64(float64(tx) * float64(monthDuration) / float64(time.Hour))
@@ -213,26 +253,115 @@ func TestComputeEgress(t *testing.T) {
 		}
 	})
 
-	t.Run("unparsable_month_projection_equals_tx", func(t *testing.T) {
+	t.Run("unparsable_month_projection_equals_tx_and_rx", func(t *testing.T) {
 		t.Parallel()
-		tx := uint64(42)
-		got := ComputeEgress("bogus", tx, 7, 100, time.Now())
+		tx, rx := uint64(42), uint64(7)
+		got := ComputeEgress("bogus", tx, rx, 100, 100, time.Now())
 		if got.ProjectedTxBytes != tx {
 			t.Errorf("ProjectedTxBytes = %d, want %d", got.ProjectedTxBytes, tx)
+		}
+		if got.ProjectedRxBytes != rx {
+			t.Errorf("ProjectedRxBytes = %d, want %d", got.ProjectedRxBytes, rx)
 		}
 		if got.RxBytes != 7 {
 			t.Errorf("RxBytes = %d, want 7", got.RxBytes)
 		}
 	})
 
-	t.Run("limit_zero_percent_zero_level_ok", func(t *testing.T) {
+	t.Run("limit_zero_percent_zero_level_ok_both_directions", func(t *testing.T) {
 		t.Parallel()
-		got := ComputeEgress("2026-01", 999*GiB, 0, 0, time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC))
+		got := ComputeEgress("2026-01", 999*GiB, 999*GiB, 0, 0, time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC))
 		if got.Percent != 0 {
 			t.Errorf("Percent = %v, want 0", got.Percent)
 		}
 		if got.Level != EgressOK {
 			t.Errorf("Level = %q, want ok", got.Level)
+		}
+		if got.RxPercent != 0 {
+			t.Errorf("RxPercent = %v, want 0", got.RxPercent)
+		}
+		if got.RxLevel != EgressOK {
+			t.Errorf("RxLevel = %q, want ok", got.RxLevel)
+		}
+	})
+
+	t.Run("default_limit_sources_agent_and_none", func(t *testing.T) {
+		t.Parallel()
+		got := ComputeEgress("2026-01", GiB, GiB, 100*GiB, 50*GiB, time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC))
+		if got.LimitSource != "agent" {
+			t.Errorf("LimitSource = %q, want agent", got.LimitSource)
+		}
+		if got.RxLimitSource != "none" {
+			t.Errorf("RxLimitSource = %q, want none", got.RxLimitSource)
+		}
+	})
+
+	// 32-bit safety: uint64 byte counters/limits near and above the
+	// 32-bit boundary (2^32) must not overflow or truncate when computed
+	// on a GOARCH where int/uint is 32 bits (e.g. arm/386). All internal
+	// math uses uint64/float64 explicitly, never platform-width int.
+	t.Run("32bit_safety_large_counters", func(t *testing.T) {
+		t.Parallel()
+
+		cases := []struct {
+			name   string
+			tx, rx uint64
+			txLim  uint64
+			rxLim  uint64
+		}{
+			{
+				name:  "just_above_32bit_boundary",
+				tx:    uint64(1<<32) + 1024,
+				rx:    uint64(1<<32) + 2048,
+				txLim: uint64(1<<32) * 2,
+				rxLim: uint64(1<<32) * 2,
+			},
+			{
+				name:  "near_uint64_max_quarter",
+				tx:    uint64(1) << 62,
+				rx:    uint64(1) << 61,
+				txLim: uint64(1) << 63,
+				rxLim: uint64(1) << 62,
+			},
+			{
+				name:  "tx_equals_limit_at_scale",
+				tx:    uint64(4) << 30, // 4 GiB
+				rx:    uint64(2) << 30,
+				txLim: uint64(4) << 30,
+				rxLim: uint64(8) << 30,
+			},
+		}
+
+		for _, tc := range cases {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				now := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
+				got := ComputeEgress("2026-01", tc.tx, tc.rx, tc.txLim, tc.rxLim, now)
+
+				if got.TxBytes != tc.tx {
+					t.Errorf("TxBytes = %d, want %d", got.TxBytes, tc.tx)
+				}
+				if got.RxBytes != tc.rx {
+					t.Errorf("RxBytes = %d, want %d", got.RxBytes, tc.rx)
+				}
+				wantPercent := float64(tc.tx) / float64(tc.txLim) * 100
+				if got.Percent != wantPercent {
+					t.Errorf("Percent = %v, want %v", got.Percent, wantPercent)
+				}
+				wantRxPercent := float64(tc.rx) / float64(tc.rxLim) * 100
+				if got.RxPercent != wantRxPercent {
+					t.Errorf("RxPercent = %v, want %v", got.RxPercent, wantRxPercent)
+				}
+				// Projection must not overflow/wrap: projected tx must be
+				// >= actual tx (elapsed < monthDuration for a mid-month ts).
+				if got.ProjectedTxBytes < tc.tx {
+					t.Errorf("ProjectedTxBytes = %d, want >= tx %d (no overflow/truncation)", got.ProjectedTxBytes, tc.tx)
+				}
+				if got.ProjectedRxBytes < tc.rx {
+					t.Errorf("ProjectedRxBytes = %d, want >= rx %d (no overflow/truncation)", got.ProjectedRxBytes, tc.rx)
+				}
+			})
 		}
 	})
 }

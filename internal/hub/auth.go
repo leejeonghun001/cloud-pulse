@@ -44,6 +44,16 @@ func unauthorized(w http.ResponseWriter) {
 	writeJSON(w, http.StatusUnauthorized, models.APIError{Error: "unauthorized"})
 }
 
+// adminDisabled writes a 403 JSON response with code "admin_disabled",
+// used when admin endpoints are reached but CP_UI_TOKEN is not
+// configured on the hub.
+func adminDisabled(w http.ResponseWriter) {
+	writeJSON(w, http.StatusForbidden, models.APIError{
+		Error: "settings are disabled: set CP_UI_TOKEN on the hub to enable them",
+		Code:  "admin_disabled",
+	})
+}
+
 // requireAgentToken wraps next, requiring a valid bearer token matching
 // s.opts.AgentToken.
 func (s *Server) requireAgentToken(next http.HandlerFunc) http.HandlerFunc {
@@ -64,6 +74,26 @@ func (s *Server) requireUIToken(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.opts.UIToken == "" {
 			next(w, r)
+			return
+		}
+		token, ok := bearerToken(r)
+		if !ok || !constantTimeEqual(token, s.opts.UIToken) {
+			unauthorized(w)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// requireAdmin wraps next, requiring CP_UI_TOKEN to be configured on the
+// hub AND presented as a valid Bearer token. If UIToken is not
+// configured, it responds 403 with code "admin_disabled" rather than
+// ever exposing admin data unauthenticated. If UIToken is configured but
+// the presented token is missing or wrong, it responds 401.
+func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.opts.UIToken == "" {
+			adminDisabled(w)
 			return
 		}
 		token, ok := bearerToken(r)

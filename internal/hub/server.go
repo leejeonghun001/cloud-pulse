@@ -11,6 +11,7 @@ package hub
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -52,9 +53,27 @@ type Store interface {
 	// unix-seconds timestamp.
 	BucketHistory(ctx context.Context, provider models.StorageProvider, bucket string, since int64) ([]models.BucketPoint, error)
 	// MarkAlertSent records that an alert at level was sent for
-	// hostID/month, returning first=true if this is the first time it
-	// was recorded (idempotent).
-	MarkAlertSent(ctx context.Context, hostID, month string, level models.EgressLevel) (first bool, err error)
+	// hostID/month/dir, returning first=true if this is the first time
+	// it was recorded (idempotent).
+	MarkAlertSent(ctx context.Context, hostID, month string, dir models.Direction, level models.EgressLevel) (first bool, err error)
+	// GetHostLimits returns the hub-side limit overrides for hostID. If
+	// no row exists, it returns models.HostLimits{HostID: hostID} (both
+	// pointers nil) and a nil error.
+	GetHostLimits(ctx context.Context, hostID string) (models.HostLimits, error)
+	// ListHostLimits returns every host's stored limit overrides,
+	// sorted by host_id.
+	ListHostLimits(ctx context.Context) ([]models.HostLimits, error)
+	// SetHostLimits stores l's overrides for l.HostID. If both
+	// EgressLimitBytes and IngressLimitBytes are nil, the row is
+	// deleted (no override). If l.UpdatedAt is zero, it is set to the
+	// current time.
+	SetHostLimits(ctx context.Context, l models.HostLimits) error
+	// GetSetting returns the stored value for key, and ok=false if no
+	// value is stored.
+	GetSetting(ctx context.Context, key string) (value string, ok bool, err error)
+	// SetSetting stores value for key. An empty value deletes the
+	// setting.
+	SetSetting(ctx context.Context, key, value string) error
 	// Rollup aggregates raw samples into coarser resolutions as of now.
 	Rollup(ctx context.Context, now time.Time) error
 	// Prune deletes data past its retention window as of now.
@@ -62,6 +81,10 @@ type Store interface {
 	// Close releases any resources held by the store.
 	Close() error
 }
+
+// SettingWebhookURL is the settings table key for the hub-side webhook
+// URL override.
+const SettingWebhookURL = "alert_webhook_url"
 
 // BucketCollector collects statistics for one cloud storage provider's
 // buckets (e.g. S3 or R2). Implementations live in internal/cloud.
@@ -96,6 +119,14 @@ type Options struct {
 	OfflineAfter time.Duration
 	// CloudInterval is the interval between cloud bucket collections.
 	CloudInterval time.Duration
+	// AlertWebhookURL is the webhook endpoint configured via environment
+	// (CP_ALERT_WEBHOOK_URL). It is the fallback used when no hub-side
+	// override is stored via Store.SetSetting(SettingWebhookURL, ...).
+	AlertWebhookURL string
+	// NotifierFor constructs a Notifier for the given webhook URL. If
+	// nil, a hub.WebhookNotifier with a 10s-timeout client is used.
+	// Tests inject a fake to observe/short-circuit outbound HTTP calls.
+	NotifierFor func(url string) Notifier
 	// Now returns the current time; nil defaults to time.Now.
 	Now func() time.Time
 }
@@ -105,6 +136,15 @@ func (o Options) now() time.Time {
 		return o.Now()
 	}
 	return time.Now()
+}
+
+// notifierFor returns a Notifier for url using o.NotifierFor if set,
+// otherwise a default hub.WebhookNotifier with a 10s-timeout client.
+func (o Options) notifierFor(url string) Notifier {
+	if o.NotifierFor != nil {
+		return o.NotifierFor(url)
+	}
+	return WebhookNotifier{URL: url}
 }
 
 // Server is the cloud-pulse hub HTTP server and background scheduler.
@@ -162,12 +202,42 @@ func (s *Server) Wait() {
 	s.alertWG.Wait()
 }
 
+// effectiveWebhookURL resolves the webhook URL alerts and the test-send
+// endpoint should use: the hub-side setting (Store.GetSetting) if
+// non-empty, otherwise s.opts.AlertWebhookURL (from CP_ALERT_WEBHOOK_URL),
+// otherwise "". source is "hub", "env", or "none" respectively.
+func (s *Server) effectiveWebhookURL(ctx context.Context) (url, source string, err error) {
+	value, ok, err := s.store.GetSetting(ctx, SettingWebhookURL)
+	if err != nil {
+		return "", "", fmt.Errorf("hub: get webhook url setting: %w", err)
+	}
+	if ok && value != "" {
+		return value, "hub", nil
+	}
+	if s.opts.AlertWebhookURL != "" {
+		return s.opts.AlertWebhookURL, "env", nil
+	}
+	return "", "none", nil
+}
+
+// resolveNotifier returns the Notifier to use for the given webhook url,
+// preferring an explicit notifier injected via New (used by tests and by
+// callers that want a single fixed notifier), and otherwise constructing
+// one via s.opts.notifierFor(url).
+func (s *Server) resolveNotifier(url string) Notifier {
+	if s.notifier != nil {
+		return s.notifier
+	}
+	return s.opts.notifierFor(url)
+}
+
 func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 
 	mux.HandleFunc("POST /api/v1/agent/report", s.requireAgentToken(s.handleIngest))
+	mux.HandleFunc("GET /api/v1/agent/time", s.requireAgentToken(s.handleAgentTime))
 
 	mux.HandleFunc("GET /api/v1/hosts", s.requireUIToken(s.handleListHosts))
 	mux.HandleFunc("GET /api/v1/hosts/{id}", s.requireUIToken(s.handleGetHost))
@@ -175,6 +245,12 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/egress", s.requireUIToken(s.handleEgress))
 	mux.HandleFunc("GET /api/v1/buckets", s.requireUIToken(s.handleBuckets))
 	mux.HandleFunc("GET /api/v1/version", s.requireUIToken(s.handleVersion))
+
+	mux.HandleFunc("GET /api/v1/settings", s.requireAdmin(s.handleGetSettings))
+	mux.HandleFunc("GET /api/v1/settings/agent-token", s.requireAdmin(s.handleGetAgentToken))
+	mux.HandleFunc("PUT /api/v1/hosts/{id}/limits", s.requireAdmin(s.handleSetHostLimits))
+	mux.HandleFunc("PUT /api/v1/settings/alerts", s.requireAdmin(s.handleSetAlertWebhook))
+	mux.HandleFunc("POST /api/v1/settings/alerts/test", s.requireAdmin(s.handleTestAlertWebhook))
 
 	// No catch-all is registered for the bare pattern "/api/" or "/":
 	// doing so with no method restriction would make it match every
