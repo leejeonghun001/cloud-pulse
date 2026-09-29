@@ -100,6 +100,17 @@ Dependency direction rules:
   does I/O.
 - **Every network call has a timeout** — either via context deadline or an
   `http.Client{Timeout: ...}`. No unbounded network calls.
+- **Agent time handling**: use the hub-corrected clock (`HubClock.Now()`,
+  via the injected `timeSource`) for anything that becomes a *timestamp*
+  leaving the process — a `Sample.Timestamp`, an aligned collection
+  boundary. Use real monotonic elapsed time (`time.Since`/a prior
+  `time.Time` captured locally) for anything that becomes a *rate or
+  delta* — network byte/sec, CPU percent — never the difference between
+  two hub-corrected boundaries. `Collector.CollectAt(ctx, ts)` takes the
+  boundary as the sample's timestamp but still measures the interval for
+  its internal rate math from the real time elapsed since the previous
+  collection, so a missed/delayed boundary (e.g. suspend) never produces
+  a distorted rate.
 - **No global mutable state**, except the `version` package's build-time
   vars (`Version`, `Commit`, `Date`), which are set once via `-ldflags` before
   `main` runs and treated as read-only afterward.
@@ -159,6 +170,41 @@ Dependency direction rules:
 - **No secrets in the repo.** Tokens, keys, and credentials are supplied via
   environment variables only; nothing resembling a secret is ever committed,
   including in test fixtures (use obviously-fake values).
+- **Admin endpoint rule**: any endpoint that can reveal a secret (the
+  agent token) or make a state-changing settings/limit change is an
+  *admin* endpoint, wrapped with `requireAdmin` (not `requireUIToken`).
+  `requireAdmin` must check `CP_UI_TOKEN == ""` **first** and respond
+  `403 {"code":"admin_disabled"}` in that case, before ever inspecting
+  the request's bearer header — there is no configuration in which an
+  admin endpoint falls back to an open/unauthenticated read just because
+  `CP_UI_TOKEN` happens to be unset. Only when `CP_UI_TOKEN` is
+  configured does a missing/wrong token get `401`. New admin routes must
+  use `requireAdmin`, not `requireUIToken`, even if they're a `GET`.
+
+## Database migrations
+
+- **Migrations must preserve existing data.** A migration that changes a
+  table's shape (adds a column to a composite primary key, changes a
+  `NOT NULL`/default, etc.) copies existing rows into the new shape
+  inside the same transaction as the schema change — never `DROP TABLE`
+  without a preceding `INSERT INTO ... SELECT` that carries every
+  pre-existing row forward (see `0002_limits_settings.sql`'s
+  `alerts_sent` rebuild: create `_new` table, `INSERT ... SELECT` with an
+  explicit default for the new column, `DROP` the old table, `RENAME`
+  the new one into place).
+- **Every migration that changes an existing table's shape needs an
+  upgrade test**: open a database created by only the prior migration(s)
+  with pre-existing rows in the affected table, then `Open` through the
+  normal migration path and assert those rows are still present (with
+  the new column's backfilled value) rather than lost or defaulted
+  incorrectly. See `TestOpen_UpgradeFrom0001PreservesAlertsSent`.
+- New tables/columns default to values that make the old behavior the
+  effective one (e.g. `direction TEXT NOT NULL DEFAULT 'out'` on
+  `alerts_sent`, since v0.1 only ever alerted on outbound) so an upgraded
+  hub's existing alert history reads correctly under the new schema
+  without a separate backfill step.
+
+## No secrets logged
 
 ## Dependencies
 
