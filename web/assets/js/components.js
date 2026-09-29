@@ -262,40 +262,90 @@ export function hostCard(summary, nowMs) {
 }
 
 /**
- * egressSection builds the monthly egress mini progress bar shown inside
- * a host card.
- * @param {Object} egress a models.EgressUsage JSON object
+ * hubOverrideBadge builds a small badge shown next to a limit that was
+ * overridden from the hub (limit_source/rx_limit_source == "hub"), so
+ * users can tell an effective limit apart from the agent-reported
+ * default at a glance.
  * @returns {HTMLElement}
  */
-export function egressSection(egress) {
-  const wrap = el("div", { class: "cp-egress-mini" });
+export function hubOverrideBadge() {
+  return el("span", { class: "cp-badge cp-badge-hub", text: "hub override", attrs: { title: "Overridden from the hub" } });
+}
+
+/**
+ * egressDirectionRow builds one direction's (outbound/inbound) mini
+ * usage row: a label, optional hub-override badge, bar+limit or
+ * "no limit" text, and a projection line when a limit is set.
+ * @param {Object} opts
+ * @param {string} opts.label "↑ Outbound" or "↓ Inbound"
+ * @param {number} opts.bytes
+ * @param {number} opts.limitBytes
+ * @param {string} opts.level
+ * @param {number} opts.projectedBytes
+ * @param {boolean} opts.hubOverride
+ * @param {string} [opts.barLabel] aria-label for the progress bar
+ * @returns {HTMLElement}
+ */
+export function egressDirectionRow({ label, bytes, limitBytes, level, projectedBytes, hubOverride, barLabel }) {
+  const wrap = el("div", { class: "cp-egress-direction" });
   const head = el("div", { class: "cp-metric-head" });
-  head.append(el("span", { class: "cp-metric-label", text: "Monthly egress" }), egressLevelChip(egress.level));
+  const labelGroup = el("span", { class: "cp-egress-direction-label-group" });
+  labelGroup.append(el("span", { class: "cp-metric-label", text: label }));
+  if (hubOverride) labelGroup.append(hubOverrideBadge());
+  head.append(labelGroup, egressLevelChip(level));
   wrap.append(head);
 
-  if (egress.limit_bytes === 0) {
-    wrap.append(
-      el("p", {
-        class: "cp-egress-unlimited",
-        text: `No limit · ${formatBytes(egress.tx_bytes)} used`,
-      }),
-    );
+  if (limitBytes === 0) {
+    wrap.append(el("p", { class: "cp-egress-unlimited", text: `No limit · ${formatBytes(bytes)} used` }));
     return wrap;
   }
 
   wrap.append(
     progressBar({
-      value: egress.tx_bytes,
-      max: egress.limit_bytes,
-      label: "Monthly egress usage",
-      levelClass: levelClassForBar(egress.level),
-      valueText: `${formatBytes(egress.tx_bytes)} / ${formatBytes(egress.limit_bytes)}`,
+      value: bytes,
+      max: limitBytes,
+      label: barLabel || `${label} usage`,
+      levelClass: levelClassForBar(level),
+      valueText: `${formatBytes(bytes)} / ${formatBytes(limitBytes)}`,
     }),
   );
   wrap.append(
-    el("p", {
-      class: "cp-egress-projection",
-      text: `Projected: ${formatBytes(egress.projected_tx_bytes)} by month end`,
+    el("p", { class: "cp-egress-projection", text: `Projected: ${formatBytes(projectedBytes)} by month end` }),
+  );
+  return wrap;
+}
+
+/**
+ * egressSection builds the monthly egress mini card shown inside a host
+ * card: separate Outbound and Inbound rows (see SPEC-v0.2), each with
+ * its own bar/limit/level/projection or "no limit" text, and a "hub
+ * override" badge when that direction's limit came from a hub-side
+ * override.
+ * @param {Object} egress a models.EgressUsage JSON object
+ * @returns {HTMLElement}
+ */
+export function egressSection(egress) {
+  const wrap = el("div", { class: "cp-egress-mini" });
+  wrap.append(
+    egressDirectionRow({
+      label: "↑ Outbound",
+      bytes: egress.tx_bytes,
+      limitBytes: egress.limit_bytes,
+      level: egress.level,
+      projectedBytes: egress.projected_tx_bytes,
+      hubOverride: egress.limit_source === "hub",
+      barLabel: "Monthly outbound usage",
+    }),
+  );
+  wrap.append(
+    egressDirectionRow({
+      label: "↓ Inbound",
+      bytes: egress.rx_bytes,
+      limitBytes: egress.rx_limit_bytes,
+      level: egress.rx_level,
+      projectedBytes: egress.projected_rx_bytes,
+      hubOverride: egress.rx_limit_source === "hub",
+      barLabel: "Monthly inbound usage",
     }),
   );
   return wrap;
@@ -341,7 +391,8 @@ export function errorBanner(message) {
  * @param {number} stats.hostsUp
  * @param {number} stats.hostsDown
  * @param {number} stats.avgCPU
- * @param {number} stats.fleetEgressBytes
+ * @param {number} stats.fleetEgressBytes fleet-wide outbound bytes this month
+ * @param {number} stats.fleetIngressBytes fleet-wide inbound bytes this month
  * @param {number} stats.bucketsTracked
  * @param {number} stats.lastRefreshMs
  * @returns {HTMLElement}
@@ -353,7 +404,8 @@ export function summaryStrip(stats) {
     ["Hosts up", formatNumber(stats.hostsUp)],
     ["Hosts down", formatNumber(stats.hostsDown)],
     ["Avg CPU", formatPercent(stats.avgCPU)],
-    ["Fleet egress (mo.)", formatBytes(stats.fleetEgressBytes)],
+    ["Fleet outbound (mo.)", formatBytes(stats.fleetEgressBytes)],
+    ["Fleet inbound (mo.)", formatBytes(stats.fleetIngressBytes)],
     ["Buckets tracked", formatNumber(stats.bucketsTracked)],
   ];
   for (const [label, value] of items) {

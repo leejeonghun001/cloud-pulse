@@ -13,12 +13,14 @@ import {
   summaryStrip,
   progressBar,
   levelClassForBar,
+  egressDirectionRow,
 } from "./components.js";
 import { formatBytes, formatBitrate, formatDuration, formatRelativeTimeFromUnixSeconds, formatLoad } from "./format.js";
-import { buildEgressSection, currentMonth } from "./egress.js";
+import { buildEgressSection, currentMonth, getStoredDirection, setStoredDirection } from "./egress.js";
 import { buildBucketsSection } from "./buckets.js";
 import { createTimeSeriesChart, SERIES_COLORS } from "./charts.js";
 import { runHostDetailRefresh } from "./refresh.js";
+import { buildSettingsPage } from "./settings.js";
 
 const REFRESH_INTERVAL_MS = 15000;
 const AGENT_INSTALL_HINT =
@@ -93,7 +95,7 @@ function teardownActivePage() {
 async function renderOverview() {
   teardownActivePage();
   const controller = new AbortController();
-  const page = { controller, charts: [], month: currentMonth() };
+  const page = { controller, charts: [], month: currentMonth(), direction: getStoredDirection() };
   activePage = page;
 
   clearChildren(mainEl);
@@ -142,9 +144,15 @@ async function renderOverview() {
       egressHost.append(
         buildEgressSection({
           month: page.month,
+          direction: page.direction,
           hosts: egressResp.hosts,
           onMonthChange: (m) => {
             page.month = m;
+            load(false);
+          },
+          onDirectionChange: (d) => {
+            page.direction = d;
+            setStoredDirection(d);
             load(false);
           },
         }),
@@ -202,6 +210,7 @@ function renderSummary(host, hostsResp, bucketsResp, nowMs) {
   const down = hosts.filter((h) => h.status !== "up");
   const avgCPU = up.length > 0 ? up.reduce((sum, h) => sum + (h.latest?.cpu_percent ?? 0), 0) / up.length : 0;
   const fleetEgressBytes = hosts.reduce((sum, h) => sum + h.egress.tx_bytes, 0);
+  const fleetIngressBytes = hosts.reduce((sum, h) => sum + h.egress.rx_bytes, 0);
 
   clearChildren(host);
   host.append(
@@ -210,6 +219,7 @@ function renderSummary(host, hostsResp, bucketsResp, nowMs) {
       hostsDown: down.length,
       avgCPU,
       fleetEgressBytes,
+      fleetIngressBytes,
       bucketsTracked: bucketsResp.buckets.length,
       lastRefreshMs: nowMs,
     }),
@@ -270,7 +280,7 @@ async function renderHostDetail(hostID) {
       if (page !== activePage) return false;
       clearBanner();
       renderHostDetailHeader(headerHost, summary, Date.now());
-      renderHostEgressCard(egressHost, summary.egress);
+      renderHostEgressCard(egressHost, hostID, summary.egress);
       if (summary.latest?.disks) {
         renderDisksTable(disksHost, summary.latest.disks);
       }
@@ -363,25 +373,44 @@ function renderHostDetailHeader(host, summary, nowMs) {
   }
 }
 
-function renderHostEgressCard(host, egress) {
+function renderHostEgressCard(host, hostID, egress) {
   clearChildren(host);
   const card = el("div", { class: "cp-card" });
-  card.append(el("h2", { text: "Monthly egress" }));
-  if (egress.limit_bytes === 0) {
-    card.append(el("p", { class: "cp-egress-unlimited", text: `No limit · ${formatBytes(egress.tx_bytes)} used` }));
-  } else {
-    card.append(
-      progressBar({
-        value: egress.tx_bytes,
-        max: egress.limit_bytes,
-        label: "Monthly egress usage",
-        levelClass: levelClassForBar(egress.level),
-        valueText: `${formatBytes(egress.tx_bytes)} / ${formatBytes(egress.limit_bytes)}`,
-      }),
-    );
-    card.append(el("p", { class: "cp-muted-small", text: `Projected: ${formatBytes(egress.projected_tx_bytes)}` }));
-  }
-  card.append(el("p", { class: "cp-muted-small", text: `Rx: ${formatBytes(egress.rx_bytes)}` }));
+  const headRow = el("div", { class: "cp-metric-head" });
+  headRow.append(el("h2", { text: "Monthly egress" }));
+  card.append(headRow);
+
+  card.append(
+    egressDirectionRow({
+      label: "↑ Outbound",
+      bytes: egress.tx_bytes,
+      limitBytes: egress.limit_bytes,
+      level: egress.level,
+      projectedBytes: egress.projected_tx_bytes,
+      hubOverride: egress.limit_source === "hub",
+      barLabel: "Monthly outbound usage",
+    }),
+  );
+  card.append(
+    egressDirectionRow({
+      label: "↓ Inbound",
+      bytes: egress.rx_bytes,
+      limitBytes: egress.rx_limit_bytes,
+      level: egress.rx_level,
+      projectedBytes: egress.projected_rx_bytes,
+      hubOverride: egress.rx_limit_source === "hub",
+      barLabel: "Monthly inbound usage",
+    }),
+  );
+
+  card.append(
+    el("a", {
+      class: "cp-back-link",
+      attrs: { href: `#/settings?host=${encodeURIComponent(hostID)}` },
+      text: "Edit limits →",
+    }),
+  );
+
   host.append(card);
 }
 
@@ -526,14 +555,52 @@ function describeError(err) {
 }
 
 // ---------------------------------------------------------------------------
+// Settings page
+// ---------------------------------------------------------------------------
+
+async function renderSettings(focusHostID) {
+  teardownActivePage();
+  const controller = new AbortController();
+  const page = { controller, charts: [] };
+  activePage = page;
+
+  clearChildren(mainEl);
+  clearRefreshTimer();
+  setRefreshIndicator("");
+
+  try {
+    const node = await buildSettingsPage({ signal: controller.signal, announce, focusHostID });
+    if (page !== activePage) return;
+    clearChildren(mainEl);
+    mainEl.append(node);
+    if (focusHostID) {
+      const row = document.getElementById(`cp-limits-row-${focusHostID}`);
+      row?.scrollIntoView({ block: "center" });
+    }
+  } catch (err) {
+    if (err?.name === "AbortError") return;
+    if (page !== activePage) return;
+    clearChildren(mainEl);
+    mainEl.append(el("h1", { class: "cp-page-title", text: "Settings" }));
+    showBanner(describeError(err));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
 function route() {
   const hash = location.hash || "#/";
-  const hostMatch = hash.match(/^#\/host\/([^/]+)$/);
+  const hostMatch = hash.match(/^#\/host\/([^/?]+)$/);
   if (hostMatch) {
     renderHostDetail(decodeURIComponent(hostMatch[1]));
+    return;
+  }
+  const settingsMatch = hash.match(/^#\/settings(?:\?(.*))?$/);
+  if (settingsMatch) {
+    const params = new URLSearchParams(settingsMatch[1] || "");
+    renderSettings(params.get("host") || undefined);
     return;
   }
   renderOverview();

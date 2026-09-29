@@ -125,7 +125,7 @@
   }
 
   .cp-summary-strip {
-    @apply grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 rounded-xl border border-cp-border bg-cp-surface p-4;
+    @apply grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6 rounded-xl border border-cp-border bg-cp-surface p-4;
   }
 
   .cp-summary-item {
@@ -328,6 +328,11 @@
     @apply w-full max-w-2xl overflow-x-auto rounded-md bg-cp-bg border border-cp-border p-3 text-left text-xs text-emerald-300;
   }
 
+  /* Settings install command: full width and wrapped so the whole command is visible. */
+  .cp-code-block-wrap {
+    @apply max-w-none whitespace-pre-wrap break-all;
+  }
+
   .cp-error-banner {
     @apply rounded-md border border-cp-exceeded bg-cp-exceeded/10 text-red-200 px-4 py-2 text-sm my-3;
   }
@@ -526,5 +531,81 @@
 
   .cp-uplot {
     @apply w-full;
+  }
+
+  .cp-badge-hub {
+    @apply bg-sky-600/80 normal-case tracking-normal;
+  }
+
+  .cp-egress-direction {
+    @apply flex flex-col gap-1 border-t border-cp-border pt-2 mt-1 first:border-t-0 first:pt-0 first:mt-0;
+  }
+
+  .cp-egress-direction-label-group {
+    @apply flex items-center gap-2;
+  }
+
+  .cp-egress-top-row {
+    @apply flex items-center justify-between gap-3 flex-wrap;
+  }
+
+  .cp-segmented {
+    @apply inline-flex rounded-md border border-cp-border overflow-hidden;
+  }
+
+  .cp-segmented-btn {
+    @apply rounded-none border-0 border-r border-cp-border last:border-r-0;
+  }
+
+  .cp-segmented-btn[aria-pressed="true"] {
+    @apply bg-sky-600 border-sky-500 text-white;
+  }
+
+  .cp-settings-page {
+    @apply flex flex-col gap-6;
+  }
+
+  .cp-settings-body {
+    @apply flex flex-col gap-4;
+  }
+
+  .cp-settings-row {
+    @apply flex items-center gap-2 flex-wrap;
+  }
+
+  .cp-token-reveal-input {
+    @apply flex-1 min-w-[16rem] font-mono;
+  }
+
+  .cp-install-fallback {
+    @apply w-full font-mono text-xs mt-2;
+  }
+
+  .cp-admin-disabled {
+    @apply gap-3;
+  }
+
+  .cp-admin-disabled h3 {
+    @apply text-sm font-semibold text-cp-text mt-2;
+  }
+
+  .cp-admin-disabled-steps {
+    @apply list-decimal list-inside text-sm text-cp-text flex flex-col gap-1 pl-1;
+  }
+
+  .cp-limits-actions {
+    @apply flex items-center gap-2 flex-wrap;
+  }
+
+  .cp-limit-input {
+    @apply w-24;
+  }
+
+  .cp-webhook-input {
+    @apply flex-1 min-w-[16rem];
+  }
+
+  .cp-row-highlighted {
+    @apply bg-sky-950 outline outline-2 outline-sky-500;
   }
 }

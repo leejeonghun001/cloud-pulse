@@ -19,6 +19,8 @@ var requiredEntryPoints = []string{
 	"assets/js/charts.js",
 	"assets/js/egress.js",
 	"assets/js/buckets.js",
+	"assets/js/limits.js",
+	"assets/js/settings.js",
 	"assets/vendor/uplot/uPlot.esm.js",
 	"assets/vendor/uplot/uPlot.min.css",
 	"assets/vendor/uplot/LICENSE",

@@ -225,3 +225,86 @@ export function getBuckets(signal) {
 export function getVersion(signal) {
   return apiFetch("/api/v1/version", { signal });
 }
+
+/**
+ * AdminError extends ApiError to expose the machine-readable error code
+ * (e.g. "admin_disabled") admin endpoints send alongside a 403/401.
+ */
+export class AdminError extends ApiError {
+  /**
+   * @param {string} message
+   * @param {number} status
+   * @param {string} [code]
+   */
+  constructor(message, status, code) {
+    super(message, status);
+    this.name = "AdminError";
+    this.code = code || "";
+  }
+}
+
+/**
+ * adminFetch wraps apiFetch, translating a 403 {code:"admin_disabled"}
+ * body into an AdminError with .code set, so callers (the settings page)
+ * can distinguish "admin disabled" from "wrong/missing token" (plain
+ * 401, handled by apiFetch's existing token-dialog retry) without
+ * re-parsing the body themselves.
+ * @param {string} path
+ * @param {RequestInit} [init]
+ * @returns {Promise<any>}
+ */
+async function adminFetch(path, init = {}) {
+  try {
+    return await apiFetch(path, init);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 403) {
+      throw new AdminError(err.message, err.status, "admin_disabled");
+    }
+    throw err;
+  }
+}
+
+/** getSettings fetches GET /api/v1/settings (admin). */
+export function getSettings(signal) {
+  return adminFetch("/api/v1/settings", { signal });
+}
+
+/** getAgentToken fetches GET /api/v1/settings/agent-token (admin). */
+export function getAgentToken(signal) {
+  return adminFetch("/api/v1/settings/agent-token", { signal });
+}
+
+/**
+ * setHostLimits calls PUT /api/v1/hosts/{id}/limits (admin) with the
+ * given override values (number or null; null clears that override).
+ * @param {string} hostID
+ * @param {{egressLimitBytes: number|null, ingressLimitBytes: number|null}} limits
+ * @param {AbortSignal} [signal]
+ */
+export function setHostLimits(hostID, { egressLimitBytes, ingressLimitBytes }, signal) {
+  return adminFetch(`/api/v1/hosts/${encodeURIComponent(hostID)}/limits`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      egress_limit_bytes: egressLimitBytes,
+      ingress_limit_bytes: ingressLimitBytes,
+    }),
+    signal,
+  });
+}
+
+/** setAlertWebhook calls PUT /api/v1/settings/alerts (admin); "" clears
+ * the hub override, falling back to the env-configured URL. */
+export function setAlertWebhook(webhookURL, signal) {
+  return adminFetch("/api/v1/settings/alerts", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ webhook_url: webhookURL }),
+    signal,
+  });
+}
+
+/** testAlertWebhook calls POST /api/v1/settings/alerts/test (admin). */
+export function testAlertWebhook(signal) {
+  return adminFetch("/api/v1/settings/alerts/test", { method: "POST", signal });
+}
