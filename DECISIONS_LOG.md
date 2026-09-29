@@ -806,3 +806,237 @@ never rewrite history here, only add to it.
 - **Context:** SPEC-v0.4 §1/§2. Both new lockout surfaces (a forgotten changed admin password; a network config that technically binds but the admin's own session expired before confirming a pending change) need an offline recovery path that doesn't require stopping the hub service — this machine's hub is frequently managed exactly by someone SSH'd into the same host it's running on, where "stop the service to fix it" is a worse outage than the lockout itself.
 - **Decision:** `cloud-pulse-hub reset-password`/`reset-network` are dispatched before flag parsing, the exact same pattern `update`/`systemd-unit` already use (D-051) — so they work even on a config-incomplete install. Both resolve their data directory with the shared precedence `resolveDataDir` already implements for other subcommands (explicit `--data-dir` > `CP_DATA_DIR` > `/var/lib/cloud-pulse` if it exists > `./data`), open the database directly via `storage.Open` (the same SQLite connection setup the hub itself uses, WAL mode + busy-timeout already configured there), and — when run as root — `chownToDataDirOwner` restores the database file's (and any `-wal`/`-shm` sidecar's) ownership to the data directory's owner afterward, since a CLI invoked via `sudo` would otherwise leave root-owned files behind for the hub's unprivileged service account to then fail to write to. `reset-password` without `--password-stdin` resets to `changeme` and sets `auth_must_change=1` (mirroring first-run bootstrap); `--password-stdin` reads exactly one line and applies the normal password policy, leaving `must_change=0`. Either form calls `DeleteSessionsExcept(ctx, "")` (empty keep-ID = delete all) so a leaked or forgotten-but-still-valid session can never survive a reset. `reset-network` deletes the `network_config` setting row outright — a *live* effect on the next `GET /api/v1/settings/network` read (since that path always re-resolves the setting), but the listener/allowlist enforcement itself only changes on the next hub restart, which `printResetNetworkSummary` says explicitly rather than leaving the operator to guess.
 - **Consequences:** Verified live during integration: both subcommands were run against a temp database while a real hub process held the same file open, succeeding on the first try — confirming WAL + busy-timeout is sufficient for this without any lock-coordination code of its own. Because neither subcommand needs the hub to be stopped, a lockout is a sub-minute fix rather than a service-interrupting one.
+
+### D-066 — Alerting: a general rule engine replaces fixed egress-percentage alerts; sustained-window semantics read the raw sample tier (2026-09-30)
+
+- **Context**: SPEC-v0.5 §B. Pre-v0.5 alerting was hard-coded to three
+  outbound-egress percentage thresholds delivered to a single webhook
+  URL. The user asked for CPU/memory/disk/load-average alerts sustained
+  over a configurable duration, host-offline alerts, and delivery to
+  Discord/Telegram/WhatsApp with a chart image — none of which fit the
+  old fixed-shape model.
+- **Decision**: `internal/alerting.Engine` evaluates a list of
+  user-configured `AlertRule`s (metric, scope, operator/threshold,
+  duration, cooldown, notify-resolved, channel IDs) against a per-rule-
+  per-host state machine (`ok → pending → firing → resolved`), persisted
+  in `alert_state`/`alert_events` so the engine survives a hub restart
+  without re-firing or losing an in-progress sustained window. A
+  duration-gated rule (cpu/memory/disk/load1) is checked against **every
+  raw sample** in `[now-duration, now]` via the same `Store.QuerySeries`
+  raw tier the dashboard's charts use — not a rollup bucket — and the
+  window must be **fully covered by history** (earliest returned sample
+  at or before `now-duration`, within a small collection-jitter
+  tolerance) before a rule can fire; a host that started reporting less
+  than `duration_sec` ago cannot fire on partial data. `host_down` folds
+  the rule's own `duration_sec` on top of the existing
+  `CP_OFFLINE_AFTER` window rather than replacing it, so "host down for
+  5 more minutes" composes correctly with the pre-existing offline
+  threshold instead of needing its own separate timer. Delivery is
+  asynchronous (a bounded 100-job worker queue, 20s per-attempt timeout,
+  3 retries with backoff honoring a platform's `Retry-After`), tracked
+  by `Engine.Wait`/`Close` so hub shutdown can drain in-flight
+  deliveries instead of dropping them.
+- **Consequences**: Rules are fully data-driven — adding a new alertable
+  condition is a new `AlertMetric` constant plus a `metricValue`/
+  `seriesValueFor` case, not a new hard-coded alert path. The persisted
+  state machine means a hub restart mid-"pending" window doesn't lose
+  that window's progress or double-fire on restart. `Engine.Evaluate`'s
+  own doc comment is explicit that it does not itself provide
+  concurrency control beyond what `Store`'s implementation does for
+  individual reads/writes — callers (the hub's ingest path and its 30s
+  scheduler tick) are relied upon to call it serially; this is a
+  documented constraint, not an oversight, since typical hub load
+  naturally serializes through Go's goroutine scheduler.
+
+### D-067 — Egress alerts keep once-per-month dedupe by repurposing `alert_state`, deliberately bypassing the general state machine (2026-09-30)
+
+- **Context**: SPEC-v0.5 §B. The pre-v0.5 egress alert behavior (fire
+  once per host per month per threshold, never send a "resolved"
+  notification even if usage drops back under the threshold and crosses
+  it again the same month) needed to survive the move to a general rule
+  engine without becoming eligible to re-fire every time usage
+  fluctuates around a threshold within a month — which the general
+  pending/cooldown/resolved machinery would otherwise allow.
+- **Decision**: `egress_out_pct`/`egress_in_pct` rules are dispatched to
+  a separate `evaluateEgressRuleHost` path (`internal/alerting/egress.go`)
+  that never touches the pending/firing/resolved transition functions at
+  all. The same `alert_state` row is repurposed as a monthly dedupe
+  marker: `state = firing` plus `since` falling inside the current UTC
+  calendar month means "already notified this threshold this month" —
+  computed via `models.MonthBounds(models.MonthOf(now))` rather than a
+  separate table, since the existing per-(rule,host) row already has the
+  right shape and lifetime. `cooldown_sec` is ignored for these two
+  metrics, and a `notify_resolved`-configured rule never sends a resolved
+  notification for them, matching the literal pre-v0.5 behavior exactly.
+- **Consequences**: An egress rule and a cpu/memory/disk/load1/host_down
+  rule sharing the same `AlertRule`/`NotifyChannel` types and the same
+  `alert_state` table can still have fundamentally different lifecycle
+  semantics without a schema split — the metric alone decides which
+  evaluation path a rule takes (`isEgressMetric`). A hub upgrading from
+  v0.4.x via `0004_alerting.sql`'s seeded rules gets identical alerting
+  behavior to before with zero manual reconfiguration (see the seeded-
+  rule migration note in README's Alerting section).
+
+### D-068 — Chart images: std-lib-only PNG rendering with an embedded bitmap font, deterministic output (2026-09-30)
+
+- **Context**: SPEC-v0.5 §B asked for a rendered chart image attached to
+  alert notifications ("WITH VISUAL INFORMATION"), but the project's
+  no-new-third-party-Go-modules and CGO-free rules rule out any charting
+  or font-rendering library — those universally pull in either CGO
+  (font rasterizers) or a dependency tree the project has deliberately
+  kept at zero beyond `modernc.org/sqlite`.
+- **Decision**: `internal/alerting/chart` renders an 800×400 PNG using
+  only `image`/`image/png` (`image/color`, `image/draw` as needed) —
+  dark background, the metric's line over `max(duration_sec*3, 1h)` of
+  history, a dashed threshold line, a shaded breach-window band, axis
+  ticks, and a title, with all text drawn via a small hand-written 5×7
+  bitmap font (digits, A–Z, a–z, and the handful of punctuation
+  characters titles/axis labels need) rather than any font file or
+  system font dependency. `Render` is a pure function of its `Params`
+  (data points, thresholds, title, breach window) with no wall-clock or
+  other non-deterministic input, verified by a golden-hash test that
+  fails if any rendering change alters the output bytes for a fixed
+  input.
+- **Consequences**: Zero new dependencies, works identically on every
+  supported platform/architecture (no font-rendering library behaving
+  differently per OS), and is trivially unit-testable byte-for-byte. The
+  tradeoff is a fixed, small character set and a plainer visual style
+  than a real charting library would produce — acceptable since the
+  chart's job is "show the breach at a glance in a chat notification,"
+  not serve as the dashboard's primary chart (which uses the existing
+  vendored uPlot).
+
+### D-069 — Notify channels: a fixed official-host SSRF allowlist by default, `CP_NOTIFY_ALLOW_CUSTOM_ENDPOINTS` as an explicit, single, hub-wide test-only escape hatch (2026-09-30)
+
+- **Context**: SPEC-v0.5 §B. A notify channel's Discord/Telegram/
+  WhatsApp config is admin-supplied data (`webhook_url`, `bot_token`+
+  `chat_id`, `access_token`+`phone_number_id`) that the hub's own HTTP
+  client then dials with hub-level network access — if any of those
+  fields could be pointed at an arbitrary host, a compromised or
+  careless channel config becomes a way to make the hub issue
+  authenticated-looking HTTP requests to internal-network targets
+  (classic SSRF), a materially different risk than a user's browser
+  making the same mistake. Tests and CI, however, legitimately need to
+  point every sender at an `httptest` fake instead of the real platform.
+- **Decision**: `internal/notify/ssrf.go`'s `validateEndpointHost` is the
+  single choke point every sender's config validation and constructor
+  runs through: by default, the URL's scheme must be `https` and its
+  host must be in a small fixed allowlist per platform
+  (`discord.com`/`discordapp.com`, `api.telegram.org`,
+  `graph.facebook.com`); Telegram/WhatsApp's optional `api_base` config
+  override and the generic `webhook` channel type's `url` are the only
+  fields that can ever name a different host, and only when
+  `CP_NOTIFY_ALLOW_CUSTOM_ENDPOINTS=1` is set in the **hub process's own
+  environment** (not per-channel, not per-request) — a single env var a
+  real deployment should never set, read once via
+  `notify.AllowCustomEndpointsFromEnv` and threaded through as an
+  explicit `Option` rather than the package silently reading the
+  environment itself deep inside a sender constructor.
+- **Consequences**: A production hub with real Discord/Telegram/
+  WhatsApp credentials configured has no code path that lets a channel's
+  Config field redirect an outbound alert request anywhere other than
+  the named platform's real API — the only way to relax this is an
+  explicit, documented, hub-wide environment variable whose doc comment
+  and README entry both say "tests only." Tests pass
+  `WithAllowCustomEndpoints(true)` directly to `notify.New` rather than
+  mutating `os.Setenv` process-wide, keeping the env-var reading itself
+  to one call site (`cmd/hub`) and one narrow parsing function.
+
+### D-070 — Notify-channel secret redaction lives entirely at the API boundary; the Store always returns unredacted rows (2026-09-30)
+
+- **Context**: SPEC-v0.5 §B. A `NotifyChannel`'s `bot_token`/
+  `access_token`/`webhook_url` must never appear in an API response
+  (`GET`/`POST`/`PUT /api/v1/alerts/channels*`), but the alerting engine
+  itself needs the real, unredacted value to actually deliver a
+  notification, and a `PUT` that edits a channel's name without
+  re-entering its secret must not silently wipe that secret to `"***"`.
+- **Decision**: Redaction is a pure, one-way transform
+  (`NotifyChannel.Redacted()`, `internal/models/alerting.go`) applied by
+  every hub handler immediately before writing an HTTP response — never
+  by `Store`, which always returns the real values so the engine and the
+  handler's own "preserve on omit" logic both have what they need.
+  `SecretFields()` (keyed by `NotifyChannelType`) is the single source of
+  truth for which Config keys are secret for a given platform, consulted
+  by both `Redacted()` and `mergePreservedSecrets` (the handler-side
+  function that keeps a channel's stored secret when a `PUT` request
+  omits that field or sends back the literal `"***"` placeholder) — a
+  new channel type's secret fields are added in exactly one place
+  regardless of how many code paths read `Config`.
+- **Consequences**: There is exactly one place ( `models.NotifyChannel`)
+  that decides "is this Config key a secret," so a future channel type
+  cannot forget to redact a token because some handler reimplemented its
+  own redaction logic. The design intentionally does **not** encrypt
+  `Config` at rest (see the README's Security model note on this) —
+  redaction protects API responses, not the SQLite file itself, whose
+  confidentiality is a filesystem-permissions concern instead (D-005's
+  single-embedded-file design already made that tradeoff for every other
+  table).
+
+### D-071 — Inventory: agent-side Docker/Podman collection via a hand-rolled unix-socket HTTP client, `permission_denied` surfaced rather than requiring root (2026-09-30)
+
+- **Context**: SPEC-v0.5 §C. The user asked to show a host's running
+  Docker containers and listening ports; the project's CGO-free/no-new-
+  third-party-Go-modules rules preclude any Docker SDK dependency
+  (`docker/docker/client` pulls in a large dependency tree and isn't
+  needed for the handful of read-only endpoints this feature uses), and
+  the agent's existing unprivileged-by-design posture (D-0xx, agent runs
+  as a dedicated system user with no elevated capabilities) meant Docker
+  socket access couldn't simply be assumed.
+- **Decision**: `internal/agent/docker.go`'s `dockerClient` speaks the
+  Docker Engine API (v1.41+, Podman-compatible) directly over
+  `net/http` with a custom `DialContext` that dials a unix socket —
+  `GET /version` and `GET /containers/json?all=1` are the only two calls
+  ever made, no third-party client. `CP_DOCKER` (`auto` | `off` |
+  explicit socket path/URL) resolves to one of five `DockerStatus`
+  outcomes (`ok`, `unavailable`, `permission_denied`, `error`,
+  `unsupported`) rather than ever erroring the whole agent report — a
+  missing or inaccessible socket degrades gracefully, and
+  `permission_denied`'s error text names the exact installer flag
+  (`install-agent.sh --docker`) that resolves it. Enabling Docker
+  monitoring is opt-in via that flag (or the interactive installer
+  menu's explicit prompt), which adds the agent's system user to the
+  host's `docker` group via `usermod -aG docker` rather than running the
+  agent as root.
+- **Consequences**: An agent with no Docker/Podman installed, or one
+  whose operator never opted into `--docker`, reports every other metric
+  exactly as before — only the inventory's Docker section shows
+  `unavailable`/`permission_denied`. The `docker` group is documented,
+  repeatedly, as **root-equivalent host access** (the Docker Engine API
+  can bind-mount arbitrary host paths into a container) — this is a real
+  tradeoff the installer's help text, interactive prompt, and README all
+  state explicitly before an operator opts in, with rootless Podman
+  offered as the alternative that avoids the tradeoff entirely (a
+  rootless Podman socket's containers already run as the invoking
+  non-root user, so `CP_DOCKER=unix:///run/user/<uid>/podman/podman.sock`
+  gets equivalent visibility with no group-membership grant at all).
+
+### D-072 — Inventory reported opportunistically (60s cadence, changed-or-10-minutes), additive-only wire format for backward compatibility (2026-09-30)
+
+- **Context**: SPEC-v0.5 §C. Collecting listening ports and Docker
+  containers is meaningfully more expensive than a CPU/memory sample
+  (gopsutil's connection enumeration, a Docker API round trip), and
+  doesn't need the same 15-second freshness a metric sample does; the
+  feature also had to not break an old agent talking to a new hub or a
+  new agent talking to an old hub, per the project's existing D-048
+  additive-JSON-contract rule.
+- **Decision**: `internal/agent/inventory.go` collects independently of
+  the sample-collection interval, on its own 60-second cadence, and only
+  attaches the result to an `AgentReport` (as an optional, `omitempty`
+  `inventory` field) when it differs from the last-sent snapshot or 10
+  minutes have elapsed since the last send, whichever comes first — most
+  report cycles carry no inventory payload at all. `models.Inventory`
+  caps ports/containers at 1000/500 respectively (`MaxInventoryPorts`/
+  `MaxInventoryContainers`, declared in `internal/models` so both the
+  agent's collector and any future hub-side validation reference the
+  same numbers) rather than an unbounded list. The hub stores exactly one
+  row per host (`host_inventory(host_id PK, ...)`, no history table) —
+  the dashboard only ever needs the latest snapshot, not a time series.
+- **Consequences**: An old (pre-v0.5.0) hub simply ignores the unknown
+  `inventory` field on ingest (already-tested behavior per D-048); an
+  old agent talking to a new hub never sends the field at all, and
+  `GET /api/v1/hosts/{id}/inventory` correctly 404s with `no_inventory`
+  for such a host rather than guessing. `HostSummary.ContainersRunning`/
+  `ListeningPorts` are `*int` (not plain `int`) specifically so "never
+  collected" (nil, omitted from JSON) stays distinguishable from "zero
+  right now" (a real `0`) — a distinction the dashboard's host list
+  needs to decide whether to show a "no inventory yet" hint or a literal

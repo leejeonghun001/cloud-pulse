@@ -43,6 +43,17 @@ More screenshots: [host detail](docs/screenshots/host-detail.png) ·
   [Network settings](#network-settings).
 - **Cloud object storage monitoring**: Amazon S3 via CloudWatch, Cloudflare
   R2 via GraphQL Analytics, collected every 15 minutes by default.
+- **Alerting with chart images to Discord, Telegram, and WhatsApp**:
+  configurable rules (CPU/memory/disk/load average sustained above a
+  threshold for N minutes, outbound/inbound egress above X% of its
+  limit, host offline) fire through a persistent state machine
+  (ok → pending → firing → resolved) and deliver a rendered PNG chart
+  alongside the notification — see [Alerting](#alerting).
+- **Inventory: Docker containers + listening ports**: the agent reports
+  every TCP/UDP listening socket (with best-effort process name) and, on
+  hosts running Docker or Podman, every container's name, image, state,
+  health, and published ports — shown on each host's detail page. See
+  [Inventory](#inventory-docker-services--listening-ports).
 - **Single static binaries**, `CGO_ENABLED=0` always, no AWS SDK (hand-written
   SigV4), embedded SQLite (`modernc.org/sqlite`) with 15s/5m/1h rollups and
   automatic retention pruning.
@@ -351,7 +362,8 @@ track R2 egress bytes.
 | `CP_ALLOWED_CIDRS` | `100.64.0.0/10,fd7a:115c:a1e0::/48,127.0.0.0/8,::1/128` | Comma-separated CIDRs/IPs allowed to reach the hub; `*` disables the allowlist; overridden by a hub-side Network settings override once one is confirmed |
 | `CP_OFFLINE_AFTER` | `60s` | Host reported "down" after this long since last-seen |
 | `CP_CLOUD_INTERVAL` | `15m` (min `1m`) | Interval between S3/R2 collections |
-| `CP_ALERT_WEBHOOK_URL` | *(unset)* | Slack- or Discord-compatible webhook for egress alerts |
+| `CP_ALERT_WEBHOOK_URL` | *(unset)* | Slack- or Discord-compatible webhook for egress alerts; also used to seed a `"Default webhook"` notify channel on the v0.5.0 upgrade migration (see [Alerting](#alerting)) |
+| `CP_NOTIFY_ALLOW_CUSTOM_ENDPOINTS` | `0` (disabled) | `1` relaxes the SSRF guard on Discord/Telegram/WhatsApp notify channels, allowing a channel's `api_base`/`webhook_url` to point at any host instead of only the official one. **Only intended for tests/fakes** — set only in a sandboxed or test environment, never on a production hub with real credentials (see [Security notes](#security-model)) |
 | `CP_UPDATE_CHECK` | `true` | `false` disables all outbound checks against GitHub for a newer release (see [Update notifications](#update-notifications)) |
 | `CP_UPDATE_LATEST_URL` | *(unset)* | Override the "latest release" URL the hub polls, e.g. for a mirror or air-gapped release feed |
 | `CP_RELEASE_BASE_URL` | *(unset)* | Override the base URL `sudo cloud-pulse-hub update` downloads the binary + `checksums.txt` from (same semantics as the installers' `CP_RELEASE_BASE_URL`) |
@@ -448,6 +460,7 @@ recovers from.
 | `CP_NET_EXCLUDE` | `lo,lo0,docker*,veth*,br-*,virbr*,tailscale*,utun*,cni*,flannel*,cali*,kube*,vxlan*,tun*,wg*,zt*` | Comma-separated interface-name globs excluded from egress/network accounting |
 | `CP_TIME_SYNC` | `hub` | `hub\|local`; `hub` corrects sample timestamps to the hub's clock (see [Time synchronization](#time-synchronization)), `local` uses the agent's own clock unmodified |
 | `CP_SEND_JITTER` | `0s` | Max random delay between collecting and sending a sample, to spread simultaneous sends across a fleet; must be `<=` half of `CP_INTERVAL` |
+| `CP_DOCKER` | `auto` | `auto` (probe `/var/run/docker.sock` or `DOCKER_HOST`'s `unix://` path) \| `off` (disable Docker collection entirely) \| an explicit socket path/URL (e.g. a rootless Podman socket) — see [Inventory](#inventory-docker-services--listening-ports) |
 | `CP_LOG_LEVEL` | `info` | `debug\|info\|warn\|error` |
 | `CP_LOG_FORMAT` | `text` | `text\|json` |
 
@@ -877,6 +890,357 @@ service restart for every change:
   page — the agent unit is unaffected, since agents read network
   metrics from `/proc`, not netlink sockets.
 
+## Alerting
+
+Since v0.5.0, alerting is a configurable rule engine
+(`internal/alerting`) rather than the fixed egress-percentage-only
+behavior of earlier versions: any number of **rules** evaluate a
+**metric** against a **threshold**, optionally sustained for a
+**duration**, and notify one or more **channels** (Discord, Telegram,
+WhatsApp, or a generic webhook) with a rendered chart image attached.
+
+### Rule model
+
+An `AlertRule` (`internal/models/alerting.go`) has:
+
+- **Metric**: `cpu` | `memory` | `disk` | `load1` | `egress_out_pct` |
+  `egress_in_pct` | `host_down`.
+- **Scope**: a specific `host_id`, or `""` for "every host."
+- **Operator/threshold**: `>` or `>=` against the metric's own unit
+  (percent for cpu/memory/disk/egress; a raw load-average number for
+  `load1`; ignored for `host_down`).
+- **Duration** (`duration_sec`): the sustained window the condition must
+  hold for. `0` fires immediately on the first breaching sample. For
+  `host_down`, the effective offline threshold is `CP_OFFLINE_AFTER +
+  duration_sec` — a rule's own duration is *added on top of* the
+  existing offline-detection window, not a replacement for it.
+- **Cooldown** (`cooldown_sec`, default `3600`): the minimum time
+  between re-notifications while a rule keeps firing on the same host
+  ("still firing" reminders). `0` means notify once on firing and never
+  again until it resolves and re-fires.
+- **Notify resolved**: whether a resolved transition also sends a
+  notification.
+- **Channels**: the list of notify-channel IDs this rule delivers to.
+
+### Sustained-window semantics
+
+A rule with `duration_sec > 0` (for cpu/memory/disk/load1 — egress and
+host_down are evaluated differently, see below) only fires once **every
+raw sample** in `[now - duration_sec, now]` satisfies the condition,
+**and** that window is actually covered by history (the earliest sample
+returned must be at or before `now - duration_sec`, within a small
+tolerance for collection jitter). A host that started reporting less
+than `duration_sec` ago cannot fire a duration-gated rule on partial
+data — the window must be fully covered first. This is checked against
+the raw (un-rolled-up) sample tier via the same `QuerySeries` path the
+charts use, so the window's resolution matches the agent's actual report
+interval, not a rollup bucket.
+
+### State machine
+
+Each `(rule, host)` pair is tracked independently
+(`alert_state`, `PRIMARY KEY (rule_id, host_id)`), moving through:
+
+```
+ok → pending → firing → resolved → ok
+```
+
+- **ok → pending**: the condition is newly satisfied but hasn't yet been
+  sustained for `duration_sec`.
+- **pending → firing**: the condition has now held for the full
+  sustained window (or `duration_sec == 0`) — an `AlertEvent` row is
+  created and the initial notification is sent.
+- **firing → firing** ("still firing"): the condition remains satisfied
+  on a later evaluation; re-notifies only once `cooldown_sec` has
+  elapsed since the last notification, otherwise just refreshes the
+  tracked value silently.
+- **firing → resolved**: the condition is no longer satisfied. The
+  active `AlertEvent` is marked resolved; a notification is sent only if
+  `notify_resolved` is set on the rule.
+- **pending → ok**: the condition dropped before ever sustaining long
+  enough to fire — no event, no notification, silent.
+
+The engine (`internal/alerting.Engine.Evaluate`) runs after every agent
+report (for that host) and on a 30-second scheduler tick (covering
+`host_down` and cooldown/duration transitions that need to happen even
+without a fresh sample). `Preview` runs the same condition check
+read-only, against every current host, without touching persisted state
+— this is what the Settings UI's rule editor uses for its live "would
+fire now" preview.
+
+### Egress rules: once-per-month dedupe, not the general state machine
+
+`egress_out_pct`/`egress_in_pct` rules deliberately do **not** use the
+pending/cooldown/resolved machinery above. Per the pre-v0.5 egress-alert
+behavior they replace, each rule+host+calendar-month combination
+notifies **at most once**, regardless of `cooldown_sec` (ignored for
+egress metrics), and **never** sends a resolved notification even if
+`notify_resolved` is set — usage dropping back under a threshold and
+crossing it again in the *same* month does not re-fire; only a new UTC
+calendar month resets eligibility. This is implemented by repurposing
+the same `alert_state` row: `state = firing` + `since` inside the
+current month means "already notified this threshold this month."
+
+### Default rules on upgrade
+
+Migration `0004_alerting.sql` seeds three enabled `egress_out_pct` rules
+on every hub — new or upgrading from v0.4.x — replicating the old fixed
+80/95/100% outbound-egress behavior exactly:
+
+| Name | Threshold |
+|---|---|
+| Outbound traffic 80% (warning) | `>= 80` |
+| Outbound traffic 95% (critical) | `>= 95` |
+| Outbound traffic 100% (exceeded) | `>= 100` |
+
+If a webhook URL was already configured (`CP_ALERT_WEBHOOK_URL`, or a
+previously-set `alert_webhook_url` setting from the old `PUT
+/api/v1/settings/alerts` endpoint) at the time this migration runs, a
+`"Default webhook"` notify channel is created from it and attached to
+all three seeded rules automatically — an upgrading hub keeps alerting
+exactly as before with zero manual reconfiguration. If no webhook was
+configured, the three rules are still seeded (enabled, with no
+channels) so they show up ready to attach a channel to, rather than
+silently absent. The old `PUT /api/v1/settings/alerts` and `POST
+/api/v1/settings/alerts/test` endpoints keep working unmodified — they
+read/write the same `"Default webhook"` channel by name.
+
+### Chart images
+
+Every firing/resolved notification for a series-backed metric (cpu,
+memory, disk, load1 — egress and host_down have no queryable time
+series and correctly ship with no image) includes an 800×400 PNG chart
+(`internal/alerting/chart`, standard library `image/png` only, no font
+or charting dependency): a dark background, the metric's line over
+`max(duration_sec * 3, 1h)` of history, a dashed red threshold line, a
+shaded band over the breach window, axis ticks, and a title like
+`HOSTNAME · CPU 93.4% > 90% for 5m`. Text is rendered with a small
+embedded 5×7 bitmap font written in Go — there is no font file, system
+font dependency, or third-party rendering library involved. Rendering is
+deterministic (covered by a golden-hash test), so the same inputs always
+produce byte-identical PNG output.
+
+## Notification channels
+
+A **notify channel** (`NotifyChannel`) is a saved destination — Discord,
+Telegram, WhatsApp, or a generic webhook — that one or more alert rules
+can deliver to. Channels are managed via `GET/POST
+/api/v1/alerts/channels` and `PUT/DELETE /api/v1/alerts/channels/{id}`,
+or from the dashboard's Settings → Notifications page, which shows a
+step-by-step setup guide for the selected platform next to the channel
+form.
+
+Delivery is asynchronous: `internal/alerting.Engine` enqueues each
+channel's delivery onto a bounded worker queue (100 jobs) with a 20-
+second per-attempt timeout and up to 3 retries with backoff on `5xx` or
+`429` responses (honoring a platform's `Retry-After` header when
+present, e.g. Telegram's `parameters.retry_after` or Discord/Graph's
+`Retry-After` header). Every delivery attempt — success or failure, for
+every channel a firing rule targets — is recorded on the `AlertEvent`'s
+`deliveries` list, visible via `GET /api/v1/alerts/events`.
+
+### Discord
+
+**Setup**: Server Settings → Integrations → Webhooks → New Webhook →
+copy the Webhook URL.
+
+**Config**: `webhook_url` (secret) — must be `https://discord.com/...`
+or `https://discordapp.com/...`; any other host is rejected unless
+`CP_NOTIFY_ALLOW_CUSTOM_ENDPOINTS=1` (see
+[Security notes](#security-notes) below).
+
+**Delivery**: Discord's "Execute Webhook" endpoint, multipart/form-data
+— a `payload_json` field carrying an embed (title, description, color
+by severity, fields, timestamp, dashboard URL, and
+`image: {url: "attachment://chart.png"}` when a chart is attached) plus
+a `files[0]` part with the PNG bytes. A `429` response's `retry_after`
+is honored by the delivery worker's backoff.
+
+### Telegram
+
+**Setup**:
+1. Message [@BotFather](https://t.me/botfather) → `/newbot` → follow the
+   prompts → copy the bot token it gives you.
+2. Add the bot to the target chat/group/channel (or message it directly
+   for a private chat).
+3. Send any message to the chat, then open
+   `https://api.telegram.org/bot<TOKEN>/getUpdates` in a browser and
+   find `"chat":{"id": ...}` in the response — that number is the
+   `chat_id`. (The Settings UI's Telegram guide shows this URL
+   pre-filled with a copy button once a bot token is entered.)
+
+**Config**: `bot_token` (secret), `chat_id`, optional
+`message_thread_id` (for a specific topic in a forum-style group).
+
+**Delivery**: `sendPhoto` (multipart, `photo` file + `caption` ≤ 1024
+characters, `parse_mode=HTML`) when a chart is attached, else
+`sendMessage` (HTML). `<`, `>`, `&` in message text are escaped to
+`&lt;`/`&gt;`/`&amp;` before being sent as HTML. A `429` response's
+`parameters.retry_after` (or the `Retry-After` header as a fallback) is
+honored.
+
+### WhatsApp (Meta Cloud API)
+
+**Setup**:
+1. [Meta for Developers](https://developers.facebook.com) → create an
+   app → add the WhatsApp product → API Setup tab.
+2. Copy the temporary access token (or generate a permanent one via a
+   System User for production use) and the Phone Number ID.
+3. Add the recipient's phone number as an allowed tester number (while
+   using a temporary/test number) under API Setup → "To."
+4. **Recommended**: create and get Meta's approval for a message
+   template with an **image header** — this is what lets alerts be
+   delivered at any time (see the 24-hour window note below).
+
+**Config**: `access_token` (secret), `phone_number_id`, `to` (E.164
+digits only, no `+`/spaces/punctuation), optional `template_name`,
+`template_lang` (default `en_US`), `api_version` (default `v21.0`).
+
+**Delivery flow**: the chart PNG is always uploaded first (`POST
+/{phone_number_id}/media`, multipart) to get a media ID, then:
+
+- **If `template_name` is set**: sends an approved template message with
+  the uploaded image as the header and `[title, text]` as body
+  parameters. **Works at any time**, regardless of when the recipient
+  last messaged the business.
+- **If `template_name` is empty**: sends a plain `type: image` message
+  with a text caption. **Only deliverable inside WhatsApp's 24-hour
+  customer-service window** — i.e. only if the recipient has messaged
+  the business's WhatsApp number within the last 24 hours. Outside that
+  window, Meta's API rejects the send. For unattended alerting (the
+  common case — nobody is actively messaging the alert bot), configure
+  an approved template instead.
+
+### Webhook (generic)
+
+The pre-v0.5 behavior, still available as its own channel type for
+Slack-/Discord-compatible or custom receivers: a JSON POST with `text`,
+`content` (duplicate of `text`, for Slack/Discord payload-shape
+compatibility), `title`, `severity`, `fields`, `url`, and — only when the
+channel's `include_image` config is `"true"`/`"1"` — an
+`image_png_base64` field carrying the chart as base64-encoded PNG bytes.
+Requires `https://` unless custom endpoints are allowed (see below).
+
+### Manual verification checklist
+
+Automated tests use `httptest` fakes for every platform — nothing in the
+test suite or CI ever contacts a real Discord/Telegram/WhatsApp
+endpoint. Before relying on a channel in production, verify it manually:
+
+1. Create the channel in Settings → Notifications, filling in the
+   platform's guide fields exactly as shown.
+2. Click **Send test** (or `POST /api/v1/alerts/channels/{id}/test`) —
+   confirm the response shows `ok: true` and a real message (with a
+   generic sample chart) actually arrives in the target Discord
+   channel / Telegram chat / WhatsApp conversation.
+3. For WhatsApp specifically: test **both** with and without
+   `template_name` set, from a device that has *not* messaged the
+   business number in the last 24 hours — the non-template path should
+   fail outside the window (confirming the 24h-window caveat is real,
+   not just documented), while the template path should still succeed.
+4. Create a real low-effort rule (e.g. CPU `>= 0`, duration `0`) scoped
+   to a test host, confirm it fires within one report interval, that the
+   chart image renders correctly on the receiving platform, and that
+   `GET /api/v1/alerts/events` shows the delivery recorded with `ok:
+   true` for every attached channel. Delete the test rule afterward.
+5. Confirm a resolved notification arrives (if `notify_resolved` is set)
+   once the condition clears, and that egress rules do **not** re-fire
+   within the same calendar month after dropping and re-crossing a
+   threshold.
+
+## Inventory: Docker services + listening ports
+
+Every 60 seconds (independent of the sample-collection interval), the
+agent collects a snapshot of listening network sockets and, if Docker or
+Podman is available, running containers — attached to an `AgentReport`
+as an optional `inventory` field whenever it has changed or every 10
+minutes, whichever comes first (an old hub ignores the field entirely;
+an old agent simply never sends it — both directions degrade
+gracefully).
+
+### Listening ports
+
+Collected via gopsutil's `net.ConnectionsWithContext(ctx, "inet")`: every
+TCP socket in `LISTEN` state and every bound UDP socket, deduplicated by
+`(proto, ip, port)`, capped at 1000 entries. Each entry carries the
+owning process's PID and name **when the agent can resolve them** — since
+the agent runs **unprivileged** by design (see
+[Security model](#security-model)), it frequently cannot: a process
+owned by another user is invisible to `/proc/<pid>/...` lookups without
+elevated permissions, so `pid: 0`/`process: ""` for such a port is
+expected and not a bug. Running the agent as root (not recommended) or
+granting it `CAP_SYS_PTRACE` would resolve more process names, at the
+cost of the same privilege-escalation surface described in the Docker
+section below.
+
+### Docker / Podman containers
+
+Controlled by `CP_DOCKER` (default `auto`):
+
+- **`auto`**: probe `/var/run/docker.sock` (or `DOCKER_HOST`'s
+  `unix://` path, if set) using plain `net/http` over the unix socket —
+  no Docker SDK dependency. Calls `GET /version` and `GET
+  /containers/json?all=1` against Docker Engine API **v1.41+**, 5-second
+  timeout per request.
+- **`off`**: Docker collection is disabled outright; no socket is ever
+  touched.
+- **an explicit path or `unix://` URL**: use that socket instead of the
+  default — this is how a **rootless Podman** socket (typically
+  `unix:///run/user/<uid>/podman/podman.sock`) is monitored: Podman's
+  API is Docker Engine API-compatible, so no separate integration code
+  exists or is needed.
+
+Each container reports name, image, state, Docker's raw status text,
+a parsed health suffix (`healthy`/`unhealthy`/`starting`, when the
+container has a healthcheck), creation time, Compose project/service
+(from the `com.docker.compose.project`/`.service` labels, when set by
+`docker compose`), and published ports — capped at 500 containers.
+Listening ports that match a container's published port carry that
+container's short (12-character) ID, letting the dashboard link a raw
+port back to the container serving it.
+
+Collection degrades to one of these statuses instead of ever erroring
+the whole report:
+
+| Status | Meaning |
+|---|---|
+| `ok` | Reached the daemon and listed containers successfully |
+| `unavailable` | No socket found at the resolved path (Docker/Podman not installed, or `CP_DOCKER=off`) |
+| `permission_denied` | Socket exists but the agent's user can't open it (see below) |
+| `error` | Reached the socket but the daemon returned something else unexpected |
+| `unsupported` | `CP_DOCKER` names a transport this agent build doesn't implement yet (e.g. Windows `npipe://`) |
+
+### The `--docker` installer flag — and its root-equivalence caveat
+
+By default, a freshly installed agent runs as an unprivileged
+`cloud-pulse` system user with no group membership beyond its own —
+Docker collection will report `permission_denied` against the default
+socket (owned `root:docker`) even with `CP_DOCKER=auto`, since the agent
+user isn't in the `docker` group. `install-agent.sh --docker` (or the
+interactive menu's "Monitor Docker containers?" prompt) fixes this the
+same way any Docker-monitoring tool must: it adds the agent's system
+user to the host's `docker` group via `usermod -aG docker` and sets
+`CP_DOCKER=auto`.
+
+**This is a real, documented security tradeoff, not an oversight**:
+membership in the `docker` group is **root-equivalent** on the host —
+the Docker Engine API can mount arbitrary host paths into a container,
+so anything able to talk to the socket can trivially read/write any file
+on the host as root, run arbitrary commands, or escape to a root shell.
+The installer's `--docker` help text and the interactive menu's prompt
+both say this explicitly before an operator opts in. Weigh this against
+the alternative:
+
+- **Rootless Podman** (see above) doesn't have this problem — a
+  rootless Podman socket's containers run as the invoking non-root user,
+  so pointing `CP_DOCKER` at that socket path gets equivalent inventory
+  visibility without ever granting the agent root-equivalent access.
+- If you don't need container inventory on a given host, simply don't
+  pass `--docker` — the agent still reports listening ports (with
+  whatever process names it can resolve unprivileged) and everything
+  else exactly as before; only the Docker section of that host's
+  inventory reports `permission_denied` or `unavailable`.
+
 ## REST API
 
 
@@ -912,6 +1276,20 @@ assets) require signing in (session bearer token) or the optional
 | `POST /api/v1/settings/network/confirm` | Persist a pending network change | Admin |
 | `POST /api/v1/settings/network/revert` | Revert a pending network change immediately | Admin |
 | `DELETE /api/v1/settings/network` | Drop the hub-side network override, revert to env config | Admin |
+| `GET /api/v1/alerts/channels` | List notify channels, secrets redacted | Admin |
+| `POST /api/v1/alerts/channels` | Create a notify channel | Admin |
+| `PUT /api/v1/alerts/channels/{id}` | Update a notify channel (omitted/`"***"` secret fields preserve the stored value) | Admin |
+| `DELETE /api/v1/alerts/channels/{id}` | Delete a notify channel (does not cascade into rules' `channel_ids`) | Admin |
+| `POST /api/v1/alerts/channels/{id}/test` | Send a sample notification to a saved channel | Admin |
+| `POST /api/v1/alerts/channels/test` | Send a sample notification using an unsaved (draft) channel config | Admin |
+| `GET /api/v1/alerts/rules` | List alert rules | Admin |
+| `POST /api/v1/alerts/rules` | Create an alert rule | Admin |
+| `PUT /api/v1/alerts/rules/{id}` | Update an alert rule | Admin |
+| `DELETE /api/v1/alerts/rules/{id}` | Delete an alert rule and its persisted state-machine rows | Admin |
+| `POST /api/v1/alerts/rules/{id}/preview` | Report whether a rule is currently satisfied, per host, without altering state | Admin |
+| `GET /api/v1/alerts/events?state=&host=&limit=&before=` | Paginated firing/resolved alert event history | Session or API token |
+| `GET /api/v1/alerts/active` | Every currently-firing event (navbar bell) | Session or API token |
+| `GET /api/v1/hosts/{id}/inventory` | A host's most recently reported listening ports + Docker containers | Session or API token |
 | `GET /healthz` | Liveness check | None |
 | `GET /` and static assets | Embedded dashboard | None |
 
@@ -925,7 +1303,17 @@ release page for `latest_version`, `""` if unknown), and
 `update_command` (`"sudo cloud-pulse-hub update"`). `GET /api/v1/hosts`
 and `GET /api/v1/hosts/{id}` embed an optional `update` object per host
 (`available`, `latest`, `self_update`, `command`) computed the same way —
-see [Update notifications](#update-notifications).
+see [Update notifications](#update-notifications). Since v0.5.0 both
+also embed optional `containers_running`/`listening_ports` integers
+(omitted, not `0`, when the host has never reported an inventory
+snapshot at all — see [Inventory](#inventory-docker-services--listening-ports)).
+
+A validation failure on any `POST`/`PUT` alerting endpoint (channels or
+rules) responds `400` with `APIError.details` — a `field → message` map
+(e.g. `{"error":"validation failed","details":{"metric":"must be one
+of cpu, memory, disk, load1, egress_out_pct, egress_in_pct,
+host_down"}}`) — so the Settings UI can highlight the offending form
+field directly instead of showing only a generic error string.
 
 ## Security model
 
@@ -1006,6 +1394,60 @@ see [Update notifications](#update-notifications).
   only as `(set)`/`(not set)` or never at all (failed logins log the
   remote address only), including in `-check-config`
   output.
+- **Notify-channel secrets stored in the hub's SQLite database, not
+  separately encrypted**: a channel's `bot_token`/`access_token`/
+  `webhook_url` is persisted as plain JSON inside the `notify_channels`
+  table (same file as every other hub table, `cloud-pulse.db`) — there
+  is no separate secrets store or at-rest encryption layer, matching the
+  project's "one embedded SQLite file, no external dependency" design
+  (see [D-005](DECISIONS_LOG.md)). The database file's confidentiality
+  therefore rests entirely on **filesystem permissions**: `CP_DATA_DIR`
+  is created (if missing) with mode `0750`, and the systemd-installed
+  hub runs as the unprivileged `cloud-pulse` system user, so only that
+  user (and root) can read `cloud-pulse.db` on a stock install. A
+  `cloud-pulse-hub reset-password`/`reset-network` invocation run as
+  root restores the data directory owner's ownership on the DB file (and
+  any `-wal`/`-shm` sidecars) afterward for the same reason — see
+  [Sign-in and accounts](#sign-in-and-accounts). Anyone with read access
+  to the data directory (a root shell, a misconfigured backup, a copied
+  `data/` directory) can read every stored notify-channel secret in
+  plaintext; treat the data directory with the same care as `hub.env`.
+- **Secret redaction is applied only at the API boundary, never at
+  rest**: `NotifyChannel.Redacted()` (`internal/models/alerting.go`)
+  swaps every `Type.SecretFields()` value to `"***"` before a channel is
+  ever serialized into an HTTP response (`GET/POST/PUT
+  /api/v1/alerts/channels*`) — but the underlying `Store` methods
+  (`ListNotifyChannels`, `GetNotifyChannel`) always return the
+  *unredacted* row; every handler is responsible for calling
+  `.Redacted()` itself before writing a response. A `PUT` request that
+  omits a secret field, or sends back the literal string `"***"`, is
+  detected by `mergePreservedSecrets` and the previously stored value is
+  kept rather than being overwritten with the redaction placeholder
+  (`internal/hub/alertroutes.go`) — this is what lets the Settings UI's
+  edit form round-trip a channel without ever re-transmitting a secret
+  it can't see.
+- **SSRF guard on Discord/Telegram/WhatsApp notify channels**: by
+  default, each of these three senders validates its configured
+  endpoint against a **fixed allowlist of official hosts**
+  (`discord.com`/`discordapp.com`, `api.telegram.org`,
+  `graph.facebook.com`) and requires `https://`
+  (`internal/notify/ssrf.go`'s `validateEndpointHost`) — a channel
+  cannot be pointed at an arbitrary internal-network URL, which matters
+  because the hub's alert-delivery HTTP client runs with hub-level
+  network access, not the browser's. Telegram/WhatsApp additionally
+  accept a channel-config `api_base` override (for pointing at a
+  self-hosted Bot API relay or an enterprise Graph API gateway) but only
+  when `CP_NOTIFY_ALLOW_CUSTOM_ENDPOINTS=1` is set in the hub's own
+  environment — with it unset (the default), an `api_base` override is
+  rejected outright at channel-save time, and Discord has no override
+  field at all (its webhook URL already fully determines the endpoint).
+  The generic `webhook` channel type has no fixed-host allowlist (it is
+  explicitly user-configurable to point anywhere) but still requires
+  `https://` unless the same env var relaxes it. **This variable exists
+  for tests and CI fakes, not production use** — flipping it on a real
+  hub with real credentials configured removes the one guard preventing
+  a compromised or careless channel config from turning the hub into an
+  arbitrary internal HTTP client.
 
 ## Development
 
@@ -1021,14 +1463,20 @@ Conventions (Go style, error handling, Clean Architecture layering, shell
 script rules, commit format) are documented in
 [CODING_CONVENTIONS.md](CODING_CONVENTIONS.md). Design/architecture
 decisions and their rationale are in [DECISIONS_LOG.md](DECISIONS_LOG.md).
+Contributing (setup, the pre-commit hook, test conventions, how to add a
+notifier/metric/page, commit format) is documented in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 Other useful scripts:
 
 - `bash scripts/smoke.sh` — end-to-end hub+agent smoke test (real
-  binaries, real HTTP, real SQLite).
+  binaries, real HTTP, real SQLite; covers alerting/notify channels,
+  chart-image delivery, and the inventory endpoint alongside the pre-
+  v0.5.0 host/egress/bucket assertions).
 - `bash scripts/test-install.sh` — sandboxed install-script test suite
-  (67 assertions: checksum verification, injection/RCE regression tests,
-  upgrade/uninstall/purge, systemd unit validation).
+  (checksum verification, injection/RCE regression tests,
+  upgrade/uninstall/purge, systemd unit validation, incl. the
+  `--docker` flag's group-membership + unit-line assertions).
 - `python3 scripts/demo-seed.py --hub <url> --token <token> [--db <path>]` —
   seed a running hub with demo hosts and bucket stats for local UI
   development/screenshots.

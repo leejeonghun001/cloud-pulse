@@ -135,8 +135,82 @@ Dependency direction rules:
   short warm-up for rate calculations). Prefer synchronization primitives,
   fake clocks (`Now func() time.Time`), or `httptest` over `time.Sleep`
   polling loops.
+- **Test determinism — no timing-dependent tests.** A test must not rely
+  on wall-clock sleep granularity or a real timing race to pass:
+  - **Inject clocks, not `time.Now()`.** Any type whose behavior depends
+    on the current time (the alert engine's sustained-window/cooldown
+    checks, session TTLs, rate-limiter lockout windows) takes a `Clock
+    func() time.Time` (or equivalent) field defaulting to `time.Now`,
+    overridden by tests with a fixed or manually-advanced fake. See
+    `internal/alerting.Options.Clock`, `internal/hub/ratelimit.go`.
+  - **Sleep granularity is not portable.** `time.Sleep(1 * time.Millisecond)`
+    takes roughly 15.6ms on Windows (its default timer resolution) —
+    never assert on a sub-16ms sleep actually taking close to the
+    requested duration, and never use a short sleep as a substitute for
+    a real synchronization primitive or injected clock. Where a bounded
+    poll loop is unavoidable (waiting for a real goroutine/listener to
+    reach a state), poll against a real observable signal
+    (`net.Dial` succeeding, a channel receive) with a generous deadline,
+    not a fixed sleep duration — see `internal/listen/manager_test.go`.
+  - **A fixed-duration sleep tied to a production timing constant must
+    reference that constant, not repeat its value as a literal** —
+    otherwise the test silently desyncs if the constant is later tuned.
+  - **Never assert delivery-worker/goroutine completion via a sleep.**
+    Use a `Wait()`/`drain()`-style method that blocks until a bounded
+    queue has actually emptied (`internal/alerting.Engine.Wait`), or an
+    injected hook/channel signaling completion — not "sleep long enough
+    that it's probably done."
+  `ENFORCED BY: code review; CI's 4-OS matrix (windows-latest included)
+  surfaces a sleep-granularity assumption as a flaky failure`
 - **Use `net/http/httptest`** for HTTP handler and client tests instead of
-  binding real sockets where avoidable.
+  binding real sockets where avoidable. Every notifier
+  (`internal/notify`) and the alerting engine's delivery path are tested
+  exclusively against `httptest` fakes — no test may contact a real
+  Discord/Telegram/WhatsApp/webhook endpoint; see "Extension points"
+  below for the fake-server pattern the notify/inventory tests use.
+
+## Extension points
+
+Adding a new instance of an existing extensible concept should not
+require touching more than the files listed for that concept.
+
+- **New notifier / notify-channel type** (`internal/notify`): add the
+  `NotifyChannelType` constant and its `SecretFields()` entry in
+  `internal/models/alerting.go` (the single source of truth for which
+  Config keys are secret — see D-070), a `<platform>.go` implementing
+  `Sender` (constructor `new<Platform>Sender(ch models.NotifyChannel,
+  client *http.Client, opts clientOptions) (Sender, error)`, following
+  the existing discord/telegram/whatsapp/webhook shape: validate Config,
+  run any external URL through `validateEndpointHost`/the SSRF allowlist
+  in `ssrf.go` if the platform has an official fixed host, build the
+  platform's request shape in `Send`), a case in `New`'s type switch
+  (`new.go`), and a `<platform>_test.go` using `httptest.NewServer` to
+  assert the exact request shape (headers, multipart/JSON body,
+  429/Retry-After handling) — never a real network call. If the
+  Settings UI needs a step-by-step setup guide for it, add that under
+  `web/assets/js/pages/settings/` (see the existing per-platform guide
+  panels) — out of scope for a notify-only change if the UI update is
+  deferred to a separate commit.
+- **New alert metric** (`internal/alerting`): add the `AlertMetric`
+  constant in `internal/models/alerting.go`, a case in
+  `metricValue`/`seriesValueFor` (`evaluate.go`) resolving it from
+  either `HostSnapshot` directly (like `host_down`/egress) or a
+  `models.Series` column (like cpu/memory/disk/load1), and a case in
+  `validAlertMetrics` (`internal/hub/alertroutes.go`) so the API accepts
+  it. A metric backed by a real time series should just work with the
+  existing sustained-window logic and chart rendering
+  (`internal/alerting/chart.go`'s `isSeriesMetric`) without further
+  changes; a metric with no queryable series (like `host_down`) must be
+  added to that function's exclusion list so notifications correctly
+  ship with no chart image instead of erroring.
+- **New dashboard page** (`web/assets/js/pages/`): add
+  `pages/<name>.js` exporting a `render(container)` (or the existing
+  page-module shape — check a comparable existing page first, e.g.
+  `pages/hosts.js`), register its route in `main.js`'s router table,
+  and — if it needs pure formatting/computation logic — keep that logic
+  in a DOM-free helper (`format.js` or a new pure module) so it's
+  testable via `node --test` without a browser. See the JS conventions
+  above for the DOM-builder/CSP rules every page must follow.
 
 ## Error handling
 
@@ -326,6 +400,58 @@ Dependency direction rules:
   `role="progressbar"` + `aria-valuenow`/`aria-valuemin`/`aria-valuemax` on
   progress bars; visible keyboard focus states; text/background contrast
   meets WCAG AA; respect `prefers-reduced-motion` for any animation.
+
+## Python scripts (`scripts/*.py`)
+
+Used for dev/test tooling only (demo seeding, fake release/webhook
+servers for `smoke.sh`/`test-update.sh`) — never shipped in a release
+binary.
+
+- **PEP 8**, `python3 -m py_compile scripts/*.py` clean.
+  `ENFORCED BY: pre-commit (when python3 is on PATH), CI`
+- **Type hints everywhere** (`from __future__ import annotations` +
+  PEP 604 `X | Y` unions), module and function docstrings.
+- **`@dataclass` for plain data records** (e.g. a demo host's fixed
+  fields); `@staticmethod`/`@classmethod` only for methods that
+  genuinely don't need instance state — a method that reads/writes
+  `self` must be a plain instance method, not disguised as static.
+- **`argparse` for CLI entry points**, never hand-rolled `sys.argv`
+  parsing.
+- **No bare `except:`.** Catch the narrowest exception type the call can
+  actually raise (e.g. `except urllib.error.HTTPError` /
+  `except urllib.error.URLError`, not a blanket `except Exception`
+  unless re-raising or logging-and-continuing is genuinely correct for
+  every possible exception there).
+- **`pathlib.Path`** for any real filesystem path manipulation (joining,
+  suffix checks, existence checks) — a bare `str` is fine for values
+  that are only ever passed through unmodified (e.g. a SQLite connection
+  string handed to `sqlite3.connect`).
+- **`if __name__ == "__main__": sys.exit(main())`** guard in every
+  script with a CLI entry point.
+- **Unit tests** for pure logic (not the parts of a script that are
+  inherently I/O, like an `http.server` handler) live in
+  `scripts/tests/test_*.py`, run via `python3 -m unittest discover -s
+  scripts/tests` (standard library only, no `pytest`/third-party test
+  dependency) — matching the Go test suite's own stdlib-only convention.
+  `ENFORCED BY: pre-commit (when python3 is on PATH), CI`
+- A `Handler` class needing closure access to a `main()`-local variable
+  (e.g. an `http.server.BaseHTTPRequestHandler` subclass reading a
+  fixture directory or port chosen at runtime) may be defined locally
+  inside `main()` rather than at module scope — an accepted, documented
+  exception to PEP 8's usual module-level-class preference for a
+  single-purpose test-fixture script, not a pattern to reach for in
+  general-purpose code.
+
+## JavaScript syntax checking
+
+- **`node --check <file>` on every staged `.js` file** under
+  `web/assets/js/` — a fast syntax-only check that runs in the
+  pre-commit hook before `node --test` (which only CI runs, since it
+  executes the full test suite) would catch the same error.
+  `ENFORCED BY: pre-commit, CI (node --test also compiles every module)`
+- See the "Embedded frontend standards" section above for the full set
+  of JS rules (DOM-builder/CSP, vanilla ES modules, no CDN, pure-logic
+  testing via `node --test`).
 
 ## Shell scripts (installers)
 
