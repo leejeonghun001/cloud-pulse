@@ -790,7 +790,7 @@ test_hub_generate_and_rotate_ui_token() {
     echo "$out1" >&2
     return
   }
-  assert_contains "1st --generate-ui-token run prints the token once" "$out1" "Web UI token (enter it in the dashboard login"
+  assert_contains "1st --generate-ui-token run prints the token once" "$out1" "API token (optional, for scripts"
   local token1
   token1="$(grep '^CP_UI_TOKEN=' "$env_file" | cut -d= -f2)"
 
@@ -809,7 +809,7 @@ test_hub_generate_and_rotate_ui_token() {
   else
     fail "--generate-ui-token is idempotent (token unchanged on 2nd run) (was ${token1}, now ${token2})"
   fi
-  assert_contains "2nd --generate-ui-token run reports the token as unchanged" "$out2" "Web UI token: unchanged"
+  assert_contains "2nd --generate-ui-token run reports the token as unchanged" "$out2" "API token: unchanged"
 
   local out3_status=0
   out3="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$sandbox" \
@@ -826,11 +826,11 @@ test_hub_generate_and_rotate_ui_token() {
   else
     fail "--rotate-ui-token always generates a new token (unchanged: ${token3})"
   fi
-  assert_contains "--rotate-ui-token run prints the new token once" "$out3" "Web UI token (enter it in the dashboard login"
+  assert_contains "--rotate-ui-token run prints the new token once" "$out3" "API token (optional, for scripts"
 }
 
 test_hub_no_ui_token_prints_disabled_hint() {
-  echo "==> testing install-hub.sh prints 'Settings page: disabled' when no UI token is ever configured"
+  echo "==> testing install-hub.sh prints 'API token: not configured' when no UI token is ever configured"
   local sandbox="${TMP_ROOT}/sandbox-hub-no-ui-token"
   mkdir -p "$sandbox"
   local out
@@ -840,7 +840,7 @@ test_hub_no_ui_token_prints_disabled_hint() {
     echo "$out" >&2
     return
   }
-  assert_contains "install without a UI token prints the disabled hint" "$out" "Settings page: disabled"
+  assert_contains "install without a UI token prints the not-configured hint" "$out" "API token: not configured"
 }
 
 # ---------------------------------------------------------------------------
@@ -941,7 +941,7 @@ render_hub_fallback_standalone() {
   echo "LockPersonality=yes"
   echo "CapabilityBoundingSet="
   echo "AmbientCapabilities="
-  echo "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX"
+  echo "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK"
   echo
   echo "[Install]"
   echo "WantedBy=multi-user.target"
@@ -1007,10 +1007,9 @@ test_hub_menu_fresh_install() {
   local sandbox="${TMP_ROOT}/sandbox-hub-menu-fresh"
   mkdir -p "$sandbox"
   local log="${TMP_ROOT}/menu-hub-fresh.log"
-  # 1=Install, then Enter (default listen port), 'y' (enable Settings
-  # page), Enter (skip webhook URL).
+  # 1=Install, then Enter (default listen port), Enter (skip webhook URL).
   local status=0
-  run_in_pty 60 $'1\n\ny\n\n' "$log" \
+  run_in_pty 60 $'1\n\n\n' "$log" \
     "CP_RELEASE_BASE_URL=http://127.0.0.1:${SERVER_PORT} CP_INSTALL_ROOT=${sandbox} bash scripts/install-hub.sh" || status=$?
 
   assert_contains "menu shows 'not installed' status on a fresh sandbox" "$(cat "$log")" "Status: not installed"
@@ -1022,7 +1021,8 @@ test_hub_menu_fresh_install() {
   fi
   pass "hub menu fresh install ('1' + defaults) exited 0"
   assert_file_exists "menu fresh install wrote hub.env" "${sandbox}/etc/cloud-pulse/hub.env"
-  assert_contains "menu fresh install printed the UI token once" "$(cat "$log")" "Web UI token (enter it in the dashboard login"
+  assert_not_contains "menu fresh install does not prompt to enable the Settings page" "$(cat "$log")" "Enable the web Settings page"
+  assert_contains "menu fresh install prints the default sign-in credentials" "$(cat "$log")" "Sign in: admin / changeme"
 }
 
 test_hub_menu_install_when_already_installed() {
@@ -1066,9 +1066,9 @@ STUB
   } > "${sandbox}/etc/cloud-pulse/hub.env"
 
   local log="${TMP_ROOT}/menu-hub-reinstall-legacy.log"
-  # 2=Reinstall, y=Continue?, y=Enable the Settings page now?
+  # 2=Reinstall, y=Continue?
   local status=0
-  run_in_pty 60 $'2\ny\ny\n' "$log" \
+  run_in_pty 60 $'2\ny\n' "$log" \
     "CP_RELEASE_BASE_URL=http://127.0.0.1:${SERVER_PORT} CP_INSTALL_ROOT=${sandbox} bash scripts/install-hub.sh" || status=$?
   if [ "$status" -ne 0 ]; then
     fail "hub menu reinstall from legacy exited 0"
@@ -1077,8 +1077,9 @@ STUB
   fi
   pass "hub menu reinstall from legacy exited 0"
   assert_contains "menu reinstall prompts for current/target version" "$(cat "$log")" "Current version: v0.2.0"
-  assert_contains "menu reinstall prompts to enable the Settings page (no existing token)" "$(cat "$log")" "The web Settings page is disabled"
+  assert_not_contains "menu reinstall does not prompt to enable the Settings page" "$(cat "$log")" "The web Settings page is disabled"
   assert_contains "menu reinstall over legacy prints 'Downgraded v0.2.0 ->'" "$(cat "$log")" "Downgraded v0.2.0"
+  assert_contains "menu reinstall prints password-unchanged sign-in hint" "$(cat "$log")" "Sign in: admin (password unchanged)"
   # NOTE: CP_LISTEN/CP_ALLOWED_CIDRS are pre-existing v0.3.0 behavior:
   # write_env_file() always writes them from OPT_LISTEN/
   # OPT_ALLOWED_CIDRS (their flag defaults when unset), unlike
@@ -1262,7 +1263,7 @@ test_hub_reinstall_preserves_configuration() {
   assert_contains "hub same-version reinstall uses Reinstalled wording" "$out" "Reinstalled v0.0.0-test"
 
   log="${TMP_ROOT}/menu-hub-preserve.log"
-  run_in_pty 60 $'2\ny\ny\n' "$log" \
+  run_in_pty 60 $'2\ny\n' "$log" \
     "CP_RELEASE_BASE_URL=http://127.0.0.1:${SERVER_PORT} CP_INSTALL_ROOT=${sandbox} bash scripts/install-hub.sh" || status=$?
   if [ "$status" -ne 0 ]; then
     fail "hub menu reinstall preserves configuration"
@@ -1358,14 +1359,16 @@ test_reinstall_commented_managed_keys_are_stable() {
     env CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$agent_sandbox" \
     timeout 60 bash scripts/install-agent.sh --reinstall --yes
 
-  # Reinstall 2: real PTY menu. The hub's affirmative third answer enables
-  # CP_UI_TOKEN, which must replace its commented default in place.
-  run_in_pty 60 $'2\ny\ny\n' "$hub_log" \
+  # Reinstall 2: real PTY menu (2=Reinstall, y=Continue?). The
+  # web-Settings-page UI-token prompt was removed in v0.4.0 (SPEC-v0.4
+  # §3), so this only exercises the menu's confirm-and-reinstall path
+  # now; commented-default stability is asserted below regardless.
+  run_in_pty 60 $'2\ny\n' "$hub_log" \
     "CP_RELEASE_BASE_URL=http://127.0.0.1:${SERVER_PORT} CP_INSTALL_ROOT=${hub_sandbox} bash scripts/install-hub.sh" || status=$?
   if [ "$status" -eq 0 ]; then
-    pass "hub PTY-menu reinstall enables the UI token in place"
+    pass "hub PTY-menu reinstall preserves commented defaults"
   else
-    fail "hub PTY-menu reinstall enables the UI token in place"
+    fail "hub PTY-menu reinstall preserves commented defaults"
     cat "$hub_log" >&2 || true
   fi
   status=0
@@ -1392,7 +1395,6 @@ test_reinstall_commented_managed_keys_are_stable() {
   assert_managed_keys_once "agent after three reinstalls" "$agent_env" \
     CP_HUB_URL CP_AGENT_TOKEN CP_HOST_ID CP_INTERVAL CP_PROVIDER CP_EGRESS_LIMIT_GB \
     CP_NET_EXCLUDE CP_TIME_SYNC CP_SEND_JITTER CP_LOG_LEVEL CP_LOG_FORMAT
-  assert_file_contains "hub menu activation writes one active CP_UI_TOKEN" "$hub_env" "^CP_UI_TOKEN="
 
   cp "$hub_env" "$hub_snapshot"
   cp "$agent_env" "$agent_snapshot"

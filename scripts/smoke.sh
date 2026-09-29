@@ -531,6 +531,268 @@ fi
 FAKE_PID=""
 
 # ---------------------------------------------------------------------------
+# v0.4: dashboard auth (login/must-change/logout/rate limit) and
+# Network settings (interfaces/listeners, add-a-listener, lock-out) —
+# SPEC-v0.4 §1/§2/§5.
+# ---------------------------------------------------------------------------
+
+echo "==> v0.4 auth flow"
+
+# Fresh admin/changeme login must-change-gate 403 on a normal read
+# endpoint, then GET /auth/me still works (exempt path), then the
+# password change succeeds and yields a fresh, immediately-usable
+# session with must_change_password=false.
+LOGIN_JSON="$(curl -fsS -X POST -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"changeme"}' \
+  "${HUB_BASE_URL}/api/v1/auth/login")"
+echo "$LOGIN_JSON" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+assert doc.get('must_change_password') is True, f\"must_change_password {doc.get('must_change_password')!r} != True\"
+assert doc.get('username') == 'admin', f\"username {doc.get('username')!r} != 'admin'\"
+assert doc.get('token'), 'missing token'
+assert isinstance(doc.get('expires_at'), int) and doc['expires_at'] > 0, 'missing/invalid expires_at'
+"
+SESSION_TOKEN="$(echo "$LOGIN_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['token'])")"
+pass "POST /api/v1/auth/login admin/changeme -> 200, must_change_password=true"
+
+MUSTCHANGE_HOSTS_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
+  -H "Authorization: Bearer ${SESSION_TOKEN}" "${HUB_BASE_URL}/api/v1/hosts")"
+if [ "$MUSTCHANGE_HOSTS_STATUS" != "403" ]; then
+  fail "GET /api/v1/hosts with must-change session returned ${MUSTCHANGE_HOSTS_STATUS}, want 403"
+fi
+pass "GET /api/v1/hosts with must-change-pending session -> 403"
+
+MUSTCHANGE_ME_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
+  -H "Authorization: Bearer ${SESSION_TOKEN}" "${HUB_BASE_URL}/api/v1/auth/me")"
+if [ "$MUSTCHANGE_ME_STATUS" != "200" ]; then
+  fail "GET /api/v1/auth/me with must-change session returned ${MUSTCHANGE_ME_STATUS}, want 200 (exempt path)"
+fi
+pass "GET /api/v1/auth/me with must-change-pending session -> 200 (exempt path)"
+
+CHANGE_JSON="$(curl -fsS -X POST -H "Authorization: Bearer ${SESSION_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"current_password":"changeme","new_password":"smoke-new-password-1"}' \
+  "${HUB_BASE_URL}/api/v1/auth/password")"
+echo "$CHANGE_JSON" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+assert doc.get('must_change_password') is False, f\"must_change_password {doc.get('must_change_password')!r} != False\"
+assert doc.get('token'), 'missing token'
+"
+NEW_SESSION_TOKEN="$(echo "$CHANGE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['token'])")"
+pass "POST /api/v1/auth/password -> 200, fresh session, must_change_password=false"
+
+# The pre-change session must be revoked by the password change.
+OLD_SESSION_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
+  -H "Authorization: Bearer ${SESSION_TOKEN}" "${HUB_BASE_URL}/api/v1/auth/me")"
+if [ "$OLD_SESSION_STATUS" != "401" ]; then
+  fail "GET /api/v1/auth/me with pre-change session returned ${OLD_SESSION_STATUS}, want 401 (revoked)"
+fi
+pass "pre-change session revoked by password change -> 401"
+
+NEW_HOSTS_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
+  -H "Authorization: Bearer ${NEW_SESSION_TOKEN}" "${HUB_BASE_URL}/api/v1/hosts")"
+if [ "$NEW_HOSTS_STATUS" != "200" ]; then
+  fail "GET /api/v1/hosts with post-change session returned ${NEW_HOSTS_STATUS}, want 200"
+fi
+pass "GET /api/v1/hosts with post-change session -> 200"
+
+# CP_UI_TOKEN bearer still works as a full-access, never-must-change
+# static API token, unaffected by the dashboard's session-based auth.
+UI_TOKEN_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
+  -H "Authorization: Bearer ${UI_TOKEN}" "${HUB_BASE_URL}/api/v1/hosts")"
+if [ "$UI_TOKEN_STATUS" != "200" ]; then
+  fail "GET /api/v1/hosts with CP_UI_TOKEN bearer returned ${UI_TOKEN_STATUS}, want 200"
+fi
+UI_TOKEN_ME_JSON="$(curl -fsS -H "Authorization: Bearer ${UI_TOKEN}" "${HUB_BASE_URL}/api/v1/auth/me")"
+echo "$UI_TOKEN_ME_JSON" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+assert doc.get('auth_method') == 'api_token', f\"auth_method {doc.get('auth_method')!r} != 'api_token'\"
+assert doc.get('must_change_password') is False, f\"must_change_password {doc.get('must_change_password')!r} != False (api_token is never must-change-gated)\"
+"
+pass "CP_UI_TOKEN bearer -> 200, auth_method=api_token, never must-change-gated"
+
+# Logout deletes the current session.
+LOGOUT_JSON="$(curl -fsS -X POST -H "Authorization: Bearer ${NEW_SESSION_TOKEN}" \
+  "${HUB_BASE_URL}/api/v1/auth/logout")"
+case "$LOGOUT_JSON" in
+  *'"ok":true'*) ;;
+  *) fail "POST /api/v1/auth/logout body did not contain ok:true: ${LOGOUT_JSON}" ;;
+esac
+LOGGEDOUT_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
+  -H "Authorization: Bearer ${NEW_SESSION_TOKEN}" "${HUB_BASE_URL}/api/v1/auth/me")"
+if [ "$LOGGEDOUT_STATUS" != "401" ]; then
+  fail "GET /api/v1/auth/me after logout returned ${LOGGEDOUT_STATUS}, want 401"
+fi
+pass "POST /api/v1/auth/logout -> {ok:true}, session unusable afterward -> 401"
+
+# Wrong password x5 from the same client -> 6th attempt is rate-limited
+# (429, Retry-After header + retry_after_seconds field). Uses a
+# dedicated python3 http.client loop (not curl) so every attempt reuses
+# one TCP connection's local port deterministically is irrelevant here
+# since the limiter buckets by RemoteAddr HOST only — this is itself a
+# regression check that the limiter strips the ephemeral port rather
+# than keying on the full "ip:port" string (a bug that would make the
+# limiter a no-op against a real client whose OS picks a fresh source
+# port per connection, which curl always does).
+RATE_LIMIT_OUT="$(python3 -c "
+import json, urllib.request, urllib.error
+
+url = '${HUB_BASE_URL}/api/v1/auth/login'
+body = json.dumps({'username': 'admin', 'password': 'wrong-password'}).encode()
+codes = []
+last_body = ''
+for _ in range(6):
+    req = urllib.request.Request(url, data=body, headers={'Content-Type': 'application/json'}, method='POST')
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            codes.append(resp.status)
+            last_body = resp.read().decode()
+    except urllib.error.HTTPError as e:
+        codes.append(e.code)
+        last_body = e.read().decode()
+        last_headers = dict(e.headers)
+print(json.dumps({'codes': codes, 'last_body': last_body, 'retry_after_header': last_headers.get('Retry-After')}))
+")"
+echo "$RATE_LIMIT_OUT" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+codes = doc['codes']
+assert codes[:5] == [401]*5, f'first 5 attempts were {codes[:5]}, want five 401s'
+assert codes[5] == 429, f'6th attempt was {codes[5]}, want 429'
+last = json.loads(doc['last_body'])
+assert last.get('code') == 'rate_limited', f\"code {last.get('code')!r} != 'rate_limited'\"
+assert isinstance(last.get('retry_after_seconds'), int) and last['retry_after_seconds'] > 0, 'missing/invalid retry_after_seconds'
+assert doc.get('retry_after_header'), 'missing Retry-After header'
+"
+pass "5x wrong password then 6th attempt -> 429 rate_limited with Retry-After"
+
+echo "==> v0.4 network settings"
+
+# Re-authenticate (the smoke test's own client IP may now be locked out
+# of *failed* login attempts, but a *correct* login is a separate check
+# — recordFailure/recordSuccess are keyed the same way, and a correct
+# password during an active lockout is still rejected per spec, so wait
+# for the 1-minute base lockout to clear before continuing).
+NET_LOGIN_DEADLINE=$(( $(date +%s) + 90 ))
+NET_SESSION_TOKEN=""
+while [ "$(date +%s)" -lt "$NET_LOGIN_DEADLINE" ]; do
+  ATTEMPT_JSON="$(curl -s -X POST -H "Content-Type: application/json" \
+    -d '{"username":"admin","password":"smoke-new-password-1"}' \
+    "${HUB_BASE_URL}/api/v1/auth/login")"
+  NET_SESSION_TOKEN="$(echo "$ATTEMPT_JSON" | python3 -c "
+import json, sys
+try:
+    print(json.load(sys.stdin).get('token', ''))
+except Exception:
+    print('')
+")"
+  if [ -n "$NET_SESSION_TOKEN" ]; then
+    break
+  fi
+  sleep 2
+done
+if [ -z "$NET_SESSION_TOKEN" ]; then
+  fail "could not log in again after rate-limit test within 90s (lockout never cleared?)"
+fi
+pass "re-authenticated after rate-limit lockout cleared"
+
+NETWORK_GET_JSON="$(curl -fsS -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+  "${HUB_BASE_URL}/api/v1/settings/network")"
+echo "$NETWORK_GET_JSON" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+assert isinstance(doc.get('interfaces'), list) and len(doc['interfaces']) >= 1, f\"interfaces {doc.get('interfaces')!r} not a non-empty list\"
+names = {i['name'] for i in doc['interfaces']}
+assert 'lo' in names, f'loopback interface \"lo\" not found in {names}'
+lo = next(i for i in doc['interfaces'] if i['name'] == 'lo')
+assert lo['kind'] == 'loopback', f\"lo kind {lo['kind']!r} != 'loopback'\"
+assert isinstance(doc.get('listeners'), list) and len(doc['listeners']) >= 1, f\"listeners {doc.get('listeners')!r} not a non-empty list\"
+assert any(l['status'] == 'listening' for l in doc['listeners']), f\"no listener with status=listening in {doc['listeners']}\"
+assert doc.get('source') in ('hub', 'env'), f\"source {doc.get('source')!r} not 'hub' or 'env'\"
+assert 'client' in doc and doc['client'].get('ip'), 'missing client.ip'
+"
+pass "GET /api/v1/settings/network lists interfaces (incl. loopback) and listeners (>=1 listening)"
+
+# PUT adding a second listener (127.0.0.2, a bindable loopback alias on
+# Linux) alongside the existing one: the client (127.0.0.1) stays
+# served by the unchanged listener, so this persists immediately
+# (pending=null) rather than entering the pending-confirmation path.
+NETWORK_PUT_JSON="$(curl -s -X PUT -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"mode":"custom","addresses":["127.0.0.1","127.0.0.2"],"port":'"${SMOKE_PORT}"',"allowed_cidrs":["127.0.0.0/8","::1/128"]}' \
+  "${HUB_BASE_URL}/api/v1/settings/network")"
+echo "$NETWORK_PUT_JSON" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+assert doc.get('pending') is None, f\"pending {doc.get('pending')!r} is not null (client should still be served on 127.0.0.1)\"
+assert doc.get('source') == 'hub', f\"source {doc.get('source')!r} != 'hub' after a PUT\"
+addrs = set(doc['config']['addresses'])
+assert addrs == {'127.0.0.1', '127.0.0.2'}, f'config.addresses {addrs!r} != {{127.0.0.1, 127.0.0.2}}'
+statuses = {l['addr']: l['status'] for l in doc['listeners']}
+assert statuses.get('127.0.0.2:'+str(${SMOKE_PORT})) == 'listening', f'127.0.0.2 listener status: {statuses!r}'
+"
+pass "PUT /api/v1/settings/network adding 127.0.0.2 -> persists immediately, 127.0.0.2 listening"
+
+# The new listener must actually serve a request, not just report
+# "listening" in the status view.
+NEW_LISTENER_STATUS="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.2:${SMOKE_PORT}/healthz")"
+if [ "$NEW_LISTENER_STATUS" != "200" ]; then
+  fail "GET http://127.0.0.2:${SMOKE_PORT}/healthz returned ${NEW_LISTENER_STATUS}, want 200 (new listener not actually serving)"
+fi
+pass "GET http://127.0.0.2:${SMOKE_PORT}/healthz -> 200 (new listener actually serves requests)"
+
+# would_lock_out: an allowlist that excludes the requesting client's own
+# address must be rejected with 409, and must NOT be applied.
+LOCKOUT_STATUS="$(curl -s -o /dev/null -w '%{http_code}' -X PUT \
+  -H "Authorization: Bearer ${NET_SESSION_TOKEN}" -H "Content-Type: application/json" \
+  -d '{"mode":"custom","addresses":["127.0.0.1","127.0.0.2"],"port":'"${SMOKE_PORT}"',"allowed_cidrs":["203.0.113.0/24"]}' \
+  "${HUB_BASE_URL}/api/v1/settings/network")"
+if [ "$LOCKOUT_STATUS" != "409" ]; then
+  fail "PUT /api/v1/settings/network with a self-excluding allowlist returned ${LOCKOUT_STATUS}, want 409"
+fi
+pass "PUT /api/v1/settings/network with a self-excluding allowlist -> 409 would_lock_out"
+
+# Confirm the lock-out attempt was never applied: the original allowlist
+# ("127.0.0.0/8,::1/128") should still be in effect, i.e. this same
+# loopback client can still reach the API.
+STILL_ALLOWED_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
+  -H "Authorization: Bearer ${NET_SESSION_TOKEN}" "${HUB_BASE_URL}/api/v1/settings/network")"
+if [ "$STILL_ALLOWED_STATUS" != "200" ]; then
+  fail "GET /api/v1/settings/network after a rejected lock-out attempt returned ${STILL_ALLOWED_STATUS}, want 200 (allowlist must not have changed)"
+fi
+pass "rejected would_lock_out PUT left the allowlist unchanged (still reachable)"
+
+# Basic confirm/revert: DELETE drops the hub override back to the env
+# config (also exercises the same lock-out safety checks on a
+# non-PUT endpoint), which the still-loopback-allowed client can do
+# safely here.
+NETWORK_DELETE_JSON="$(curl -fsS -X DELETE -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+  "${HUB_BASE_URL}/api/v1/settings/network")"
+echo "$NETWORK_DELETE_JSON" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+assert doc.get('source') == 'env', f\"source {doc.get('source')!r} != 'env' after DELETE\"
+"
+pass "DELETE /api/v1/settings/network -> drops hub override, source=env"
+
+# No pending change exists at this point (the DELETE above didn't
+# create one): confirm/revert must both report 409 no_pending.
+NOPENDING_CONFIRM_STATUS="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer ${NET_SESSION_TOKEN}" "${HUB_BASE_URL}/api/v1/settings/network/confirm")"
+if [ "$NOPENDING_CONFIRM_STATUS" != "409" ]; then
+  fail "POST /api/v1/settings/network/confirm with no pending change returned ${NOPENDING_CONFIRM_STATUS}, want 409"
+fi
+NOPENDING_REVERT_STATUS="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer ${NET_SESSION_TOKEN}" "${HUB_BASE_URL}/api/v1/settings/network/revert")"
+if [ "$NOPENDING_REVERT_STATUS" != "409" ]; then
+  fail "POST /api/v1/settings/network/revert with no pending change returned ${NOPENDING_REVERT_STATUS}, want 409"
+fi
+pass "POST .../network/confirm and .../revert with no pending change -> both 409 no_pending"
+
+# ---------------------------------------------------------------------------
 # SIGTERM hub -> exits within 10s, DB file exists
 # ---------------------------------------------------------------------------
 

@@ -21,10 +21,15 @@
 #   --listen ADDR              Listen address (default: :8090).
 #   --allowed-cidrs LIST        Comma-separated CIDR allowlist (default:
 #                               tailscale + loopback, matches hub default).
-#   --ui-token TOKEN            Set CP_UI_TOKEN explicitly.
+#   --ui-token TOKEN            Set CP_UI_TOKEN explicitly. This is an
+#                               OPTIONAL static API bearer token for
+#                               scripts (e.g. curl against the REST API);
+#                               the dashboard itself always requires
+#                               signing in and never uses this token.
 #   --generate-ui-token         Generate a random CP_UI_TOKEN if none is
 #                               already set (idempotent; keeps an existing
-#                               token unchanged).
+#                               token unchanged). Optional; only needed for
+#                               scripted API access.
 #   --rotate-ui-token           Always generate a new CP_UI_TOKEN, even if
 #                               one already exists.
 #   --agent-token TOKEN         Set CP_AGENT_TOKEN explicitly.
@@ -1040,7 +1045,7 @@ render_unit_fallback() {
     echo "LockPersonality=yes"
     echo "CapabilityBoundingSet="
     echo "AmbientCapabilities="
-    echo "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX"
+    echo "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK"
     echo
     echo "[Install]"
     echo "WantedBy=multi-user.target"
@@ -1236,23 +1241,44 @@ print_summary() {
   fi
   echo
   print_version_hint
+  print_auth_summary
   print_ui_token_summary
   echo "Agent one-liner (token shown once here; also stored in ${ENV_FILE}):"
   echo "  curl -fsSL https://raw.githubusercontent.com/${CP_REPO}/main/scripts/install-agent.sh | sudo bash -s -- --hub-url http://${host}:${listen_port} --token ${RESOLVED_AGENT_TOKEN}"
   echo
+  echo "Note: network settings changed from the dashboard (Settings > Network) take precedence over CP_LISTEN in ${ENV_FILE}."
+  echo
 }
 
-# print_ui_token_summary — SPEC-v0.3.1 A: print the UI token exactly once
+# print_auth_summary — SPEC-v0.4 §3: the dashboard now always requires
+# signing in (there is no more "no CP_UI_TOKEN => open read API" mode),
+# so every install/reinstall summary tells the operator how to sign in.
+# A fresh install always bootstraps the single admin account with the
+# default password "changeme" and forces a password change on first
+# login; a reinstall never touches the existing password, so it prints
+# a reminder plus the recovery command instead.
+print_auth_summary() {
+  if [ "$IS_UPGRADE" -eq 1 ]; then
+    echo "Sign in: admin (password unchanged) — forgot it? sudo cloud-pulse-hub reset-password"
+  else
+    echo "Sign in: admin / changeme (you'll be asked to choose a new password)"
+  fi
+  echo
+}
+
+# print_ui_token_summary — SPEC-v0.4 §3: CP_UI_TOKEN is an OPTIONAL
+# static API bearer token for scripts (the dashboard itself no longer
+# uses it at all, see print_auth_summary above). Print it exactly once
 # if it was newly generated/rotated this run, "unchanged" if one already
-# existed and was kept, or a hint to enable it via Reinstall if none is
-# set at all.
+# existed and was kept, or a short note that no such token is configured
+# if none was ever requested.
 print_ui_token_summary() {
   if [ "$UI_TOKEN_WAS_GENERATED" -eq 1 ]; then
-    echo "Web UI token (enter it in the dashboard login; shown once, stored in ${ENV_FILE}): ${RESOLVED_UI_TOKEN}"
+    echo "API token (optional, for scripts; shown once, stored in ${ENV_FILE}): ${RESOLVED_UI_TOKEN}"
   elif [ -n "$RESOLVED_UI_TOKEN" ]; then
-    echo "Web UI token: unchanged (sudo grep CP_UI_TOKEN ${ENV_FILE})"
+    echo "API token: unchanged (sudo grep CP_UI_TOKEN ${ENV_FILE})"
   else
-    echo "Settings page: disabled (re-run the installer and choose Reinstall to enable it)"
+    echo "API token: not configured (optional; pass --generate-ui-token to create one for scripts)"
   fi
   echo
 }
@@ -1346,10 +1372,14 @@ service_status_text() {
 }
 
 # prompt_fresh_install_values — interactively collect the values a fresh
-# install needs (SPEC-v0.3.1 A "1) Install" prompts), applying the same
-# validate_env_value checks used for the equivalent flags. Only called
-# when OPT_ACTION=install (menu path or --install flag) and nothing is
-# installed yet.
+# install needs (SPEC-v0.4 §3 "1) Install" prompts: listen port and an
+# optional alert webhook URL only — the web Settings page's UI-token
+# prompts were removed once the dashboard gained its own admin/changeme
+# sign-in; CP_UI_TOKEN is now purely an optional static API token for
+# scripts, set via --generate-ui-token/--rotate-ui-token/--ui-token),
+# applying the same validate_env_value checks used for the equivalent
+# flags. Only called when OPT_ACTION=install (menu path or --install
+# flag) and nothing is installed yet.
 prompt_fresh_install_values() {
   local answer
 
@@ -1373,10 +1403,6 @@ prompt_fresh_install_values() {
     validate_env_value "$OPT_LISTEN" --listen
   fi
 
-  if confirm_tty "Enable the web Settings page (creates a UI token)?" 1; then
-    OPT_GENERATE_UI_TOKEN=1
-  fi
-
   prompt_tty "Alert webhook URL (optional, Enter to skip): "
   if ! read_line_tty answer; then
     err "unexpected EOF on /dev/tty"
@@ -1385,19 +1411,6 @@ prompt_fresh_install_values() {
   if [ -n "$answer" ]; then
     validate_env_value "$answer" --webhook-url
     OPT_WEBHOOK_URL="$answer"
-  fi
-}
-
-# prompt_reinstall_ui_token — SPEC-v0.3.1 A "2) Reinstall": if no
-# CP_UI_TOKEN is configured yet, ask whether to enable the Settings page
-# now, generating one idempotently (same semantics as
-# --generate-ui-token) if the user agrees.
-prompt_reinstall_ui_token() {
-  if [ -n "$(env_get_existing CP_UI_TOKEN)" ]; then
-    return
-  fi
-  if confirm_tty "The web Settings page is disabled (no UI token). Enable it now?" 1; then
-    OPT_GENERATE_UI_TOKEN=1
   fi
 }
 
@@ -1484,7 +1497,6 @@ menu_loop() {
           OPT_ACTION=""
           continue
         fi
-        prompt_reinstall_ui_token
         run_install_flow
         exit 0
         ;;
