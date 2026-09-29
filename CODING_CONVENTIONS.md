@@ -100,6 +100,19 @@ Dependency direction rules:
   does I/O.
 - **Every network call has a timeout** — either via context deadline or an
   `http.Client{Timeout: ...}`. No unbounded network calls.
+- **Outbound calls to GitHub (or any third-party release/update service)
+  must be optional and bounded.** A feature that phones out to GitHub
+  (release-check background loop, `update` subcommand) is gated by an env
+  var that fully disables it (`CP_UPDATE_CHECK=false` disables the hub's
+  background check entirely — no timer started, not just a fast no-op
+  per tick), and every individual request against it carries its own
+  timeout distinct from — and no longer than — the timeout on whatever
+  triggered it (`updateCheckTimeout` bounding a single background check,
+  `updateTimeout` bounding the whole `update` subcommand). A GitHub
+  outage or a slow/malicious mirror must never hang a background loop,
+  block hub startup, or leave the `update` subcommand running
+  indefinitely. See `internal/selfupdate` and
+  `internal/hub/updates.go`'s `runUpdateCheckLoop`.
 - **Agent time handling**: use the hub-corrected clock (`HubClock.Now()`,
   via the injected `timeSource`) for anything that becomes a *timestamp*
   leaving the process — a `Sample.Timestamp`, an aligned collection
@@ -388,3 +401,22 @@ docs(conventions): add errcheck justification example
   fakes satisfying the same interfaces it declares. This is the standard
   shape for testing any package that only depends on interfaces it
   defines itself.
+- **Subcommand pattern: dispatch before flag parsing or config
+  loading.** `cmd/hub/main.go` and `cmd/agent/main.go` both check
+  `os.Args[1]` for a known subcommand name (currently just `"update"`)
+  as the literal first statement in `main`, before `flag.Parse()` or
+  `config.LoadHub`/`LoadAgent` ever runs, and call `os.Exit` directly
+  with the subcommand's own return code (`os.Exit(runUpdate(os.Args[2:]))`).
+  The subcommand builds its own `flag.NewFlagSet(name,
+  flag.ContinueOnError)` rather than reusing the top-level `flag`
+  package's default flag set, so its flags never collide with or get
+  parsed alongside the binary's normal flags. This is what lets
+  `cloud-pulse-hub update`/`cloud-pulse-agent update` work on a
+  completely unconfigured install (no `CP_AGENT_TOKEN`/`CP_HUB_URL`
+  required) — config loading simply never happens on that path. A
+  subcommand's own logic lives in `cmd/*/<name>.go` (e.g.
+  `cmd/hub/update.go`) and returns a plain `int` exit code rather than
+  calling `os.Exit` itself, keeping `os.Exit` calls confined to
+  `cmd/*/main.go` per the non-negotiable rule above. Any future
+  subcommand follows the same shape: check `os.Args[1]` first, own
+  flag set, return an `int` for `main` to pass to `os.Exit`.

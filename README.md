@@ -212,6 +212,9 @@ track R2 egress bytes.
 | `CP_OFFLINE_AFTER` | `60s` | Host reported "down" after this long since last-seen |
 | `CP_CLOUD_INTERVAL` | `15m` (min `1m`) | Interval between S3/R2 collections |
 | `CP_ALERT_WEBHOOK_URL` | *(unset)* | Slack- or Discord-compatible webhook for egress alerts |
+| `CP_UPDATE_CHECK` | `true` | `false` disables all outbound checks against GitHub for a newer release (see [Update notifications](#update-notifications)) |
+| `CP_UPDATE_LATEST_URL` | *(unset)* | Override the "latest release" URL the hub polls, e.g. for a mirror or air-gapped release feed |
+| `CP_RELEASE_BASE_URL` | *(unset)* | Override the base URL `sudo cloud-pulse-hub update` downloads the binary + `checksums.txt` from (same semantics as the installers' `CP_RELEASE_BASE_URL`) |
 | `CP_LOG_LEVEL` | `info` | `debug\|info\|warn\|error` |
 | `CP_LOG_FORMAT` | `text` | `text\|json` |
 | `CP_S3_BUCKETS` | *(unset)* | `name[:region],...` |
@@ -234,6 +237,19 @@ both AWS key env vars are set. R2 collection is enabled only when both
 | `-check-config` | Load + validate config, print a secret-redacted summary, exit |
 | `-gen-token` | Print a random 32-byte hex token (for `CP_AGENT_TOKEN`/`CP_UI_TOKEN`) and exit |
 | `-version` | Print version info and exit |
+
+### Hub update subcommand (`cloud-pulse-hub update`)
+
+| Usage | Purpose |
+|---|---|
+| `cloud-pulse-hub update` | Update to the latest release and restart the service if active (v0.3.0+ binaries only) |
+| `cloud-pulse-hub update --check` | Check only; exit `10` if an update is available, `0` if already up to date |
+| `cloud-pulse-hub update --version vX.Y.Z` | Install an exact tag instead of latest (allows downgrade) |
+| `cloud-pulse-hub update --no-restart` | Install but skip the restart step |
+
+Exit codes: `0` success or already up to date, `10` (`--check` only) an
+update is available, `1` error. See
+[Upgrading](#upgrading) for full behavior and the legacy migration path.
 
 ### Agent environment variables (`CP_*`)
 
@@ -258,6 +274,21 @@ both AWS key env vars are set. R2 collection is enabled only when both
 | `-once` | Collect two samples 1s apart, print the second as JSON, exit (no hub config needed) |
 | `-print-host` | Print detected `HostInfo` as JSON and exit (requires hub config) |
 | `-version` | Print version info and exit |
+
+### Agent update subcommand (`cloud-pulse-agent update`)
+
+| Usage | Purpose |
+|---|---|
+| `cloud-pulse-agent update` | Update to the latest release and restart the service if active (v0.3.0+ binaries only) |
+| `cloud-pulse-agent update --check` | Check only; exit `10` if an update is available, `0` if already up to date |
+| `cloud-pulse-agent update --version vX.Y.Z` | Install an exact tag instead of latest (allows downgrade) |
+| `cloud-pulse-agent update --no-restart` | Install but skip the restart step |
+
+Same exit codes as the hub's `update` subcommand. `CP_UPDATE_LATEST_URL`
+and `CP_RELEASE_BASE_URL` (see the hub env table above) also override the
+agent binary's own `update` subcommand — both binaries read the same two
+variables via the shared `internal/selfupdate` package, so a mirror/
+air-gapped override only needs to be set once per environment.
 
 ## Egress accounting
 
@@ -348,6 +379,137 @@ single reference: **the hub's clock**.
 - Set `CP_TIME_SYNC=local` to disable hub-clock correction entirely and
   use each agent's own clock, matching v0.1 behavior.
 
+## Upgrading
+
+### v0.3.0 and later: the built-in `update` subcommand
+
+Both binaries ship a self-update subcommand, dispatched before any flag
+parsing or config loading, so it works even on an otherwise unconfigured
+install (no `CP_AGENT_TOKEN`/`CP_HUB_URL` required):
+
+```bash
+sudo cloud-pulse-hub update
+sudo cloud-pulse-agent update
+```
+
+Flags (identical on both binaries):
+
+| Flag | Effect |
+|---|---|
+| `--check` | Resolve the latest release and report whether an update is available, without downloading or installing anything |
+| `--version vX.Y.Z` | Install this exact tag instead of the latest release (allows downgrading) |
+| `--no-restart` | Install the new binary but skip the service-restart step |
+
+Exit codes: `0` success (or already up to date), `10` (`--check` only) an
+update is available, `1` error.
+
+What `update` does, in order:
+
+1. Resolves the latest release tag via GitHub's `.../releases/latest`
+   redirect (or `--version`'s explicit tag). No GitHub API calls, so no
+   rate limiting.
+2. Downloads the platform-matching asset and `checksums.txt` from
+   `.../releases/download/<tag>/...`, verifies the asset's sha256 against
+   the exact `checksums.txt` entry, and aborts with no change to the
+   running binary if it doesn't match.
+3. Runs the newly downloaded binary's own `-version` and requires the
+   target tag to appear in its output, catching a corrupted or
+   mismatched asset before it's ever installed.
+4. Atomically replaces the running binary (temp file staged in the same
+   directory, then renamed over the original — never a window where the
+   binary is missing or partially written).
+5. If running as root on Linux with `systemctl` available and a
+   `cloud-pulse-hub.service`/`cloud-pulse-agent.service` unit installed
+   and currently active, runs `systemctl restart` on it. If the unit
+   exists but is inactive, it's deliberately left stopped rather than
+   started. In every other case (not root, no systemd, `--no-restart`,
+   Windows/macOS/FreeBSD), it prints a reminder to restart manually —
+   the binary is still updated either way.
+
+Recommended order for a fleet: **upgrade the hub first, then agents**:
+
+```bash
+sudo cloud-pulse-hub update
+# on each agent host:
+sudo cloud-pulse-agent update
+```
+
+Old agents keep working against a new hub unmodified (see D-048 in
+[DECISIONS_LOG.md](DECISIONS_LOG.md)), so there's no requirement to
+upgrade every agent in lockstep — the dashboard will simply show them as
+outdated in the meantime.
+
+### Upgrading from v0.1.x / v0.2.x (no `update` subcommand yet)
+
+Versions before v0.3.0 don't have the `update` subcommand at all — an old
+binary given `update` as its first argument just ignores it and fails
+during normal config loading (`CP_AGENT_TOKEN is required`, etc.), since
+that dispatch didn't exist yet and can't be added retroactively to an
+already-installed binary.
+
+To move a v0.1.x/v0.2.x install onto v0.3.0+, run the same installer
+one-liner you used originally, once, with **no flags**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scripts/install-hub.sh \
+  | sudo bash
+curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scripts/install-agent.sh \
+  | sudo bash
+```
+
+This is the same idempotent re-run-to-upgrade path described in
+[Quick start](#quick-start): it downloads the current release, replaces
+the binary, and re-renders the systemd unit, while **preserving**
+`hub.env`/`agent.env` (tokens, settings, per-host data) untouched unless
+you pass an explicit flag to change one. The installer detects the
+previous version before replacing the binary and prints an
+`Upgraded vA → vB` line plus, the first time this crosses the v0.3.0
+boundary, "This install now includes the built-in updater." From that
+point on, `sudo cloud-pulse-hub update` / `sudo cloud-pulse-agent update`
+is all you need for future upgrades — no more re-running the installer.
+
+The dashboard's per-host update badge (see below) always shows the
+correct command for that specific agent — the legacy installer one-liner
+for an agent still below v0.3.0, or `sudo cloud-pulse-agent update` once
+it's past that line — so you don't have to track each host's version by
+hand. Same recommended order as above: hub first, then agents.
+
+### Update notifications
+
+- **Dashboard banner**: when the hub's `GET /api/v1/version` reports
+  `update_available: true`, every dashboard page shows a dismissible
+  banner with the `update_command` and a link to the release notes.
+  Dismissing a banner remembers that release tag, so it won't reappear
+  until a newer one is published.
+- **Per-agent badge**: each host card/detail page shows an "update
+  available" badge when that agent's own reported version is older than
+  the latest known release, with the exact command for that agent
+  (`sudo cloud-pulse-agent update` for v0.3.0+ agents, the legacy
+  installer one-liner for older ones).
+- **Disabling outbound checks**: set `CP_UPDATE_CHECK=false` on the hub
+  to stop it from ever contacting GitHub for release information — no
+  background check, `update_check_enabled: false` in the API response,
+  no banner, no per-agent badges. Useful for air-gapped or
+  privacy-sensitive deployments. This only affects the *background
+  notification* check; running `cloud-pulse-hub update`/
+  `cloud-pulse-agent update` by hand still works and still contacts
+  GitHub (or your configured mirror) on demand.
+- **Mirrors / air-gapped installs**: `CP_UPDATE_LATEST_URL` and
+  `CP_RELEASE_BASE_URL` redirect both the hub's background check and
+  both binaries' `update` subcommand to a mirror or internal release
+  feed instead of `github.com`. Set once per environment; both binaries
+  read the same two variables.
+- **Trust model**: updates are fetched over HTTPS and verified against a
+  sha256 checksum published in the same release's `checksums.txt` — this
+  proves the downloaded binary matches what GitHub is currently serving
+  for that tag, but it is **not a cryptographic signature**. Anyone who
+  can tamper with the release assets (or a compromised/malicious
+  `CP_RELEASE_BASE_URL` mirror) can tamper with both the binary and its
+  checksum together. This is the same trust boundary the install scripts
+  already have (see [D-026](DECISIONS_LOG.md)); `update` doesn't
+  introduce a weaker one, but it doesn't add package-signing-level
+  assurance either.
+
 ## Settings UI
 
 The dashboard's Settings page (`#/settings`) lets you reveal the agent
@@ -393,7 +555,7 @@ assets) require `Authorization: Bearer <CP_UI_TOKEN>` only when
 | `GET /api/v1/hosts/{id}/metrics?range=1h\|6h\|24h\|7d\|30d` | Time series for charts (default `1h`) | UI token (if set) |
 | `GET /api/v1/egress?month=YYYY-MM` | Per-host outbound + inbound egress usage for a month (default current) | UI token (if set) |
 | `GET /api/v1/buckets` | Latest S3/R2 stats, 24h history, collector status | UI token (if set) |
-| `GET /api/v1/version` | Build version/commit/date | UI token (if set) |
+| `GET /api/v1/version` | Build version/commit/date + self-update check status (see [Update notifications](#update-notifications)) | UI token (if set) |
 | `GET /api/v1/settings` | Hub config summary + per-host limits | Admin |
 | `GET /api/v1/settings/agent-token` | Reveal the agent token + a ready-to-run install command | Admin |
 | `PUT /api/v1/hosts/{id}/limits` | Set/clear a host's outbound/inbound limit overrides | Admin |
@@ -401,6 +563,18 @@ assets) require `Authorization: Bearer <CP_UI_TOKEN>` only when
 | `POST /api/v1/settings/alerts/test` | Send a test notification to the effective webhook URL | Admin |
 | `GET /healthz` | Liveness check | None |
 | `GET /` and static assets | Embedded dashboard | None |
+
+`GET /api/v1/version` fields: `version`/`commit`/`date` (existing build
+metadata), `latest_version` (latest release tag known to the hub, `""` if
+never checked or `CP_UPDATE_CHECK=false`), `update_available` (bool),
+`update_check_enabled` (reflects `CP_UPDATE_CHECK`), `checked_at`
+(unix seconds of the last check attempt, `0` if none yet), `check_error`
+(omitted unless the last check failed), `release_url` (the GitHub
+release page for `latest_version`, `""` if unknown), and
+`update_command` (`"sudo cloud-pulse-hub update"`). `GET /api/v1/hosts`
+and `GET /api/v1/hosts/{id}` embed an optional `update` object per host
+(`available`, `latest`, `self_update`, `command`) computed the same way —
+see [Update notifications](#update-notifications).
 
 ## Security model
 
