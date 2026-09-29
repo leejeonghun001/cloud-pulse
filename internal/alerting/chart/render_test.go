@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"image"
+	"image/draw"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -58,7 +61,7 @@ func TestRender_GoldenHash(t *testing.T) {
 	// regenerate the expected hash (run the test, copy the "got" value
 	// from the failure message) after visually confirming the new
 	// output still looks correct (see TestRender_WritesInspectablePNG).
-	const wantHash = "61b21cda4922547279126808ca84ac44443d62db8c9745e3af905bb7a8685dfb"
+	const wantHash = "7d3b8590c511e110deba64c1f3d6680c4829124e00b4ecb3ce5708bcdf1adb0d"
 
 	data, err := Render(fixedParams())
 	if err != nil {
@@ -153,9 +156,25 @@ func TestRender_WritesInspectablePNG(t *testing.T) {
 	t.Logf("wrote chart preview to %s (%d bytes) for manual visual review", path, len(data))
 }
 
+// hashOf returns the SHA-256 of the DECODED pixels of PNG data b (plus
+// its bounds), not of the encoded bytes: image/png's zlib output is not
+// stable across Go releases (CI's go1.25 and newer local toolchains
+// produce different, equally valid encodings), whereas the rendered
+// pixels are what Render guarantees to be deterministic. Non-PNG input
+// falls back to hashing the raw bytes.
 func hashOf(b []byte) string {
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
+	img, err := png.Decode(bytes.NewReader(b))
+	if err != nil {
+		sum := sha256.Sum256(b)
+		return hex.EncodeToString(sum[:])
+	}
+	bounds := img.Bounds()
+	rgba := image.NewRGBA(bounds)
+	draw.Draw(rgba, bounds, img, bounds.Min, draw.Src)
+	h := sha256.New()
+	_, _ = fmt.Fprintf(h, "%dx%d:", bounds.Dx(), bounds.Dy()) // hash.Hash writes never fail
+	_, _ = h.Write(rgba.Pix)                                  // hash.Hash writes never fail
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func TestRender_EmptyPointsIsDeterministic(t *testing.T) {

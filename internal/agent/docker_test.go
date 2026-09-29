@@ -55,7 +55,7 @@ func fakeDockerHandler(t *testing.T, version string, containers []dockerContaine
 }
 
 func TestDockerClient_Collect_OK(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "docker.sock")
+	sockPath := shortSocketPath(t, "docker.sock")
 	containers := []dockerContainerJSON{
 		{
 			ID:      "abcdef0123456789",
@@ -109,7 +109,7 @@ func TestDockerClient_Collect_SocketMissing(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("unix sockets are not exercised on windows")
 	}
-	sockPath := filepath.Join(t.TempDir(), "does-not-exist.sock")
+	sockPath := shortSocketPath(t, "does-not-exist.sock")
 	c := newDockerClient(sockPath)
 	info := c.collect(context.Background())
 	if info.Status != models.DockerStatusUnavailable {
@@ -125,7 +125,7 @@ func TestDockerClient_Collect_PermissionDenied(t *testing.T) {
 		t.Skip("running as root bypasses permission bits; EACCES mapping cannot be exercised")
 	}
 
-	sockPath := filepath.Join(t.TempDir(), "docker.sock")
+	sockPath := shortSocketPath(t, "docker.sock")
 	newFakeDockerServer(t, sockPath, fakeDockerHandler(t, "1.41", nil))
 
 	if err := os.Chmod(sockPath, 0o000); err != nil {
@@ -160,7 +160,7 @@ func TestDockerClient_Collect_UnsupportedTransport(t *testing.T) {
 }
 
 func TestDockerClient_Collect_UnixURLPrefix(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "docker.sock")
+	sockPath := shortSocketPath(t, "docker.sock")
 	newFakeDockerServer(t, sockPath, fakeDockerHandler(t, "1.41", nil))
 
 	c := newDockerClient("unix://" + sockPath)
@@ -171,7 +171,7 @@ func TestDockerClient_Collect_UnixURLPrefix(t *testing.T) {
 }
 
 func TestDockerClient_Collect_ContainerCap(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "docker.sock")
+	sockPath := shortSocketPath(t, "docker.sock")
 	var containers []dockerContainerJSON
 	for i := 0; i < models.MaxInventoryContainers+20; i++ {
 		containers = append(containers, dockerContainerJSON{ID: "id", Names: []string{"/c"}, State: "running"})
@@ -189,7 +189,7 @@ func TestDockerClient_Collect_ContainerCap(t *testing.T) {
 }
 
 func TestDockerClient_Collect_ServerErrorStatus(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "docker.sock")
+	sockPath := shortSocketPath(t, "docker.sock")
 	mux := http.NewServeMux()
 	mux.HandleFunc("/"+dockerAPIVersion+"/version", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -238,7 +238,7 @@ func TestContainerDisplayName(t *testing.T) {
 // socket, ensuring the Docker-published-port -> ListeningPort match
 // wiring end to end.
 func TestInventoryCollector_DockerIntegration(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "docker.sock")
+	sockPath := shortSocketPath(t, "docker.sock")
 	containers := []dockerContainerJSON{
 		{
 			ID:     "abcdef0123456789",
@@ -272,4 +272,27 @@ func TestInventoryCollector_DockerIntegration(t *testing.T) {
 	if inv.Ports[0].ContainerID != "abcdef012345" {
 		t.Errorf("ContainerID = %q, want %q", inv.Ports[0].ContainerID, "abcdef012345")
 	}
+}
+
+// shortSocketPath returns a unix-socket path in a fresh directory that
+// fits the platform's sun_path limit (104 bytes on macOS/BSD, 108 on
+// Linux). t.TempDir() and $TMPDIR can be arbitrarily long (macOS puts them
+// under /var/folders/...), so the directory is created directly under /tmp
+// on every Unix.
+func shortSocketPath(t *testing.T, name string) string {
+	t.Helper()
+	base := "/tmp"
+	if runtime.GOOS == "windows" {
+		base = ""
+	}
+	dir, err := os.MkdirTemp(base, "cpd")
+	if err != nil {
+		t.Fatalf("mkdir temp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) }) // best-effort test cleanup
+	path := filepath.Join(dir, name)
+	if len(path) >= 104 {
+		t.Fatalf("socket path %q is %d bytes, want < 104", path, len(path))
+	}
+	return path
 }
