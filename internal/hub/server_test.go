@@ -180,6 +180,9 @@ func TestStaticServing_FromMapFS(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "hello") {
 		t.Errorf("body = %q, want it to contain index.html content", rec.Body.String())
 	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-cache" {
+		t.Errorf("GET / Cache-Control = %q, want no-cache", got)
+	}
 
 	rec2 := doRequest(t, s.Handler(), http.MethodGet, "/app.js", "203.0.113.1:1234", "", nil)
 	if rec2.Code != http.StatusOK {
@@ -187,6 +190,9 @@ func TestStaticServing_FromMapFS(t *testing.T) {
 	}
 	if !strings.Contains(rec2.Body.String(), "console.log") {
 		t.Errorf("body = %q, want app.js content", rec2.Body.String())
+	}
+	if got := rec2.Header().Get("Cache-Control"); got != "no-cache" {
+		t.Errorf("GET /app.js Cache-Control = %q, want no-cache", got)
 	}
 }
 

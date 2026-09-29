@@ -49,6 +49,10 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, models.APIError{Error: "not found"})
 		return
 	}
+	// Embedded assets have neither modification times nor ETags. Require
+	// browsers to revalidate them so an upgraded hub immediately serves the
+	// replacement dashboard instead of a stale cached bundle.
+	w.Header().Set("Cache-Control", "no-cache")
 	http.FileServerFS(s.assets).ServeHTTP(w, r)
 }
 
