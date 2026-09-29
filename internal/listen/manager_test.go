@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 )
@@ -329,5 +330,84 @@ func TestClassifyBindError(t *testing.T) {
 	statuses := m.Status()
 	if len(statuses) != 1 || statuses[0].Status != "waiting" {
 		t.Fatalf("statuses = %+v, want waiting", statuses)
+	}
+}
+
+// stickyListener keeps Accept blocked after Close (so http.Server keeps
+// tracking it, like a Serve goroutine that has not returned yet) and makes
+// every Close after the first report net.ErrClosed.
+type stickyListener struct {
+	net.Listener
+	release     chan struct{}
+	releaseOnce sync.Once
+	mu          sync.Mutex
+	closed      bool
+}
+
+func (l *stickyListener) Accept() (net.Conn, error) {
+	<-l.release
+	return nil, net.ErrClosed
+}
+
+func (l *stickyListener) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		// http.Server.Shutdown's own close: let Serve return, as a real
+		// listener's Accept would after the first close.
+		l.releaseOnce.Do(func() { close(l.release) })
+		return &net.OpError{Op: "close", Net: "tcp", Err: net.ErrClosed}
+	}
+	l.closed = true
+	return l.Listener.Close()
+}
+
+// TestShutdown_AlreadyClosedListenerIsNotAnError reproduces the macOS CI
+// race: a listener removed by Apply is closed by closeAfterDelay while
+// http.Server still tracks it, so srv.Shutdown's own close reports
+// net.ErrClosed. That must not surface as a shutdown failure.
+// Not parallel: it swaps the package-level listenTCP hook.
+func TestShutdown_AlreadyClosedListenerIsNotAnError(t *testing.T) {
+	release := make(chan struct{})
+	var sticky *stickyListener
+	orig := listenTCP
+	listenTCP = func(addr string) (net.Listener, error) {
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return nil, err
+		}
+		sticky = &stickyListener{Listener: ln, release: release}
+		return sticky, nil
+	}
+	t.Cleanup(func() {
+		listenTCP = orig
+		if sticky != nil {
+			sticky.releaseOnce.Do(func() { close(release) })
+		}
+	})
+
+	m := NewManager(testServer(), testLogger())
+	statuses, err := m.Apply(context.Background(), []string{"127.0.0.1:0"})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(statuses) != 1 || statuses[0].Status != "listening" {
+		t.Fatalf("statuses = %+v, want one listening", statuses)
+	}
+	// Wait until Serve has started tracking the listener.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := net.Dial("tcp", sticky.Addr().String()); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := sticky.Close(); err != nil { // closeAfterDelay wins the race
+		t.Fatalf("first close: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := m.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown = %v, want nil", err)
 	}
 }

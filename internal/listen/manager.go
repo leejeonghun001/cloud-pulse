@@ -37,6 +37,10 @@ var RetryInterval = 5 * time.Second
 // a chance to flush before the connection's listener disappears.
 var closeDelay = 1 * time.Second
 
+// listenTCP opens a TCP listener; tests replace it to inject listener
+// behaviour (e.g. to reproduce close races deterministically).
+var listenTCP = func(addr string) (net.Listener, error) { return net.Listen("tcp", addr) }
+
 // entry tracks one desired address's listener (if bound) and status.
 type entry struct {
 	ln     net.Listener // nil while not listening
@@ -144,7 +148,7 @@ func (m *Manager) closeAfterDelay(addr string, e *entry) {
 // e.status are updated to "listening", on failure e.status is updated
 // to "waiting" or "error" per classifyBindError.
 func (m *Manager) bindLocked(addr string, e *entry) {
-	ln, err := net.Listen("tcp", addr)
+	ln, err := listenTCP(addr)
 	now := time.Now().Unix()
 	if err != nil {
 		status, msg := classifyBindError(err)
@@ -260,7 +264,11 @@ func (m *Manager) retryFailed() {
 func (m *Manager) Shutdown(ctx context.Context) error {
 	var shutdownErr error
 	if m.srv != nil {
-		if err := m.srv.Shutdown(ctx); err != nil {
+		// http.Server.Shutdown also closes every listener it is serving and
+		// reports the first close error; a listener already closed by
+		// closeAfterDelay (whose Serve goroutine has not untracked it yet)
+		// yields net.ErrClosed, which is not a shutdown failure.
+		if err := m.srv.Shutdown(ctx); err != nil && !errors.Is(err, net.ErrClosed) {
 			shutdownErr = fmt.Errorf("listen: shutdown: %w", err)
 		}
 	}
