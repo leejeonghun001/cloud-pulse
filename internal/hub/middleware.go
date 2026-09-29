@@ -24,13 +24,44 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
+// allowlistState wraps a CIDR allowlist so it can be stored in an
+// atomic.Pointer: a nil Prefixes field means "allow all" (the sentinel
+// used throughout this package), and this wrapper lets that be
+// distinguished from "no allowlistState has been stored yet" (the
+// atomic.Pointer itself being nil), which cidrAllowlist/allowedCIDRs
+// treat identically (both mean allow all) but which setAllowedCIDRs
+// needs to always overwrite regardless.
+type allowlistState struct {
+	prefixes []netip.Prefix
+}
+
+// allowedCIDRs returns the server's current CIDR allowlist: nil means
+// allow all. It reflects s.opts.AllowedCIDRs until setAllowedCIDRs is
+// called (by the network settings handlers), after which it reflects
+// the most recently applied value.
+func (s *Server) allowedCIDRs() []netip.Prefix {
+	if v := s.allowlist.Load(); v != nil {
+		return v.prefixes
+	}
+	return s.opts.AllowedCIDRs
+}
+
+// setAllowedCIDRs atomically replaces the server's CIDR allowlist. nil
+// means allow all. Called by the network settings handlers when an
+// admin changes the allowlist from the dashboard; safe to call
+// concurrently with in-flight requests evaluating cidrAllowlist.
+func (s *Server) setAllowedCIDRs(prefixes []netip.Prefix) {
+	s.allowlist.Store(&allowlistState{prefixes: prefixes})
+}
+
 // cidrAllowlist rejects requests whose remote address (from
 // http.Request.RemoteAddr only, never client-supplied headers) is not
-// covered by any prefix in s.opts.AllowedCIDRs. A nil AllowedCIDRs
-// allows every address.
+// covered by any prefix in the server's current allowlist (see
+// allowedCIDRs/setAllowedCIDRs). A nil allowlist allows every address.
 func (s *Server) cidrAllowlist(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.opts.AllowedCIDRs == nil {
+		allowed := s.allowedCIDRs()
+		if allowed == nil {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -48,14 +79,14 @@ func (s *Server) cidrAllowlist(next http.Handler) http.Handler {
 		}
 
 		addr := addrPort.Addr().Unmap()
-		allowed := false
-		for _, prefix := range s.opts.AllowedCIDRs {
+		ok := false
+		for _, prefix := range allowed {
 			if prefix.Contains(addr) {
-				allowed = true
+				ok = true
 				break
 			}
 		}
-		if !allowed {
+		if !ok {
 			writeJSON(w, http.StatusForbidden, models.APIError{Error: "forbidden"})
 			return
 		}

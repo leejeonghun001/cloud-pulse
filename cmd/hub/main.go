@@ -10,7 +10,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -25,6 +24,8 @@ import (
 	"github.com/leejeonghun001/cloud-pulse/internal/cloud"
 	"github.com/leejeonghun001/cloud-pulse/internal/config"
 	"github.com/leejeonghun001/cloud-pulse/internal/hub"
+	"github.com/leejeonghun001/cloud-pulse/internal/listen"
+	"github.com/leejeonghun001/cloud-pulse/internal/models"
 	"github.com/leejeonghun001/cloud-pulse/internal/selfupdate"
 	"github.com/leejeonghun001/cloud-pulse/internal/storage"
 	"github.com/leejeonghun001/cloud-pulse/internal/version"
@@ -35,11 +36,12 @@ import (
 // interfaces internal/hub depends on. These catch method-set drift
 // between packages at build time rather than at wiring runtime.
 var (
-	_ hub.Store           = (*storage.DB)(nil)
-	_ hub.BucketCollector = (*cloud.S3Collector)(nil)
-	_ hub.BucketCollector = (*cloud.R2Collector)(nil)
-	_ hub.Notifier        = hub.WebhookNotifier{}
-	_ hub.LatestResolver  = selfupdate.Source{}
+	_ hub.Store            = (*storage.DB)(nil)
+	_ hub.BucketCollector  = (*cloud.S3Collector)(nil)
+	_ hub.BucketCollector  = (*cloud.R2Collector)(nil)
+	_ hub.Notifier         = hub.WebhookNotifier{}
+	_ hub.LatestResolver   = selfupdate.Source{}
+	_ hub.ListenController = (*listen.Manager)(nil)
 )
 
 // httpClientTimeout bounds every HTTP call made by cloud collectors.
@@ -56,6 +58,12 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "systemd-unit" {
 		os.Exit(runSystemdUnit(os.Args[2:]))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "reset-password" {
+		os.Exit(runResetPassword(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "reset-network" {
+		os.Exit(runResetNetwork(os.Args[2:]))
+	}
 	os.Exit(run())
 }
 
@@ -71,6 +79,8 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "usage: cloud-pulse-hub [flags]")
 		fmt.Fprintln(os.Stderr, "       cloud-pulse-hub update [--check] [--version vX.Y.Z] [--no-restart]")
 		fmt.Fprintln(os.Stderr, "       cloud-pulse-hub systemd-unit <print|apply> [flags]")
+		fmt.Fprintln(os.Stderr, "       cloud-pulse-hub reset-password [--data-dir DIR] [--password-stdin]")
+		fmt.Fprintln(os.Stderr, "       cloud-pulse-hub reset-network [--data-dir DIR]")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -112,13 +122,13 @@ func runGenToken() int {
 
 // loadConfig loads hub configuration from the environment, applying
 // -listen/-data-dir flag overrides after env resolution.
-func loadConfig(listen, dataDir string) (config.Hub, error) {
+func loadConfig(listenFlag, dataDir string) (config.Hub, error) {
 	cfg, err := config.LoadHub(os.LookupEnv)
 	if err != nil {
 		return config.Hub{}, err
 	}
-	if listen != "" {
-		cfg.Listen = listen
+	if listenFlag != "" {
+		cfg.Listen = listenFlag
 	}
 	if dataDir != "" {
 		cfg.DataDir = dataDir
@@ -207,10 +217,19 @@ func runHub(cfg config.Hub) int {
 		updateSource = src
 	}
 
+	httpSrv := &http.Server{
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	listenMgr := listen.NewManager(httpSrv, logger)
+
 	srv := hub.New(hub.Options{
 		AgentToken:      cfg.AgentToken,
 		UIToken:         cfg.UIToken,
 		AllowedCIDRs:    cfg.AllowedCIDRs,
+		EnvListen:       cfg.Listen,
 		OfflineAfter:    cfg.OfflineAfter,
 		CloudInterval:   cfg.CloudInterval,
 		AlertWebhookURL: cfg.AlertWebhookURL,
@@ -218,17 +237,34 @@ func runHub(cfg config.Hub) int {
 		// (hub.WebhookNotifier with its own 10s-timeout client) is used
 		// for both env- and settings-sourced webhook URLs.
 		UpdateSource: updateSource,
+		Listener:     listenMgr,
 	}, store, collectors, nil, web.Assets(), logger)
+	httpSrv.Handler = srv.Handler()
+
+	if err := srv.EnsureDefaultCredentials(ctx); err != nil {
+		logger.Error("ensure default credentials failed", "error", err)
+		return 1
+	}
 
 	logStartupSummary(logger, cfg, collectors)
 
-	httpSrv := &http.Server{
-		Addr:              cfg.Listen,
-		Handler:           srv.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       120 * time.Second,
+	desiredAddrs, err := initialListenAddrs(ctx, srv)
+	if err != nil {
+		logger.Error("resolve initial listen addresses failed", "error", err)
+		return 1
+	}
+
+	statuses, err := listenMgr.Apply(ctx, desiredAddrs)
+	if err != nil {
+		logger.Error("open listeners failed", "error", err)
+		return 1
+	}
+	for _, st := range statuses {
+		logger.Info("listener status", "addr", st.Addr, "status", st.Status, "error", st.Error)
+	}
+	if allListenersErrored(statuses) {
+		logger.Error("every configured listener failed to bind; exiting")
+		return 1
 	}
 
 	bgCtx, stopBg := context.WithCancel(context.Background())
@@ -238,40 +274,55 @@ func runHub(cfg config.Hub) int {
 		srv.RunBackground(bgCtx)
 	}()
 
-	serveErr := make(chan error, 1)
+	retryDone := make(chan struct{})
 	go func() {
-		logger.Info("listening", "addr", cfg.Listen)
-		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serveErr <- err
-			return
-		}
-		serveErr <- nil
+		defer close(retryDone)
+		listenMgr.Run(bgCtx)
 	}()
 
-	select {
-	case <-ctx.Done():
-		logger.Info("shutdown signal received")
-	case err := <-serveErr:
-		if err != nil {
-			logger.Error("listen failed", "error", err)
-			stopBg()
-			<-bgDone
-			return 1
-		}
-	}
+	<-ctx.Done()
+	logger.Info("shutdown signal received")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+	if err := listenMgr.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed", "error", err)
 	}
 
 	stopBg()
 	<-bgDone
+	<-retryDone
 	srv.Wait()
 
 	logger.Info("shutdown complete")
 	return 0
+}
+
+// initialListenAddrs resolves the addresses the hub should listen on at
+// startup: the persisted "network_config" setting if the store already
+// has one (an admin changed it on a previous run), otherwise cfg.Listen
+// as parsed by config.ParseListen/FormatListen.
+func initialListenAddrs(ctx context.Context, srv *hub.Server) ([]string, error) {
+	networkCfg, err := srv.ResolveStartupNetworkConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("resolve startup network config: %w", err)
+	}
+	return config.FormatListen(networkCfg.Mode, networkCfg.Addresses, networkCfg.Port), nil
+}
+
+// allListenersErrored reports whether every status in statuses is
+// "error" (none "listening" or "waiting"), the startup-abort condition
+// per SPEC-v0.4 §2.
+func allListenersErrored(statuses []models.ListenerStatus) bool {
+	if len(statuses) == 0 {
+		return true
+	}
+	for _, st := range statuses {
+		if st.Status != "error" {
+			return false
+		}
+	}
+	return true
 }
 
 // buildCollectors constructs the enabled cloud bucket collectors from

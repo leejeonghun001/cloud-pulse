@@ -22,9 +22,16 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(&bytes.Buffer{}, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
+// testUIToken is the static CP_UI_TOKEN configured by testOptions for
+// every hub package test, so read/admin endpoints are reachable in
+// tests without a full login round trip (dashboard sign-in itself is
+// covered separately in authroutes_test.go).
+const testUIToken = "test-ui-token-1234567890"
+
 func testOptions() Options {
 	return Options{
 		AgentToken:    "test-agent-token-12345",
+		UIToken:       testUIToken,
 		OfflineAfter:  60 * time.Second,
 		CloudInterval: 15 * time.Minute,
 	}
@@ -106,7 +113,7 @@ func TestVersion_Endpoint(t *testing.T) {
 	store := newFakeStore()
 	s := newTestServer(t, testOptions(), store)
 
-	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/version", "203.0.113.1:1234", "", nil)
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/version", "203.0.113.1:1234", testUIToken, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}

@@ -99,6 +99,7 @@ func (s *Server) runPruneLoop(ctx context.Context) {
 			if err := s.store.Prune(ctx, now); err != nil {
 				s.logger.Error("scheduler: prune failed", "error", err)
 			}
+			s.limiter.cleanup()
 		}
 	}
 }

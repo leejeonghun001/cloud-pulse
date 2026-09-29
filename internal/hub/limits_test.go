@@ -37,7 +37,7 @@ func TestEffectiveLimits_HubOverrideAppliedInListHosts(t *testing.T) {
 	opts.Now = fixedNow(now)
 	s := newTestServer(t, opts, store)
 
-	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/hosts", "203.0.113.1:1234", "", nil)
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/hosts", "203.0.113.1:1234", opts.UIToken, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
@@ -80,7 +80,7 @@ func TestEffectiveLimits_HubOverrideAppliedInGetHost(t *testing.T) {
 	opts.Now = fixedNow(now)
 	s := newTestServer(t, opts, store)
 
-	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/hosts/host-lim2", "203.0.113.1:1234", "", nil)
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/hosts/host-lim2", "203.0.113.1:1234", opts.UIToken, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -115,7 +115,7 @@ func TestEffectiveLimits_HubOverrideAppliedInEgress(t *testing.T) {
 	opts.Now = fixedNow(now)
 	s := newTestServer(t, opts, store)
 
-	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/egress", "203.0.113.1:1234", "", nil)
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/egress", "203.0.113.1:1234", opts.UIToken, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}

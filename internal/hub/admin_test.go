@@ -42,7 +42,7 @@ func TestAdmin_AuthMatrix(t *testing.T) {
 		t.Run(rt.name, func(t *testing.T) {
 			t.Parallel()
 
-			t.Run("ui_token_unset_403_admin_disabled", func(t *testing.T) {
+			t.Run("ui_token_unset_401_unauthorized", func(t *testing.T) {
 				t.Parallel()
 				store := newFakeStore()
 				if rt.name == "put_host_limits" {
@@ -50,12 +50,33 @@ func TestAdmin_AuthMatrix(t *testing.T) {
 				}
 				s := newTestServer(t, adminTestOptions(""), store)
 				rec := doRequest(t, s.Handler(), rt.method, rt.path, "203.0.113.1:1234", "", rt.body)
-				if rec.Code != http.StatusForbidden {
-					t.Fatalf("status = %d, want 403 (body=%s)", rec.Code, rec.Body.String())
+				if rec.Code != http.StatusUnauthorized {
+					t.Fatalf("status = %d, want 401 (admin_disabled is removed per SPEC-v0.4 §1; body=%s)", rec.Code, rec.Body.String())
 				}
-				got := decodeJSON[models.APIError](t, rec.Body)
-				if got.Code != "admin_disabled" {
-					t.Errorf("code = %q, want admin_disabled", got.Code)
+			})
+
+			t.Run("ui_token_unset_valid_session_200", func(t *testing.T) {
+				t.Parallel()
+				store := newFakeStore()
+				if rt.name == "put_host_limits" {
+					mustUpsertHost(t, store, "host-x")
+				}
+				opts := adminTestOptions("")
+				if rt.name == "post_alerts_test" {
+					opts.AlertWebhookURL = "https://hooks.example.com/webhook"
+					s := New(opts, store, nil, &fakeNotifier{}, nil, testLogger())
+					token := loginAndGetToken(t, s, store, "session-password-1")
+					rec := doRequest(t, s.Handler(), rt.method, rt.path, "203.0.113.1:1234", token, rt.body)
+					if rec.Code != http.StatusOK {
+						t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+					}
+					return
+				}
+				s := newTestServer(t, opts, store)
+				token := loginAndGetToken(t, s, store, "session-password-1")
+				rec := doRequest(t, s.Handler(), rt.method, rt.path, "203.0.113.1:1234", token, rt.body)
+				if rec.Code != http.StatusOK {
+					t.Fatalf("status = %d, want 200 (a session works with no CP_UI_TOKEN configured; body=%s)", rec.Code, rec.Body.String())
 				}
 			})
 

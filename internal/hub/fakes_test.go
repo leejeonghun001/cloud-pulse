@@ -24,6 +24,7 @@ type fakeStore struct {
 	history  map[string][]models.BucketPoint
 	limits   map[string]models.HostLimits // key: hostID
 	settings map[string]string            // key: setting key
+	sessions map[string]models.Session    // key: IDHash
 
 	rollupErr   error
 	pruneErr    error
@@ -41,6 +42,7 @@ func newFakeStore() *fakeStore {
 		history:  make(map[string][]models.BucketPoint),
 		limits:   make(map[string]models.HostLimits),
 		settings: make(map[string]string),
+		sessions: make(map[string]models.Session),
 	}
 }
 
@@ -296,11 +298,91 @@ func (f *fakeStore) Rollup(_ context.Context, _ time.Time) error {
 	return f.rollupErr
 }
 
-func (f *fakeStore) Prune(_ context.Context, _ time.Time) error {
+func (f *fakeStore) Prune(_ context.Context, now time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pruneCalls++
+	cutoff := now.Unix()
+	for idHash, sess := range f.sessions {
+		if sess.ExpiresAt <= cutoff {
+			delete(f.sessions, idHash)
+		}
+	}
 	return f.pruneErr
+}
+
+func (f *fakeStore) CreateSession(_ context.Context, sess models.Session) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sessions[sess.IDHash] = sess
+	return nil
+}
+
+func (f *fakeStore) GetSession(_ context.Context, idHash string) (models.Session, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	sess, ok := f.sessions[idHash]
+	if !ok {
+		return models.Session{}, models.ErrNotFound
+	}
+	return sess, nil
+}
+
+func (f *fakeStore) TouchSession(_ context.Context, idHash string, lastSeen, expiresAt int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	sess, ok := f.sessions[idHash]
+	if !ok {
+		return models.ErrNotFound
+	}
+	sess.LastSeen = lastSeen
+	sess.ExpiresAt = expiresAt
+	f.sessions[idHash] = sess
+	return nil
+}
+
+func (f *fakeStore) DeleteSession(_ context.Context, idHash string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.sessions, idHash)
+	return nil
+}
+
+func (f *fakeStore) DeleteSessionsExcept(_ context.Context, keepIDHash string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	deleted := 0
+	for idHash := range f.sessions {
+		if idHash == keepIDHash {
+			continue
+		}
+		delete(f.sessions, idHash)
+		deleted++
+	}
+	return deleted, nil
+}
+
+func (f *fakeStore) ListSessions(_ context.Context) ([]models.Session, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]models.Session, 0, len(f.sessions))
+	for _, sess := range f.sessions {
+		out = append(out, sess)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].IDHash < out[j].IDHash })
+	return out, nil
+}
+
+func (f *fakeStore) PruneSessions(_ context.Context, now time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cutoff := now.Unix()
+	for idHash, sess := range f.sessions {
+		if sess.ExpiresAt <= cutoff {
+			delete(f.sessions, idHash)
+		}
+	}
+	return nil
 }
 
 func (f *fakeStore) Close() error { return nil }

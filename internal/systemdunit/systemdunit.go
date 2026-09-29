@@ -217,7 +217,12 @@ func renderAgent(p Params) string {
 
 // writeHardening writes the shared hub hardening block (identical text
 // to install-hub.sh's render_unit(), which has no explanatory comments
-// unlike the agent's).
+// unlike the agent's). RestrictAddressFamilies includes AF_NETLINK (in
+// addition to AF_INET/AF_INET6/AF_UNIX) — unlike the agent, the hub's
+// Network settings page calls net.Interfaces() (GET
+// /api/v1/settings/network), which requires an AF_NETLINK socket on
+// Linux to enumerate adapters; the agent has no such feature and keeps
+// its narrower RestrictAddressFamilies (see renderAgent).
 func writeHardening(b *strings.Builder) {
 	writeLine(b, "# --- sandboxing / hardening ---")
 	writeLine(b, "NoNewPrivileges=yes")
@@ -231,7 +236,7 @@ func writeHardening(b *strings.Builder) {
 	writeLine(b, "LockPersonality=yes")
 	writeLine(b, "CapabilityBoundingSet=")
 	writeLine(b, "AmbientCapabilities=")
-	writeLine(b, "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX")
+	writeLine(b, "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK")
 }
 
 // writeLine appends s followed by a newline, matching each `echo`

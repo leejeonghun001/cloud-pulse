@@ -117,6 +117,8 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, resp)
 
+	s.recordAgentConn(report.Host.ID, report.Host.Hostname, r)
+
 	if len(valid) > 0 {
 		s.afterIngest(report.Host, now)
 	}

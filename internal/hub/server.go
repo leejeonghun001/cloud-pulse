@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
@@ -78,6 +79,27 @@ type Store interface {
 	Rollup(ctx context.Context, now time.Time) error
 	// Prune deletes data past its retention window as of now.
 	Prune(ctx context.Context, now time.Time) error
+	// CreateSession persists a new dashboard login session.
+	CreateSession(ctx context.Context, sess models.Session) error
+	// GetSession returns the session identified by idHash (hex-encoded
+	// SHA-256 of the bearer token), or models.ErrNotFound.
+	GetSession(ctx context.Context, idHash string) (models.Session, error)
+	// TouchSession updates the session's LastSeen/ExpiresAt (sliding
+	// idle expiry). Implementations may no-op if called more than once
+	// per minute for the same session (throttled by the caller).
+	TouchSession(ctx context.Context, idHash string, lastSeen, expiresAt int64) error
+	// DeleteSession removes one session by idHash. Deleting a
+	// non-existent session is not an error.
+	DeleteSession(ctx context.Context, idHash string) error
+	// DeleteSessionsExcept removes every session except keepIDHash (an
+	// empty keepIDHash deletes all sessions), returning the number
+	// deleted.
+	DeleteSessionsExcept(ctx context.Context, keepIDHash string) (int, error)
+	// ListSessions returns every stored session.
+	ListSessions(ctx context.Context) ([]models.Session, error)
+	// PruneSessions deletes sessions whose ExpiresAt is at or before
+	// now.
+	PruneSessions(ctx context.Context, now time.Time) error
 	// Close releases any resources held by the store.
 	Close() error
 }
@@ -104,6 +126,19 @@ type Notifier interface {
 	Notify(ctx context.Context, title, message string) error
 }
 
+// ListenController is the subset of internal/listen.Manager's behavior
+// the hub depends on: applying a desired set of listen addresses and
+// reporting their current status. The network settings stage
+// implements it; nil in tests means network settings endpoints operate
+// without a real listener (a fake is injected instead).
+type ListenController interface {
+	// Apply reconciles the server's active listeners with addrs ("ip:port"
+	// or ":port" entries), returning each new listener's status.
+	Apply(ctx context.Context, addrs []string) ([]models.ListenerStatus, error)
+	// Status returns the current status of every active listener.
+	Status() []models.ListenerStatus
+}
+
 // Options configures a Server.
 type Options struct {
 	// AgentToken authenticates agent report ingestion.
@@ -114,6 +149,13 @@ type Options struct {
 	// AllowedCIDRs restricts client addresses permitted to reach the
 	// server. A nil slice allows all addresses.
 	AllowedCIDRs []netip.Prefix
+	// EnvListen is the original CP_LISTEN value (e.g. ":8090",
+	// "127.0.0.1:8090"), used to derive the "env" source
+	// models.NetworkConfig for GET /api/v1/settings/network and as the
+	// EnvListen field of models.NetworkState. Defaults to ":8090" when
+	// empty (Options{} used directly in tests that don't care about
+	// network settings).
+	EnvListen string
 	// OfflineAfter is the duration since a host's last-seen time after
 	// which it is reported as down.
 	OfflineAfter time.Duration
@@ -134,6 +176,11 @@ type Options struct {
 	// cmd/hub constructs selfupdate.SourceFromEnv(os.LookupEnv) here
 	// when CP_UPDATE_CHECK is true.
 	UpdateSource LatestResolver
+	// Listener manages the hub's actual HTTP listen addresses for the
+	// Network settings page (GET/PUT/DELETE /api/v1/settings/network).
+	// nil disables listener reconciliation (the network stage wires the
+	// real internal/listen.Manager in cmd/hub; tests inject a fake).
+	Listener ListenController
 	// Now returns the current time; nil defaults to time.Now.
 	Now func() time.Time
 }
@@ -143,6 +190,16 @@ func (o Options) now() time.Time {
 		return o.Now()
 	}
 	return time.Now()
+}
+
+// envListen returns o.EnvListen, defaulting to ":8090" (config.Hub's own
+// default for CP_LISTEN) when unset, so Options{} zero values used by
+// tests that don't set EnvListen still produce a parseable value.
+func (o Options) envListen() string {
+	if o.EnvListen == "" {
+		return ":8090"
+	}
+	return o.EnvListen
 }
 
 // notifierFor returns a Notifier for url using o.NotifierFor if set,
@@ -165,6 +222,29 @@ type Server struct {
 
 	mux *http.ServeMux
 
+	// allowlist holds the server's current CIDR allowlist as an
+	// *allowlistState, defaulting to opts.AllowedCIDRs until the network
+	// settings handlers call setAllowedCIDRs (see middleware.go). An
+	// atomic.Pointer allows cidrAllowlist to read it on every request
+	// without locking, and setAllowedCIDRs to swap it without blocking
+	// in-flight requests.
+	allowlist atomic.Pointer[allowlistState]
+
+	// agentConns tracks each agent's most recently observed local
+	// address, for the Network settings page.
+	agentConns *agentConnTracker
+
+	// networkMu guards networkPending (the in-progress network change
+	// awaiting confirmation, if any). See networkroutes.go.
+	networkMu      sync.Mutex
+	networkPending *pendingNetworkState
+	// netAfterFunc overrides the timer constructor used to schedule a
+	// pending network change's auto-revert; nil uses networkAfterFunc
+	// (time.AfterFunc). Only tests in this package set this, to use a
+	// fake/short-circuited timer instead of waiting on a real 120s
+	// deadline.
+	netAfterFunc afterFunc
+
 	alertWG sync.WaitGroup
 
 	statusMu sync.Mutex
@@ -179,6 +259,11 @@ type Server struct {
 	// in this package set these, via newTestServerWithUpdateTiming.
 	updateFirstDelay time.Duration
 	updateInterval   time.Duration
+
+	// limiter enforces per-IP and global login rate limiting plus the
+	// PBKDF2 concurrency semaphore for POST /api/v1/auth/login and
+	// /api/v1/auth/password (see SPEC-v0.4 §1, internal/hub/ratelimit.go).
+	limiter *rateLimiter
 }
 
 // New constructs a Server. collectors and notifier may be empty/nil.
@@ -193,6 +278,8 @@ func New(opts Options, store Store, collectors []BucketCollector, notifier Notif
 		assets:     assets,
 		logger:     logger,
 		status:     make(map[string]models.CollectorStatus, len(collectors)),
+		limiter:    newRateLimiter(opts.Now),
+		agentConns: newAgentConnTracker(),
 	}
 	for _, c := range collectors {
 		s.status[c.Name()] = models.CollectorStatus{Name: c.Name(), Enabled: true}
@@ -256,18 +343,21 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("POST /api/v1/agent/report", s.requireAgentToken(s.handleIngest))
 	mux.HandleFunc("GET /api/v1/agent/time", s.requireAgentToken(s.handleAgentTime))
 
-	mux.HandleFunc("GET /api/v1/hosts", s.requireUIToken(s.handleListHosts))
-	mux.HandleFunc("GET /api/v1/hosts/{id}", s.requireUIToken(s.handleGetHost))
-	mux.HandleFunc("GET /api/v1/hosts/{id}/metrics", s.requireUIToken(s.handleHostMetrics))
-	mux.HandleFunc("GET /api/v1/egress", s.requireUIToken(s.handleEgress))
-	mux.HandleFunc("GET /api/v1/buckets", s.requireUIToken(s.handleBuckets))
-	mux.HandleFunc("GET /api/v1/version", s.requireUIToken(s.handleVersion))
+	mux.HandleFunc("GET /api/v1/hosts", s.requireUser(s.handleListHosts))
+	mux.HandleFunc("GET /api/v1/hosts/{id}", s.requireUser(s.handleGetHost))
+	mux.HandleFunc("GET /api/v1/hosts/{id}/metrics", s.requireUser(s.handleHostMetrics))
+	mux.HandleFunc("GET /api/v1/egress", s.requireUser(s.handleEgress))
+	mux.HandleFunc("GET /api/v1/buckets", s.requireUser(s.handleBuckets))
+	mux.HandleFunc("GET /api/v1/version", s.requireUser(s.handleVersion))
 
 	mux.HandleFunc("GET /api/v1/settings", s.requireAdmin(s.handleGetSettings))
 	mux.HandleFunc("GET /api/v1/settings/agent-token", s.requireAdmin(s.handleGetAgentToken))
 	mux.HandleFunc("PUT /api/v1/hosts/{id}/limits", s.requireAdmin(s.handleSetHostLimits))
 	mux.HandleFunc("PUT /api/v1/settings/alerts", s.requireAdmin(s.handleSetAlertWebhook))
 	mux.HandleFunc("POST /api/v1/settings/alerts/test", s.requireAdmin(s.handleTestAlertWebhook))
+
+	s.registerAuthRoutes(mux)
+	s.registerNetworkRoutes(mux)
 
 	// No catch-all is registered for the bare pattern "/api/" or "/":
 	// doing so with no method restriction would make it match every

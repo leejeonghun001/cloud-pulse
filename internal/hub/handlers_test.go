@@ -249,7 +249,7 @@ func TestListHosts_SortedAndStatus(t *testing.T) {
 	opts.OfflineAfter = 60 * time.Second
 	s := newTestServer(t, opts, store)
 
-	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/hosts", "203.0.113.1:1234", "", nil)
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/hosts", "203.0.113.1:1234", opts.UIToken, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -282,7 +282,7 @@ func TestGetHost_NotFound(t *testing.T) {
 	store := newFakeStore()
 	s := newTestServer(t, testOptions(), store)
 
-	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/hosts/does-not-exist", "203.0.113.1:1234", "", nil)
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/hosts/does-not-exist", "203.0.113.1:1234", testUIToken, nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
 	}
@@ -304,7 +304,7 @@ func TestGetHost_Found(t *testing.T) {
 	opts.Now = fixedNow(now)
 	s := newTestServer(t, opts, store)
 
-	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/hosts/host-h", "203.0.113.1:1234", "", nil)
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/hosts/host-h", "203.0.113.1:1234", opts.UIToken, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -346,7 +346,7 @@ func TestHostMetrics_RangeValidation(t *testing.T) {
 			if tc.rangeParam != "" {
 				path += "?range=" + tc.rangeParam
 			}
-			rec := doRequest(t, s.Handler(), http.MethodGet, path, "203.0.113.1:1234", "", nil)
+			rec := doRequest(t, s.Handler(), http.MethodGet, path, "203.0.113.1:1234", opts.UIToken, nil)
 			if rec.Code != tc.wantStatus {
 				t.Fatalf("status = %d, want %d (body=%s)", rec.Code, tc.wantStatus, rec.Body.String())
 			}
@@ -359,7 +359,7 @@ func TestHostMetrics_UnknownHost404(t *testing.T) {
 	store := newFakeStore()
 	s := newTestServer(t, testOptions(), store)
 
-	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/hosts/nope/metrics", "203.0.113.1:1234", "", nil)
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/hosts/nope/metrics", "203.0.113.1:1234", testUIToken, nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
 	}
@@ -378,7 +378,7 @@ func TestEgress_DefaultsToCurrentMonth(t *testing.T) {
 	opts.Now = fixedNow(now)
 	s := newTestServer(t, opts, store)
 
-	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/egress", "203.0.113.1:1234", "", nil)
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/egress", "203.0.113.1:1234", opts.UIToken, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -402,7 +402,7 @@ func TestEgress_BadMonth400(t *testing.T) {
 	store := newFakeStore()
 	s := newTestServer(t, testOptions(), store)
 
-	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/egress?month=not-a-month", "203.0.113.1:1234", "", nil)
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/egress?month=not-a-month", "203.0.113.1:1234", testUIToken, nil)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}
@@ -413,7 +413,7 @@ func TestBuckets_EmptyListsNotNull(t *testing.T) {
 	store := newFakeStore()
 	s := newTestServer(t, testOptions(), store)
 
-	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/buckets", "203.0.113.1:1234", "", nil)
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/buckets", "203.0.113.1:1234", testUIToken, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -440,7 +440,7 @@ func TestBuckets_WithData(t *testing.T) {
 	opts.Now = fixedNow(now)
 	s := newTestServer(t, opts, store)
 
-	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/buckets", "203.0.113.1:1234", "", nil)
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/buckets", "203.0.113.1:1234", opts.UIToken, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -493,15 +493,24 @@ func TestUIToken_EnforcedWhenSet(t *testing.T) {
 	})
 }
 
-func TestUIToken_NotEnforcedWhenUnset(t *testing.T) {
+func TestUIToken_UnsetMeansNoStaticTokenBypass(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
-	opts := testOptions() // UIToken left empty
+	opts := testOptions()
+	opts.UIToken = "" // no static API token configured
 	s := newTestServer(t, opts, store)
 
+	// No bearer token at all: unauthenticated.
 	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/hosts", "203.0.113.1:1234", "", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (dashboard always requires sign-in per SPEC-v0.4 §1)", rec.Code)
+	}
+
+	// A valid session still works even with no static UIToken configured.
+	token := loginAndGetToken(t, s, store, "correct-password-1")
+	rec2 := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/hosts", "203.0.113.1:1234", token, nil)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 with a valid session (body=%s)", rec2.Code, rec2.Body.String())
 	}
 }
 
