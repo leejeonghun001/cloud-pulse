@@ -12,6 +12,16 @@ import (
 // scripts instead.
 const SelfUpdateSince = "v0.3.0"
 
+// UnitManagedSince is the first released version whose binaries include
+// the `systemd-unit` subcommand (see SPEC-v0.3.1 section B) and whose
+// `update` subcommand's default PostUpdate hook is therefore safe to
+// invoke: a release at or after this tag is guaranteed to have
+// `systemd-unit apply` available, so updating *to* a tag >= this value
+// may run it as part of `update`. Updating to a tag older than this
+// (an explicit downgrade via `--version`) never attempts it, since the
+// binary being installed wouldn't have the subcommand.
+const UnitManagedSince = "v0.3.1"
+
 // maxVersionNumber caps the numeric value accepted for a major/minor/patch
 // component. It is well below the int32 range (~2.147e9) so that parsing a
 // tag with an absurdly large numeric component can never overflow int on a

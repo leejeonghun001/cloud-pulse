@@ -159,9 +159,18 @@ func buildVersionInfo(updateCheckEnabled bool, st updateStatus) models.VersionIn
 }
 
 // legacyInstallCommand is the install-agent.sh one-liner printed for
-// hosts running an agent older than version.SelfUpdateSince on linux;
-// re-running it with no flags preserves the existing agent.env.
-const legacyInstallCommand = "curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scripts/install-agent.sh | sudo bash"
+// hosts running an agent older than version.SelfUpdateSince on linux.
+// It passes `-s -- --reinstall` so the piped script takes the explicit
+// Reinstall action (SPEC-v0.3.1 section A) rather than falling into its
+// argument-less "auto" behavior: --reinstall requires an existing
+// install, re-downloads the latest release, re-renders the systemd
+// unit via the new binary's own `systemd-unit print` (see
+// internal/systemdunit), and preserves every existing agent.env value
+// (tokens, settings) — the correct one-shot migration path for a
+// v0.1.x/v0.2.x/v0.3.0 agent onto v0.3.1+, after which
+// `sudo cloud-pulse-agent update` alone is sufficient for every future
+// upgrade (binary and unit changes both).
+const legacyInstallCommand = "curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scripts/install-agent.sh | sudo bash -s -- --reinstall"
 
 // decideAgentUpdate computes the AgentUpdate for one host, given its
 // reported agent version, the hub's own build version (used as a

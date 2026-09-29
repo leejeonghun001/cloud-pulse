@@ -23,6 +23,10 @@ const verifyTimeout = 10 * time.Second
 // "systemctl restart <unit>" call.
 const restartTimeout = 60 * time.Second
 
+// postUpdateTimeout bounds the default PostUpdate implementation's
+// "<binPath> systemd-unit apply" call (daemon-reload included).
+const postUpdateTimeout = 60 * time.Second
+
 // Options configures a call to Run.
 type Options struct {
 	// Binary identifies which cloud-pulse binary is being updated:
@@ -65,6 +69,19 @@ type Options struct {
 	// reports whether a restart was actually performed (as opposed to
 	// e.g. "no active service found").
 	Restart func(ctx context.Context, unit string) (restarted bool, msg string, err error)
+	// PostUpdate runs after Replace succeeds and before Restart is
+	// attempted. nil uses the default: only on GOOS=linux, running as
+	// root (euid 0), with a "/etc/systemd/system/<binary>.service" unit
+	// file present, and only when the tag being installed
+	// (version.Compare(tag, version.UnitManagedSince) >= 0, i.e. the
+	// tag's own binary is guaranteed to ship the `systemd-unit`
+	// subcommand) — runs "<binPath> systemd-unit apply --unit-path
+	// <unit>" bounded by a 60s timeout (daemon-reload is included in
+	// that call, not run separately). A PostUpdate failure is reported
+	// as a warning message (via Stdout) but never fails Run overall:
+	// the binary replacement already succeeded, and Restart still
+	// proceeds using whichever unit file is currently on disk.
+	PostUpdate func(ctx context.Context, binPath, tag string) (msg string, err error)
 	// Stdout, when non-nil, receives human-readable progress messages
 	// as Run executes. nil discards them (callers that just want the
 	// Result can ignore this).
@@ -205,6 +222,16 @@ func Run(ctx context.Context, o Options) (Result, error) {
 	}
 	result.Updated = true
 	printf(o.Stdout, "cloud-pulse: installed %s", latest)
+
+	postUpdate := o.PostUpdate
+	if postUpdate == nil {
+		postUpdate = defaultPostUpdateFor(o.Binary)
+	}
+	if msg, err := postUpdate(ctx, execPath, latest); err != nil {
+		printf(o.Stdout, "cloud-pulse: warning: post-update step failed: %v", err)
+	} else if msg != "" {
+		printf(o.Stdout, "cloud-pulse: %s", msg)
+	}
 
 	restart := o.Restart
 	if restart == nil {
@@ -354,6 +381,72 @@ func defaultRestart(ctx context.Context, unit string) (bool, string, error) {
 		return false, "", fmt.Errorf("systemctl restart %s: %w (output: %s)", unit, err, buf.String())
 	}
 	return true, "", nil
+}
+
+// defaultPostUpdateFor returns Run's documented default PostUpdate
+// implementation for binary: it applies systemd unit-file changes via
+// "<binPath> systemd-unit apply" — but only when every one of the
+// following holds, so that a downgrade or an unmanaged host is always a
+// safe no-op rather than an error:
+//
+//   - GOOS is linux (systemd-only feature)
+//   - running as root (euid 0): unit files under /etc/systemd/system
+//     require root to write, and Apply would just fail with a
+//     permission error otherwise
+//   - a "/etc/systemd/system/<binary>.service" unit file exists: an
+//     unmanaged/dev invocation (no installed service) has nothing to
+//     apply
+//   - tag (the version just installed) is at or after
+//     version.UnitManagedSince: only a binary from that tag onward is
+//     guaranteed to itself understand "systemd-unit apply", which is
+//     exactly the binPath this function is about to invoke (the
+//     just-replaced, just-installed executable, not the one that was
+//     running before Run started)
+func defaultPostUpdateFor(binary string) func(ctx context.Context, binPath, tag string) (string, error) {
+	return func(ctx context.Context, binPath, tag string) (string, error) {
+		if runtime.GOOS != "linux" {
+			return "", nil
+		}
+		if os.Geteuid() != 0 {
+			return "", nil
+		}
+		if !isUnitManaged(tag) {
+			return "", nil
+		}
+
+		unit := binary + ".service"
+		unitPath := filepath.Join("/etc/systemd/system", unit)
+		if _, err := os.Stat(unitPath); err != nil {
+			return "", nil
+		}
+
+		applyCtx, cancel := context.WithTimeout(ctx, postUpdateTimeout)
+		defer cancel()
+
+		cmd := exec.CommandContext(applyCtx, binPath, "systemd-unit", "apply", "--unit-path", unitPath) //nolint:gosec // binPath is our own just-replaced, checksum-verified binary; unitPath is derived from a fixed Options.Binary value
+		var buf bytes.Buffer
+		cmd.Stdout = &buf
+		cmd.Stderr = &buf
+		if err := cmd.Run(); err != nil {
+			return "", fmt.Errorf("%s systemd-unit apply: %w (output: %s)", binPath, err, buf.String())
+		}
+		return strings.TrimRight(buf.String(), "\n"), nil
+	}
+}
+
+// isUnitManaged reports whether tag is at or after
+// version.UnitManagedSince. An unparsable tag is conservatively treated
+// as not unit-managed (defaultPostUpdateFor skips rather than guesses).
+func isUnitManaged(tag string) bool {
+	since, ok := version.Parse(version.UnitManagedSince)
+	if !ok {
+		return false
+	}
+	t, ok := version.Parse(tag)
+	if !ok {
+		return false
+	}
+	return version.Compare(t, since) >= 0
 }
 
 // printf writes a formatted, newline-terminated progress message to out

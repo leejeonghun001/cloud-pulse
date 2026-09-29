@@ -24,6 +24,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "update" {
 		os.Exit(runUpdate(os.Args[2:]))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "systemd-unit" {
+		os.Exit(runSystemdUnit(os.Args[2:]))
+	}
 	os.Exit(run())
 }
 
@@ -36,6 +39,7 @@ func run() int {
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: cloud-pulse-agent [flags]")
 		fmt.Fprintln(os.Stderr, "       cloud-pulse-agent update [--check] [--version vX.Y.Z] [--no-restart]")
+		fmt.Fprintln(os.Stderr, "       cloud-pulse-agent systemd-unit <print|apply> [flags]")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
