@@ -165,3 +165,25 @@ func TestParseExisting_ExecStartExtraArgsUsesFirstToken(t *testing.T) {
 func fmtSprintf(tmpl, root string) string {
 	return strings.ReplaceAll(tmpl, "%[1]s", root)
 }
+
+// TestValidatePathValue_POSIXSemanticsOnEveryOS guards against using
+// filepath (OS-specific) for unit-file paths: on Windows filepath.IsAbs
+// rejects "/usr/local/bin/..." even though unit files always hold POSIX paths.
+func TestValidatePathValue_POSIXSemanticsOnEveryOS(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		value string
+		ok    bool
+	}{
+		{"/usr/local/bin/cloud-pulse-hub", true},
+		{"/etc/cloud-pulse/hub.env", true},
+		{"usr/local/bin/cloud-pulse-hub", false},
+		{`C:\cloud-pulse\hub.exe`, false},
+	}
+	for _, tc := range tests {
+		err := validatePathValue("bin-path", tc.value)
+		if (err == nil) != tc.ok {
+			t.Errorf("validatePathValue(%q) err = %v, want ok=%v", tc.value, err, tc.ok)
+		}
+	}
+}

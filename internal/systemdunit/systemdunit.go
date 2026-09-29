@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"path"
 	"strings"
 	"time"
 )
@@ -289,7 +289,9 @@ func ParseExisting(unit string) (Params, error) {
 		return Params{}, errors.New("systemdunit: parse: missing EnvironmentFile=")
 	}
 
-	base := filepath.Base(p.BinPath)
+	// Unit files describe Linux paths, so POSIX path semantics apply
+	// regardless of the OS this code is compiled for.
+	base := path.Base(p.BinPath)
 	switch base {
 	case HubBinary, AgentBinary:
 		p.Binary = base
@@ -323,7 +325,7 @@ func ParseExisting(unit string) (Params, error) {
 // been hand-edited or corrupted, worth surfacing as an error rather than
 // silently re-rendering it.
 func validatePathValue(name, value string) error {
-	if !filepath.IsAbs(value) {
+	if !path.IsAbs(value) {
 		return fmt.Errorf("%s %q must be an absolute path", name, value)
 	}
 	for _, r := range value {
