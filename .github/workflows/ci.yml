@@ -201,6 +201,26 @@ jobs:
       - name: Installer tests (sandbox mode, real release assets served locally)
         run: bash scripts/test-install.sh
 
+  update:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Self-update E2E (local fake release server, no real network)
+        run: bash scripts/test-update.sh
+
   web:
     runs-on: ubuntu-latest
     steps:

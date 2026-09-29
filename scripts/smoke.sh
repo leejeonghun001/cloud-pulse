@@ -34,6 +34,7 @@ AGENT_LOG="${TMP_DIR}/agent.log"
 
 HUB_PID=""
 AGENT_PID=""
+FAKE_PID=""
 
 PASS_COUNT=0
 
@@ -65,6 +66,10 @@ cleanup() {
     kill "$HUB_PID" 2>/dev/null || true
     wait "$HUB_PID" 2>/dev/null || true
   fi
+  if [ -n "$FAKE_PID" ] && kill -0 "$FAKE_PID" 2>/dev/null; then
+    kill "$FAKE_PID" 2>/dev/null || true
+    wait "$FAKE_PID" 2>/dev/null || true
+  fi
   if [ "$status" -ne 0 ]; then
     dump_logs
   fi
@@ -81,6 +86,23 @@ echo "==> building binaries"
 CGO_ENABLED=0 go build -o "$HUB_BIN" ./cmd/hub
 CGO_ENABLED=0 go build -o "$AGENT_BIN" ./cmd/agent
 pass "build both binaries"
+
+# A second pair of binaries stamped with a real release version (instead
+# of the "dev" placeholder above) is needed for the `update --check`
+# exercises below: selfupdate.Run refuses to compare a dev build against
+# a resolved latest version at all (see internal/selfupdate/run.go), so
+# the default smoke binaries can never exercise the exit-10 contract.
+SMOKE_MODULE="github.com/leejeonghun001/cloud-pulse"
+SMOKE_STAMPED_VERSION="v0.3.0"
+HUB_STAMPED_BIN="${TMP_DIR}/cloud-pulse-hub-stamped"
+AGENT_STAMPED_BIN="${TMP_DIR}/cloud-pulse-agent-stamped"
+CGO_ENABLED=0 go build \
+  -ldflags "-X ${SMOKE_MODULE}/internal/version.Version=${SMOKE_STAMPED_VERSION}" \
+  -o "$HUB_STAMPED_BIN" ./cmd/hub
+CGO_ENABLED=0 go build \
+  -ldflags "-X ${SMOKE_MODULE}/internal/version.Version=${SMOKE_STAMPED_VERSION}" \
+  -o "$AGENT_STAMPED_BIN" ./cmd/agent
+pass "build ${SMOKE_STAMPED_VERSION}-stamped hub/agent binaries for update --check"
 
 # ---------------------------------------------------------------------------
 # -version / -gen-token (no server needed)
@@ -117,11 +139,15 @@ pass "agent -once prints valid JSON with ts"
 # ---------------------------------------------------------------------------
 
 echo "==> starting hub on ${HUB_ADDR}"
+# CP_UPDATE_CHECK is explicitly false: CI must never depend on reaching
+# GitHub for this test to pass (see the dedicated update-check section
+# below, which uses a local fake release server instead).
 CP_LISTEN="${HUB_ADDR}" \
 CP_AGENT_TOKEN="${AGENT_TOKEN}" \
 CP_UI_TOKEN="${UI_TOKEN}" \
 CP_ALLOWED_CIDRS="127.0.0.0/8,::1/128" \
 CP_DATA_DIR="${DATA_DIR}" \
+CP_UPDATE_CHECK="false" \
   "$HUB_BIN" >"$HUB_LOG" 2>&1 &
 HUB_PID=$!
 
@@ -241,6 +267,20 @@ assert doc['buckets'] == [], f\"expected empty buckets, got {doc['buckets']}\"
 assert doc['collectors'] == [], f\"expected empty collectors, got {doc['collectors']}\"
 "
 pass "GET /api/v1/buckets returns buckets [] and collectors []"
+
+# ---------------------------------------------------------------------------
+# v0.3: GET /api/v1/version — update checking disabled (CP_UPDATE_CHECK=false)
+# ---------------------------------------------------------------------------
+
+VERSION_JSON="$(curl -fsS -H "Authorization: Bearer ${UI_TOKEN}" "${HUB_BASE_URL}/api/v1/version")"
+echo "$VERSION_JSON" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+assert doc.get('update_check_enabled') is False, f\"update_check_enabled {doc.get('update_check_enabled')!r} != False\"
+assert doc.get('update_available') is False, f\"update_available {doc.get('update_available')!r} != False\"
+assert 'update_command' in doc and doc['update_command'], 'missing update_command'
+"
+pass "GET /api/v1/version has update_check_enabled=false (CP_UPDATE_CHECK=false, CI must not depend on GitHub)"
 
 # ---------------------------------------------------------------------------
 # Auth failures
@@ -408,6 +448,87 @@ bad = [t for t in ts if t % 5 != 0]
 assert not bad, f'ts values not multiples of 5s interval: {bad}'
 "
 pass "agent sample ts values in metrics are all multiples of 5s"
+
+# ---------------------------------------------------------------------------
+# v0.3: `update --check` against a local fake release server
+#
+# Runs both binaries' `update --check` subcommand against a throwaway
+# python3 http.server standing in for GitHub Releases (never real
+# network), asserting the documented exit-10 "update available"
+# contract and that the resolved latest tag is printed.
+# ---------------------------------------------------------------------------
+
+echo "==> starting fake release server for update --check"
+FAKE_PORT="${FAKE_PORT:-18099}"
+FAKE_BASE_URL="http://127.0.0.1:${FAKE_PORT}"
+FAKE_TAG="v9.9.9"
+FAKE_ASSETS_DIR="${TMP_DIR}/fake-assets"
+mkdir -p "$FAKE_ASSETS_DIR"
+FAKE_LOG="${TMP_DIR}/fake-release-server.log"
+
+python3 "${REPO_ROOT}/scripts/fake_release_server.py" "$FAKE_PORT" "$FAKE_ASSETS_DIR" "$FAKE_TAG" \
+  >"$FAKE_LOG" 2>&1 &
+FAKE_PID=$!
+
+FAKE_UP=0
+for _ in $(seq 1 40); do
+  if curl -fsS -o /dev/null "${FAKE_BASE_URL}/releases/latest" 2>/dev/null; then
+    FAKE_UP=1
+    break
+  fi
+  # A 302 makes curl -f treat it as success only with -L; without -L,
+  # curl -fsS on a 3xx still exits 0 for HTTP 2xx/3xx by default only
+  # with -f considering 4xx/5xx as errors, so this check alone confirms
+  # the server is listening and answering.
+  if ! kill -0 "$FAKE_PID" 2>/dev/null; then
+    fail "fake release server exited before becoming reachable"
+  fi
+  sleep 0.25
+done
+if [ "$FAKE_UP" -ne 1 ]; then
+  fail "fake release server did not become reachable within 10s"
+fi
+pass "fake release server reachable on ${FAKE_BASE_URL}"
+
+HUB_CHECK_OUT=""
+set +e
+HUB_CHECK_OUT="$(CP_UPDATE_LATEST_URL="${FAKE_BASE_URL}/releases/latest" \
+  CP_RELEASE_BASE_URL="${FAKE_BASE_URL}/releases/download/${FAKE_TAG}" \
+  "$HUB_STAMPED_BIN" update --check 2>&1)"
+HUB_CHECK_STATUS=$?
+set -e
+if [ "$HUB_CHECK_STATUS" -ne 10 ]; then
+  echo "$HUB_CHECK_OUT" >&2
+  fail "cloud-pulse-hub update --check exited ${HUB_CHECK_STATUS}, want 10"
+fi
+case "$HUB_CHECK_OUT" in
+  *"$FAKE_TAG"*) ;;
+  *) fail "cloud-pulse-hub update --check output did not mention ${FAKE_TAG}: ${HUB_CHECK_OUT}" ;;
+esac
+pass "cloud-pulse-hub update --check against fake release server -> exit 10, prints ${FAKE_TAG}"
+
+AGENT_CHECK_OUT=""
+set +e
+AGENT_CHECK_OUT="$(CP_UPDATE_LATEST_URL="${FAKE_BASE_URL}/releases/latest" \
+  CP_RELEASE_BASE_URL="${FAKE_BASE_URL}/releases/download/${FAKE_TAG}" \
+  "$AGENT_STAMPED_BIN" update --check 2>&1)"
+AGENT_CHECK_STATUS=$?
+set -e
+if [ "$AGENT_CHECK_STATUS" -ne 10 ]; then
+  echo "$AGENT_CHECK_OUT" >&2
+  fail "cloud-pulse-agent update --check exited ${AGENT_CHECK_STATUS}, want 10"
+fi
+case "$AGENT_CHECK_OUT" in
+  *"$FAKE_TAG"*) ;;
+  *) fail "cloud-pulse-agent update --check output did not mention ${FAKE_TAG}: ${AGENT_CHECK_OUT}" ;;
+esac
+pass "cloud-pulse-agent update --check against fake release server -> exit 10, prints ${FAKE_TAG}"
+
+if kill -0 "$FAKE_PID" 2>/dev/null; then
+  kill "$FAKE_PID" 2>/dev/null || true
+  wait "$FAKE_PID" 2>/dev/null || true
+fi
+FAKE_PID=""
 
 # ---------------------------------------------------------------------------
 # SIGTERM hub -> exits within 10s, DB file exists

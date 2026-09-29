@@ -126,6 +126,15 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local desc="$1" haystack="$2" needle="$3"
+  if [[ "$haystack" != *"$needle"* ]]; then
+    pass "$desc"
+  else
+    fail "$desc (expected NOT to contain '$needle')"
+  fi
+}
+
 assert_file_contains() {
   local desc="$1" path="$2" pattern="$3"
   if grep -q -- "$pattern" "$path" 2>/dev/null; then
@@ -292,6 +301,8 @@ test_hub_install() {
   fi
 
   assert_contains "printed agent one-liner contains the token" "$out" "$token"
+  assert_contains "first install prints future-updates hint" "$out" "Future updates: sudo cloud-pulse-hub update"
+  assert_not_contains "first install does not print 'Upgraded' (no previous binary)" "$out" "Upgraded"
   HUB_TOKEN="$token"
 }
 HUB_TOKEN=""
@@ -310,9 +321,11 @@ test_hub_explicit_listen_host_in_one_liner() {
 
 test_hub_upgrade_keeps_token() {
   echo "==> testing install-hub.sh re-run (upgrade) keeps existing token"
-  CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$SANDBOX_HUB" \
-    timeout 60 bash scripts/install-hub.sh --listen :18090 >/dev/null 2>&1 || {
+  local out
+  out="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$SANDBOX_HUB" \
+    timeout 60 bash scripts/install-hub.sh --listen :18090 2>&1)" || {
     fail "install-hub.sh upgrade re-run exited 0"
+    echo "$out" >&2
     return
   }
   local env_file="${SANDBOX_HUB}/etc/cloud-pulse/hub.env"
@@ -323,6 +336,10 @@ test_hub_upgrade_keeps_token() {
   else
     fail "hub upgrade re-run preserves CP_AGENT_TOKEN (was ${HUB_TOKEN}, now ${token})"
   fi
+  assert_contains "hub upgrade re-run prints 'Upgraded'" "$out" "Upgraded"
+  assert_contains "hub upgrade re-run prints future-updates hint" "$out" "Future updates: sudo cloud-pulse-hub update"
+  assert_contains "hub upgrade from legacy (v0.0.0-test) prints built-in-updater line" "$out" \
+    "This install now includes the built-in updater."
 }
 
 test_hub_dry_run() {
@@ -393,9 +410,11 @@ test_agent_missing_required_flags() {
 
 test_agent_install() {
   echo "==> testing install-agent.sh (sandbox install)"
-  CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$SANDBOX_AGENT" \
-    timeout 60 bash scripts/install-agent.sh --hub-url "http://127.0.0.1:${SERVER_PORT}" --token "$HUB_TOKEN" >/dev/null 2>&1 || {
+  local out
+  out="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$SANDBOX_AGENT" \
+    timeout 60 bash scripts/install-agent.sh --hub-url "http://127.0.0.1:${SERVER_PORT}" --token "$HUB_TOKEN" 2>&1)" || {
     fail "install-agent.sh sandbox install exited 0"
+    echo "$out" >&2
     return
   }
   pass "install-agent.sh sandbox install exited 0"
@@ -417,13 +436,17 @@ test_agent_install() {
   else
     echo "SKIP: systemd-analyze not available or unit missing; skipping agent unit verify"
   fi
-}
 
+  assert_contains "first install prints future-updates hint" "$out" "Future updates: sudo cloud-pulse-agent update"
+  assert_not_contains "first install does not print 'Upgraded' (no previous binary)" "$out" "Upgraded"
+}
 test_agent_upgrade_keeps_values() {
   echo "==> testing install-agent.sh re-run (upgrade) keeps hub-url/token"
-  CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$SANDBOX_AGENT" \
-    timeout 60 bash scripts/install-agent.sh >/dev/null 2>&1 || {
+  local out
+  out="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$SANDBOX_AGENT" \
+    timeout 60 bash scripts/install-agent.sh 2>&1)" || {
     fail "install-agent.sh upgrade re-run (no flags) exited 0"
+    echo "$out" >&2
     return
   }
   pass "install-agent.sh upgrade re-run (no flags) exited 0"
@@ -431,6 +454,10 @@ test_agent_upgrade_keeps_values() {
   local env_file="${SANDBOX_AGENT}/etc/cloud-pulse/agent.env"
   assert_file_contains "agent upgrade preserves CP_HUB_URL" "$env_file" "CP_HUB_URL=http://127.0.0.1:${SERVER_PORT}"
   assert_file_contains "agent upgrade preserves CP_AGENT_TOKEN" "$env_file" "CP_AGENT_TOKEN=${HUB_TOKEN}"
+  assert_contains "agent upgrade re-run prints 'Upgraded'" "$out" "Upgraded"
+  assert_contains "agent upgrade re-run prints future-updates hint" "$out" "Future updates: sudo cloud-pulse-agent update"
+  assert_contains "agent upgrade from legacy (v0.0.0-test) prints built-in-updater line" "$out" \
+    "This install now includes the built-in updater."
 }
 
 test_agent_unknown_arch() {
@@ -569,6 +596,102 @@ test_agent_uninstall_and_purge() {
   assert_file_absent "agent --purge removes agent.env" "$env_file"
 }
 
+test_hub_upgrade_from_legacy_stub() {
+  echo "==> testing install-hub.sh upgrade over a simulated legacy (v0.2.0) binary"
+  local sandbox="${TMP_ROOT}/sandbox-hub-legacy"
+  local bin_dir="${sandbox}/usr/local/bin"
+  mkdir -p "$bin_dir"
+
+  # Simulate a pre-v0.3.0 installed binary: a tiny executable shell stub
+  # at the exact path install-hub.sh will probe with "-version" before
+  # replacing it. Real legacy binaries print e.g. "v0.2.0 (abc1234,
+  # 2024-06-01)" for -version; this stub reproduces just that first
+  # token, which is all install_binary()'s probe_existing_version reads.
+  cat > "${bin_dir}/cloud-pulse-hub" <<'STUB'
+#!/usr/bin/env bash
+if [ "$1" = "-version" ]; then
+  echo "v0.2.0 (abc1234, 2024-06-01)"
+  exit 0
+fi
+exit 1
+STUB
+  chmod 0755 "${bin_dir}/cloud-pulse-hub"
+
+  local out
+  out="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$sandbox" \
+    timeout 60 bash scripts/install-hub.sh --listen :18092 2>&1)" || {
+    fail "install-hub.sh upgrade over legacy stub exited 0"
+    echo "$out" >&2
+    return
+  }
+  pass "install-hub.sh upgrade over legacy stub exited 0"
+
+  assert_contains "legacy-stub upgrade prints 'Upgraded v0.2.0 →'" "$out" "Upgraded v0.2.0 →"
+  assert_contains "legacy-stub upgrade prints built-in-updater line" "$out" \
+    "This install now includes the built-in updater."
+  assert_contains "legacy-stub upgrade prints future-updates hint" "$out" "Future updates: sudo cloud-pulse-hub update"
+}
+
+test_agent_upgrade_from_legacy_stub() {
+  echo "==> testing install-agent.sh upgrade over a simulated legacy (v0.2.0) binary"
+  local sandbox="${TMP_ROOT}/sandbox-agent-legacy"
+  local bin_dir="${sandbox}/usr/local/bin"
+  mkdir -p "$bin_dir"
+
+  cat > "${bin_dir}/cloud-pulse-agent" <<'STUB'
+#!/usr/bin/env bash
+if [ "$1" = "-version" ]; then
+  echo "v0.2.0 (abc1234, 2024-06-01)"
+  exit 0
+fi
+exit 1
+STUB
+  chmod 0755 "${bin_dir}/cloud-pulse-agent"
+
+  local out
+  out="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$sandbox" \
+    timeout 60 bash scripts/install-agent.sh --hub-url "http://127.0.0.1:${SERVER_PORT}" --token "$HUB_TOKEN" 2>&1)" || {
+    fail "install-agent.sh upgrade over legacy stub exited 0"
+    echo "$out" >&2
+    return
+  }
+  pass "install-agent.sh upgrade over legacy stub exited 0"
+
+  assert_contains "legacy-stub upgrade prints 'Upgraded v0.2.0 →'" "$out" "Upgraded v0.2.0 →"
+  assert_contains "legacy-stub upgrade prints built-in-updater line" "$out" \
+    "This install now includes the built-in updater."
+  assert_contains "legacy-stub upgrade prints future-updates hint" "$out" "Future updates: sudo cloud-pulse-agent update"
+}
+
+test_hub_dry_run_upgrade_hint() {
+  echo "==> testing install-hub.sh --dry-run mentions upgrade/legacy hints over an existing legacy binary"
+  local sandbox="${TMP_ROOT}/sandbox-hub-legacy-dryrun"
+  local bin_dir="${sandbox}/usr/local/bin"
+  mkdir -p "$bin_dir"
+  cat > "${bin_dir}/cloud-pulse-hub" <<'STUB'
+#!/usr/bin/env bash
+if [ "$1" = "-version" ]; then
+  echo "v0.2.0 (abc1234, 2024-06-01)"
+  exit 0
+fi
+exit 1
+STUB
+  chmod 0755 "${bin_dir}/cloud-pulse-hub"
+
+  local out
+  out="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$sandbox" \
+    timeout 30 bash scripts/install-hub.sh --dry-run 2>&1)" || {
+    fail "install-hub.sh --dry-run over legacy binary exited 0"
+    echo "$out" >&2
+    return
+  }
+  pass "install-hub.sh --dry-run over legacy binary exited 0"
+  assert_contains "dry-run mentions the built-in updater for a legacy previous install" "$out" \
+    "This install now includes the built-in updater."
+  assert_contains "dry-run mentions the future-updates hint" "$out" "Future updates: sudo cloud-pulse-hub update"
+  assert_file_absent "dry-run over legacy binary does not replace the binary" "${bin_dir}/cloud-pulse-hub.new"
+}
+
 test_hub_uninstall_and_purge() {
   echo "==> testing install-hub.sh --uninstall (keeps env) and --purge (removes env)"
   local bin="${SANDBOX_HUB}/usr/local/bin/cloud-pulse-hub"
@@ -637,6 +760,8 @@ main() {
 
   test_hub_install
   test_hub_upgrade_keeps_token
+  test_hub_upgrade_from_legacy_stub
+  test_hub_dry_run_upgrade_hint
   test_hub_explicit_listen_host_in_one_liner
   test_hub_dry_run
   test_hub_checksum_mismatch
@@ -644,6 +769,7 @@ main() {
   test_agent_missing_required_flags
   test_agent_install
   test_agent_upgrade_keeps_values
+  test_agent_upgrade_from_legacy_stub
   test_agent_unknown_arch
   test_agent_checksum_mismatch
   test_agent_dry_run

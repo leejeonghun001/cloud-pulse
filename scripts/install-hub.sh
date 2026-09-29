@@ -108,6 +108,9 @@ ASSET_NAME=""
 
 TMP_DIR=""
 
+PREVIOUS_VERSION=""
+IS_UPGRADE=0
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -213,6 +216,95 @@ random_hex_token_fallback() {
     err "no source of randomness available (/dev/urandom missing)"
     exit 1
   fi
+}
+
+# semver_lt A B — small bash-only semver comparator, "vX.Y.Z[-pre]" only
+# (no build-metadata handling; good enough for the installer's upgrade
+# hint, not a general semver library — see internal/version for the real
+# one used by the Go binaries). Returns 0 (true) iff A < B. Any input
+# that doesn't match `vNUM.NUM.NUM` is treated as not-less-than anything
+# (the caller treats an unparsable previous version as "legacy" via a
+# separate helper, not via this comparator being wrong).
+semver_lt() {
+  local a="$1" b="$2"
+  local a_core b_core
+  a_core="${a#v}"
+  b_core="${b#v}"
+  # Strip any -pre/+build suffix for the purposes of this coarse
+  # major.minor.patch comparison; pre-releases of the same core version
+  # are rare in practice for this installer's use (comparing an
+  # installed binary's version against v0.3.0) and are not
+  # security-relevant here.
+  a_core="${a_core%%-*}"
+  b_core="${b_core%%-*}"
+  a_core="${a_core%%+*}"
+  b_core="${b_core%%+*}"
+
+  case "$a_core" in
+    [0-9]*.[0-9]*.[0-9]*) ;;
+    *) return 1 ;;
+  esac
+  case "$b_core" in
+    [0-9]*.[0-9]*.[0-9]*) ;;
+    *) return 1 ;;
+  esac
+
+  local a_maj="${a_core%%.*}" b_maj="${b_core%%.*}"
+  local a_rest="${a_core#*.}" b_rest="${b_core#*.}"
+  local a_min="${a_rest%%.*}" b_min="${b_rest%%.*}"
+  local a_pat="${a_rest#*.}" b_pat="${b_rest#*.}"
+
+  case "$a_maj$a_min$a_pat$b_maj$b_min$b_pat" in
+    *[!0-9]*) return 1 ;;
+  esac
+
+  if [ "$a_maj" -ne "$b_maj" ]; then
+    [ "$a_maj" -lt "$b_maj" ]
+    return
+  fi
+  if [ "$a_min" -ne "$b_min" ]; then
+    [ "$a_min" -lt "$b_min" ]
+    return
+  fi
+  [ "$a_pat" -lt "$b_pat" ]
+}
+
+# version_is_legacy VERSION — true if VERSION is unparsable by
+# semver_lt's `vNUM.NUM.NUM` shape, or if it parses and is < v0.3.0 (the
+# first release with the built-in `update` subcommand). An unparsable
+# version (e.g. "dev", empty, a git-describe string) is conservatively
+# treated as legacy: every real release tag before v0.3.0 parses fine,
+# so the only way to reach "unparsable" here is a dev build or a
+# previous-binary probe that failed, neither of which has the updater.
+version_is_legacy() {
+  local v="$1"
+  if [ -z "$v" ]; then
+    return 0
+  fi
+  local core="${v#v}"
+  core="${core%%-*}"
+  core="${core%%+*}"
+  case "$core" in
+    [0-9]*.[0-9]*.[0-9]*) ;;
+    *) return 0 ;;
+  esac
+  semver_lt "$v" "v0.3.0"
+}
+
+# probe_existing_version BIN_PATH — run "<bin> -version" with a timeout
+# and print its first whitespace-separated token (e.g. "v0.2.0" out of
+# "v0.2.0 (abc1234, 2024-01-01)"), or print nothing if BIN_PATH doesn't
+# exist, isn't executable, or the probe fails/times out. Never fails the
+# script: this is purely informational for the upgrade-hint message.
+probe_existing_version() {
+  local bin_path="$1"
+  if [ ! -x "$bin_path" ]; then
+    return
+  fi
+  local out
+  out="$(timeout 10 "$bin_path" -version 2>/dev/null || true)"
+  # First word of the first line.
+  printf '%s\n' "$out" | head -n1 | awk '{print $1}'
 }
 
 # ---------------------------------------------------------------------------
@@ -418,6 +510,10 @@ ensure_system_user() {
 # ---------------------------------------------------------------------------
 
 install_binary() {
+  if [ -x "$BIN_PATH" ]; then
+    IS_UPGRADE=1
+    PREVIOUS_VERSION="$(probe_existing_version "$BIN_PATH")"
+  fi
   mkdir -p "$BIN_DIR"
   # install(1) unlinks the destination and recreates it (O_CREAT|O_EXCL)
   # rather than write-then-rename, leaving a brief window where
@@ -771,8 +867,33 @@ print_summary() {
   echo "  Config file:    ${ENV_FILE}"
   echo "  Service:        cloud-pulse-hub.service"
   echo
+  print_version_hint
   echo "Agent one-liner (token shown once here; also stored in ${ENV_FILE}):"
   echo "  curl -fsSL https://raw.githubusercontent.com/${CP_REPO}/main/scripts/install-agent.sh | sudo bash -s -- --hub-url http://${host}:${listen_port} --token ${RESOLVED_AGENT_TOKEN}"
+  echo
+}
+
+# print_version_hint — D-U7: on an upgrade (a binary already existed at
+# BIN_PATH before install_binary replaced it), print "Upgraded vA → vB";
+# always print the "Future updates" hint for the built-in `update`
+# subcommand; and if the previous install predates v0.3.0 (or its
+# version couldn't be determined at all), call out that this install now
+# includes it.
+print_version_hint() {
+  local new_version
+  new_version="$(probe_existing_version "$BIN_PATH")"
+
+  if [ "$IS_UPGRADE" -eq 1 ]; then
+    if [ -n "$PREVIOUS_VERSION" ] && [ -n "$new_version" ]; then
+      echo "Upgraded ${PREVIOUS_VERSION} → ${new_version}"
+    elif [ -n "$new_version" ]; then
+      echo "Upgraded (previous version unknown) → ${new_version}"
+    fi
+    if version_is_legacy "$PREVIOUS_VERSION"; then
+      echo "This install now includes the built-in updater."
+    fi
+  fi
+  echo "Future updates: sudo cloud-pulse-hub update"
   echo
 }
 
@@ -791,6 +912,15 @@ print_dry_run() {
   echo "  - systemd-analyze verify the unit"
   echo "  - systemctl daemon-reload && systemctl enable --now cloud-pulse-hub.service"
   echo "  - run -check-config before starting"
+  if [ -x "$BIN_PATH" ]; then
+    local existing_version
+    existing_version="$(probe_existing_version "$BIN_PATH")"
+    echo "  - this is an upgrade over an existing install${existing_version:+ (currently ${existing_version})}; would print 'Upgraded vA → vB'"
+    if version_is_legacy "$existing_version"; then
+      echo "  - would print: This install now includes the built-in updater."
+    fi
+  fi
+  echo "  - would print: Future updates: sudo cloud-pulse-hub update"
 }
 
 # ---------------------------------------------------------------------------

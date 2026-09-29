@@ -23,6 +23,12 @@ Two independent modes, usable together or separately:
       PUT /api/v1/hosts/{id}/limits (an admin endpoint), so the settings
       page's limits editor and "hub override" badges have real data.
 
+      Hosts also report a mix of agent_version values (see DemoHost.agent_version
+      and DEMO_HOSTS) so the dashboard's update banner/badge/panel
+      (SPEC-v0.3 D-U6) has real cases to render: a current release, an
+      older but self-update-capable v0.3.x build, and a legacy
+      pre-v0.3.0 build (no built-in updater — installer-one-liner path).
+
   --db PATH
       Inserts demo rows directly into the bucket_stats table (see
       internal/storage/migrations/0001_init.sql for the exact schema)
@@ -86,6 +92,14 @@ class DemoHost:
     # host (agent-reported default is always unlimited, so this only
     # visibly matters once a hub ingress override is applied above).
     ingress_level: str = "ok"
+    # agent_version is reported as HostInfo.agent_version, driving the
+    # dashboard's D-U6 per-host "agent vX" text and update badge/panel.
+    # Mixed across the fleet on purpose (see DEMO_HOSTS below) so the
+    # overview/host-detail/settings screenshots show all three cases:
+    # a current build (no badge), an older v0.3.x build (self-update
+    # badge/command), and a legacy pre-v0.3.0 build (installer-one-liner
+    # explanation).
+    agent_version: str = "v0.3.0"
 
 
 DEMO_HOSTS = [
@@ -109,6 +123,8 @@ DEMO_HOSTS = [
         hub_egress_override_gib=50,
         hub_ingress_override_gib=20,
         ingress_level="warning",
+        # Current release: no update badge/panel.
+        agent_version="v0.3.1",
     ),
     DemoHost(
         host_id="demo-aws-db-01",
@@ -125,6 +141,9 @@ DEMO_HOSTS = [
         mem_total=32 * GIB,
         disk_total=500 * GIB,
         ingress_level="ok",
+        # Older v0.3.x build (has the built-in updater, self_update=true):
+        # shows the amber badge + "sudo cloud-pulse-agent update" panel.
+        agent_version="v0.3.0",
     ),
     DemoHost(
         host_id="demo-oci-app-01",
@@ -145,6 +164,11 @@ DEMO_HOSTS = [
         # unlimited" override path end to end.
         hub_egress_override_gib=0,
         ingress_level="ok",
+        # Legacy pre-v0.3.0 build (predates the built-in updater,
+        # self_update=false): shows the badge + installer-one-liner
+        # command + the legacy explanation panel. This is the host used
+        # for the "host detail of a legacy agent" screenshot.
+        agent_version="v0.2.0",
     ),
     DemoHost(
         host_id="demo-other-nas-01",
@@ -344,7 +368,7 @@ def post_report(hub_url: str, token: str, host: DemoHost, samples: list[dict], t
         "boot_time": int(time.time()) - HISTORY_SECONDS - 86400,
         "provider": host.provider,
         "egress_limit_bytes": host.egress_limit_bytes,
-        "agent_version": "demo-seed-0.0.0",
+        "agent_version": host.agent_version,
     }
 
     for i in range(0, len(samples), MAX_SAMPLES_PER_REQUEST):
