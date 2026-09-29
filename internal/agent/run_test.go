@@ -353,16 +353,20 @@ func TestRunWithOptions_MissedBoundarySkipsWithoutBurst(t *testing.T) {
 
 	// Jump straight past several boundaries at once (simulated suspend):
 	// from :00 to :50 in one leap, skipping :15/:30/:45.
-	deadlineWall := time.Now().Add(3 * time.Second)
-	for len(func() []int64 { mu.Lock(); defer mu.Unlock(); return gotTimestamps }()) < 1 && time.Now().Before(deadlineWall) {
-		fts.advance(10 * time.Millisecond)
+	// Fake-time steps are sized so the loops never depend on the OS sleep
+	// granularity (time.Sleep(1ms) takes ~15.6ms on Windows): each step
+	// advances fake time far more than the real time spent waiting.
+	count := func() int { mu.Lock(); defer mu.Unlock(); return len(gotTimestamps) }
+	deadlineWall := time.Now().Add(10 * time.Second)
+	for count() < 1 && time.Now().Before(deadlineWall) {
+		fts.advance(100 * time.Millisecond)
 		time.Sleep(time.Millisecond)
 	}
 	fts.advance(50 * time.Second) // big jump simulating a suspend
 
-	deadlineWall = time.Now().Add(3 * time.Second)
-	for len(func() []int64 { mu.Lock(); defer mu.Unlock(); return gotTimestamps }()) < 2 && time.Now().Before(deadlineWall) {
-		fts.advance(10 * time.Millisecond)
+	deadlineWall = time.Now().Add(10 * time.Second)
+	for count() < 2 && time.Now().Before(deadlineWall) {
+		fts.advance(500 * time.Millisecond)
 		time.Sleep(time.Millisecond)
 	}
 
