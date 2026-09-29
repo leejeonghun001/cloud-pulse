@@ -312,7 +312,7 @@ never rewrite history here, only add to it.
 - **Decision**: `make css` (`npx --yes @tailwindcss/cli@4.3.3 -i
   web/src/input.css -o web/assets/app.css --minify`) remains the single
   source of truth for regenerating the committed CSS; CI's `web` job
-  only runs `node --test web/test/`, it never invokes the Tailwind CLI.
+  only runs `node --test web/test/*.test.mjs`, it never invokes the Tailwind CLI.
 - **Consequences**: A contributor who edits Tailwind classes but forgets
   `make css` will not be caught by CI (no CI job diffs the rebuilt
   output against the committed one). This is an accepted gap: adding a
@@ -662,3 +662,9 @@ never rewrite history here, only add to it.
 - **Context:** S3 request metrics are published in UTC daily buckets. A dynamic month-length period is unnecessary and can obscure that alignment.
 - **Decision:** Query month-to-date S3 request and downloaded-byte metrics with `Period=86400` from the UTC month start, then sum the returned daily datapoints.
 - **Consequences:** The month-to-date total remains correct while matching CloudWatch's native daily S3 metric cadence.
+
+### D-042 — `node --test` gets an explicit file glob (2026-09-29)
+
+- **Context:** The first CI run of the `web` job failed on Node 22 with `Cannot find module '.../web/test'`. Node 22's test runner does not accept a directory argument; newer Node versions (used locally) do.
+- **Decision:** Invoke `node --test web/test/*.test.mjs` everywhere.
+- **Consequences:** Works on Node 22 (verified locally with v22.23.3: 16/16 pass) and on newer versions.
