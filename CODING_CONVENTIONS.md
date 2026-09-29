@@ -172,11 +172,24 @@ Dependency direction rules:
 
 ## Security
 
-- **Constant-time comparison** for bearer tokens (`crypto/subtle`), never
-  `==` or `strings.Compare`.
+- **Constant-time comparison** for bearer tokens and passwords
+  (`crypto/subtle`), never `==` or `strings.Compare`. This applies to
+  the agent token, the optional `CP_UI_TOKEN`, and username comparison
+  during login — not just password hash verification.
 - **CIDR allowlist checks `http.Request.RemoteAddr` only.** Never trust
-  `X-Forwarded-For` or similar client-supplied headers for access control.
-- **`http.MaxBytesReader`** on every endpoint that accepts a request body.
+  `X-Forwarded-For` or similar client-supplied headers for access
+  control. The same rule applies to the login rate limiter's per-client
+  key (`clientIPForRateLimit`/`clientIP`): it must strip the ephemeral
+  source port from `RemoteAddr` before using it as a map key — keying on
+  the full `"ip:port"` string means every TCP connection gets a fresh
+  key and a per-client counter never accumulates (a real cross-stage bug
+  found only by live testing with real sockets, not a fixed-string
+  `httptest` fake — see D-062). Any new code that needs "the requesting
+  client's address" must reuse the existing helper rather than reading
+  `r.RemoteAddr` directly.
+- **`http.MaxBytesReader`** on every endpoint that accepts a request
+  body, including auth and network settings endpoints (small, fixed
+  caps — see `maxAuthBodyBytes`/`maxNetworkBodyBytes`).
 - **Security headers** (CSP, `X-Content-Type-Options`, `Referrer-Policy`,
   `X-Frame-Options`) are applied by middleware to every response, not
   per-handler.
@@ -184,15 +197,46 @@ Dependency direction rules:
   environment variables only; nothing resembling a secret is ever committed,
   including in test fixtures (use obviously-fake values).
 - **Admin endpoint rule**: any endpoint that can reveal a secret (the
-  agent token) or make a state-changing settings/limit change is an
-  *admin* endpoint, wrapped with `requireAdmin` (not `requireUIToken`).
-  `requireAdmin` must check `CP_UI_TOKEN == ""` **first** and respond
-  `403 {"code":"admin_disabled"}` in that case, before ever inspecting
-  the request's bearer header — there is no configuration in which an
-  admin endpoint falls back to an open/unauthenticated read just because
-  `CP_UI_TOKEN` happens to be unset. Only when `CP_UI_TOKEN` is
-  configured does a missing/wrong token get `401`. New admin routes must
-  use `requireAdmin`, not `requireUIToken`, even if they're a `GET`.
+  agent token) or make a state-changing settings/limit/network change is
+  an *admin* endpoint, wrapped with `requireAdmin`. Since v0.4.0
+  `requireAdmin` is a plain alias of `requireUser` — the hub has exactly
+  one account, so there is no separate "is this caller an admin"
+  question once they're authenticated at all. The old `admin_disabled`
+  concept (a `403` returned whenever `CP_UI_TOKEN` was unset, regardless
+  of any bearer header presented) is gone: the dashboard always requires
+  either a valid session or the optional `CP_UI_TOKEN`, full stop. New
+  admin routes must use `requireAdmin`, not a bespoke check, even if
+  they're a `GET`.
+- **Passwords and session tokens are never logged**, not even partially
+  or hashed-and-truncated for "debugging." Failed logins log
+  `slog.Warn` with the remote address only (see D-062). A stored
+  password hash or session `id_hash` is fine to log (it's already a
+  one-way digest, useless to an attacker on its own) but the plaintext
+  password/token that produced it must never appear in a log line,
+  error message, or panic value.
+- **Sessions are hashed at rest.** Only `sha256(token)` is ever passed to
+  a `Store` method or stored in SQLite; the plaintext token exists only
+  in the HTTP response body at issuance and in the client's own storage
+  afterward. Any new session-related code must look up sessions by hash,
+  never store or compare a plaintext token server-side.
+- **Password verification always runs the full hashing computation**,
+  even for an unknown username or a malformed/missing stored hash (see
+  `verifyPassword`'s synthetic-computation branch) — a fast-reject path
+  that skips PBKDF2 for an invalid username is a timing side channel and
+  must not be added, however tempting it looks as an optimization.
+- **Network configuration changes must be reversible by construction.**
+  Any code path that can change the hub's own listen address(es) or
+  access allowlist must be structured so it cannot leave the requesting
+  admin permanently locked out: validate against the *requesting
+  client's own address* before applying anything (reject outright rather
+  than apply-then-check), roll back automatically if no listener ends up
+  bindable, and treat "binds fine but stops serving the client's own
+  current connection" as a time-bounded **pending** state that
+  auto-reverts if never confirmed — never an unconditional apply. See
+  `internal/hub/networkroutes.go`'s `handlePutNetwork` state machine and
+  D-064; a new network-affecting endpoint must follow the same
+  lock-out/bind-failure/pending/auto-revert shape, not a simplified
+  version of it.
 
 ## Database migrations
 

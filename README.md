@@ -30,10 +30,17 @@ More screenshots: [host detail](docs/screenshots/host-detail.png) ·
   offset from the hub (NTP-style) and stamp every sample with the same
   hub-time interval boundary, so a whole fleet's samples share identical
   timestamps regardless of each host's own clock drift.
+- **Dashboard sign-in**: a single `admin` account (bootstrapped with a
+  default password on first run, forced change on first login), server-side
+  sessions, per-IP + fleet-wide login rate limiting, and a `reset-password`
+  recovery CLI — see [Sign-in and accounts](#sign-in-and-accounts).
+  `CP_UI_TOKEN` is now an **optional** static bearer token for scripts only;
+  the dashboard itself always requires signing in.
 - **Settings UI** (`#/settings`) to reveal the agent token and copy a
   ready-to-run install command, edit per-host egress/ingress limit
-  overrides, and manage the alert webhook URL — gated behind
-  `CP_UI_TOKEN`.
+  overrides, manage the alert webhook URL, and configure which network
+  interfaces/IPs the hub listens on and who may reach it — see
+  [Network settings](#network-settings).
 - **Cloud object storage monitoring**: Amazon S3 via CloudWatch, Cloudflare
   R2 via GraphQL Analytics, collected every 15 minutes by default.
 - **Single static binaries**, `CGO_ENABLED=0` always, no AWS SDK (hand-written
@@ -166,12 +173,100 @@ internet.
 5. Optionally run `tailscale serve https / http://127.0.0.1:8090` on the
    hub to get a browser-trusted HTTPS URL for the dashboard without
    opening any port beyond the tailnet.
-6. If you widen `CP_ALLOWED_CIDRS` (e.g. to `*` for a non-Tailscale
-   deployment), also set `CP_UI_TOKEN` so the read API and dashboard
-   require a bearer token — otherwise the hub warns loudly at startup
-   that it is unauthenticated and reachable from anywhere it's exposed.
+6. The dashboard itself always requires signing in (see
+   [Sign-in and accounts](#sign-in-and-accounts)) regardless of the
+   allowlist. If you widen `CP_ALLOWED_CIDRS` (e.g. to `*` for a
+   non-Tailscale deployment), the hub logs an escalated warning at
+   startup for as long as the admin account still has the default
+   password, since that combination means `changeme` is reachable from
+   anywhere the hub is exposed — change the password immediately after
+   first sign-in. `CP_UI_TOKEN` remains available as an **optional**
+   static bearer token for scripts (agents, curl, CI) that need API
+   access without going through the sign-in flow; it never bypasses the
+   dashboard's own login.
+7. Both the listen address and the allowlist can also be managed from
+   the dashboard itself (Settings → Network) instead of editing
+   `hub.env` — see [Network settings](#network-settings).
 
-## AWS S3 setup
+## Sign-in and accounts
+
+The dashboard always requires signing in — there is no more "no
+`CP_UI_TOKEN` ⇒ open read API" mode. The hub has a single account,
+username `admin`.
+
+- **First run**: the hub bootstraps the admin account with the
+  well-known default password `changeme` and marks it as needing a
+  change. Every startup while that flag is still set, the hub logs a
+  warning reminding the operator to sign in and change it (escalated to
+  an error-level warning if `CP_ALLOWED_CIDRS` also allows every
+  address — see [Tailscale setup](#tailscale-setup) point 6).
+- **First login**: signing in with `admin` / `changeme` succeeds but the
+  dashboard immediately shows a non-dismissable "set a new password"
+  dialog; every other page and API route is blocked (`403
+  password_change_required`) until the password is changed. The only
+  routes reachable in that state are `GET /api/v1/auth/me`, `POST
+  /api/v1/auth/password`, and `POST /api/v1/auth/logout`.
+- **Password policy**: 8–1024 bytes, not all whitespace, not the literal
+  string `changeme`, and (when changing an existing password) different
+  from the current password. A violation returns `400` with code
+  `weak_password`.
+- **Password storage**: PBKDF2-HMAC-SHA256 (Go standard library
+  `crypto/pbkdf2`), 600,000 iterations, a fresh random 16-byte salt per
+  hash, 32-byte derived key — stored as
+  `pbkdf2-sha256$<iterations>$<salt>$<hash>` (base64, no padding) in the
+  `auth_password_hash` setting row. Measured hash time on this project's
+  target hardware: ~186 ms on arm64 (Raspberry Pi 5), ~1.05 s on armv7.
+  Verification always runs the full PBKDF2 computation — including for
+  an unknown username or a malformed/missing stored hash — so a wrong
+  username and a wrong password for a real username take the same time,
+  and there is no fast-reject timing signal to distinguish them.
+- **Sessions**: a successful login issues a 32-byte random bearer token
+  (base64url, returned once); the hub stores only `sha256(token)` in a
+  `sessions` table, never the token itself. Sessions slide forward 7
+  days on activity, up to an absolute 30-day maximum from creation
+  (whichever comes first); activity touches (updates) the stored expiry
+  at most once per minute per session to bound write load. `GET
+  /api/v1/auth/sessions` lists active sessions (creation/last-seen/
+  expiry/remote address/user agent, with the caller's own session
+  flagged); `POST /api/v1/auth/sessions/revoke-others` signs out every
+  other session (e.g. after a password change, or if a token is
+  suspected leaked).
+- **Rate limiting** (`POST /api/v1/auth/login` and `POST
+  /api/v1/auth/password`, both unauthenticated-attempt-prone routes):
+  5 failures from the same client IP (`RemoteAddr` host only, port
+  stripped — an IP:port pair is different for every TCP connection even
+  from the same client, so the limiter must key on the host alone to
+  ever accumulate failures) within 15 minutes triggers a lockout,
+  starting at 1 minute and doubling on each further lockout up to a
+  15-minute cap; a successful login clears that IP's state. Separately,
+  more than 30 failures per minute across every client triggers a
+  60-second fleet-wide lockout on all login attempts. Either lockout
+  responds `429` with code `rate_limited`, a `Retry-After` header, and a
+  matching `retry_after_seconds` field. At most 2 password hashes are
+  computed concurrently (a semaphore bounds PBKDF2 CPU usage under a
+  login burst); a request that can't get a slot within 5 seconds also
+  gets `429`. Failed logins are logged at `slog.Warn` with the remote
+  address only — passwords and tokens are never logged.
+- **`CP_UI_TOKEN` today**: an **optional** static bearer token for
+  scripts (agents don't use it — they use `CP_AGENT_TOKEN`; this is for
+  curl/CI access to the read API). When set, a request bearing it is
+  authenticated as `api_token`: full read/admin access, and — unlike a
+  session — never subject to the must-change-password gate. The
+  dashboard's own login flow no longer reads or writes it at all.
+- **Recovery**: `sudo cloud-pulse-hub reset-password [--data-dir DIR]
+  [--password-stdin]` resets the admin password without needing to sign
+  in first — by default back to `changeme` (forcing a change on next
+  login), or with `--password-stdin`, to a password piped in on stdin
+  (policy-checked, does not force a further change). Either way, every
+  existing session is revoked. It works correctly even while the hub is
+  running (SQLite WAL + busy-timeout allow the CLI and the live hub
+  process to write concurrently), resolving its data directory with the
+  same precedence as the hub itself (explicit flag > `CP_DATA_DIR` >
+  `/var/lib/cloud-pulse` if present > `./data`), and — when run as root —
+  restores ownership of the database file (and any `-wal`/`-shm`
+  sidecars) to the data directory's owner afterward.
+
+
 
 The hub polls Amazon CloudWatch directly (no AWS SDK; a hand-written SigV4
 signer) — it never touches your bucket's object data, only metrics.
@@ -249,11 +344,11 @@ track R2 egress bytes.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `CP_LISTEN` | `:8090` | HTTP listen address |
+| `CP_LISTEN` | `:8090` | HTTP listen address; overridden by a hub-side Network settings override once one is confirmed from the dashboard (see [Network settings](#network-settings)) |
 | `CP_DATA_DIR` | `./data` | Directory holding `cloud-pulse.db` |
 | `CP_AGENT_TOKEN` | *(required)* | ≥16 chars; authenticates agent report ingestion |
-| `CP_UI_TOKEN` | *(unset)* | ≥8 chars if set; authenticates read endpoints + dashboard |
-| `CP_ALLOWED_CIDRS` | `100.64.0.0/10,fd7a:115c:a1e0::/48,127.0.0.0/8,::1/128` | Comma-separated CIDRs/IPs allowed to reach the hub; `*` disables the allowlist |
+| `CP_UI_TOKEN` | *(unset)* | ≥8 chars if set; **optional** static bearer token for scripts (curl/CI) — full read/admin access, never subject to the must-change-password gate. The dashboard itself always requires signing in regardless of this setting (see [Sign-in and accounts](#sign-in-and-accounts)) |
+| `CP_ALLOWED_CIDRS` | `100.64.0.0/10,fd7a:115c:a1e0::/48,127.0.0.0/8,::1/128` | Comma-separated CIDRs/IPs allowed to reach the hub; `*` disables the allowlist; overridden by a hub-side Network settings override once one is confirmed |
 | `CP_OFFLINE_AFTER` | `60s` | Host reported "down" after this long since last-seen |
 | `CP_CLOUD_INTERVAL` | `15m` (min `1m`) | Interval between S3/R2 collections |
 | `CP_ALERT_WEBHOOK_URL` | *(unset)* | Slack- or Discord-compatible webhook for egress alerts |
@@ -311,7 +406,34 @@ Both are dispatched before flag parsing/config loading, the same as
 `update`. `print` is what the installers' `render_unit()` calls on a
 freshly downloaded v0.3.1+ binary, falling back to a built-in bash
 heredoc only if that call fails (kept byte-identical to `Render`'s
-output, checked by a drift test in `scripts/test-install.sh`).
+output, checked by a drift test in `scripts/test-install.sh`). Since
+v0.4.0 the hub's rendered unit additionally restricts
+`RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK` (the extra
+`AF_NETLINK` is required by `net.Interfaces()`, used by the Network
+settings page to list adapters — the agent unit is unaffected, it
+doesn't need netlink). `sudo cloud-pulse-hub update` from a v0.3.1+
+install applies this automatically via `systemd-unit apply`; see
+[Upgrading](#upgrading).
+
+### Hub `reset-password` / `reset-network` subcommands
+
+Recovery CLIs, dispatched before flag parsing like `update`, for an
+admin locked out of the dashboard itself. Both resolve their data
+directory with the same precedence as the hub (explicit `--data-dir` >
+`CP_DATA_DIR` > `/var/lib/cloud-pulse` if it exists > `./data`), work
+correctly while the hub is running (SQLite WAL + busy-timeout), and —
+when run as root — restore ownership of the database file (and any
+`-wal`/`-shm` sidecars) to the data directory's owner afterward.
+
+| Usage | Purpose |
+|---|---|
+| `cloud-pulse-hub reset-password [--data-dir DIR]` | Reset the admin password to the default `changeme`, forcing a change on next login; revokes every existing session |
+| `cloud-pulse-hub reset-password --password-stdin [--data-dir DIR]` | Reset the admin password to one line read from stdin (policy-checked); does not force a further change; revokes every existing session |
+| `cloud-pulse-hub reset-network [--data-dir DIR]` | Delete the hub-side Network settings override so the hub falls back to `CP_LISTEN`/`CP_ALLOWED_CIDRS` on next restart — the recovery path for an admin who locked themselves out via the Network settings page (see [Network settings](#network-settings)) |
+
+See [Sign-in and accounts](#sign-in-and-accounts) and
+[Network settings](#network-settings) for the full behavior each
+recovers from.
 
 ### Agent environment variables (`CP_*`)
 
@@ -546,6 +668,25 @@ Old agents keep working against a new hub unmodified (see D-048 in
 upgrade every agent in lockstep — the dashboard will simply show them as
 outdated in the meantime.
 
+**Upgrading an existing install to v0.4.0**: a plain `sudo
+cloud-pulse-hub update` (no reinstall needed, since your install is
+already on v0.3.1+) is enough — it replaces the binary and, via
+`systemd-unit apply`, adds the new `AF_NETLINK` permission the Network
+settings page needs. The next time you open the dashboard, it will show
+the sign-in screen: use `admin` / `changeme` if this is the first time
+v0.4.0 has started (a fresh admin account is bootstrapped only when no
+password hash exists yet — an upgrade from any v0.3.x database is not
+"fresh," so if you never signed in before, this is genuinely the first
+login and `changeme` is correct), and you'll immediately be asked to
+choose a new password. If your hub has been running long enough to have
+already gone through a v0.4.0 first-login-and-password-change on a
+previous update, sign in with that existing password. Forgot it? `sudo
+cloud-pulse-hub reset-password` from the same host, without needing to
+stop the service. `CP_UI_TOKEN`, if you already had one set for the old
+open-read-API behavior, keeps working exactly as before as an optional
+API bearer token — it's no longer read by the dashboard's login flow,
+but scripts using it as a bearer token need no changes.
+
 ### Upgrading from v0.1.x / v0.2.x / v0.3.0 (no unit-syncing `update` yet)
 
 Versions before v0.3.0 don't have the `update` subcommand at all — an old
@@ -632,19 +773,20 @@ token and copy a ready-to-run install command, edit per-host egress/
 ingress limit overrides, and manage the alert webhook URL — all from the
 browser instead of editing `hub.env` and restarting the service.
 
-**Why it requires `CP_UI_TOKEN`**: the agent token grants write access to
+**Why it requires signing in**: the agent token grants write access to
 ingest metrics for any host, so it must never be exposed to an
-unauthenticated request. All settings/token endpoints are **admin
-endpoints**: they require `CP_UI_TOKEN` to be configured on the hub *and*
-presented as a valid bearer token. If `CP_UI_TOKEN` is not configured,
-they respond `403` with `{"code": "admin_disabled", ...}` rather than
-ever falling back to an open read — there is no way to reveal the agent
-token or change limits/webhook settings on a hub that hasn't opted into
-UI authentication.
+unauthenticated request. All settings/token endpoints are **admin**
+endpoints — since v0.4.0 that simply means "authenticated as the signed-
+in `admin` account or the optional `CP_UI_TOKEN`," the same as every
+other dashboard route (see [Sign-in and accounts](#sign-in-and-accounts)).
+The old v0.3.x `admin_disabled` mode — where these endpoints were
+unreachable at all on a hub with no `CP_UI_TOKEN` configured — no longer
+exists: the dashboard always requires signing in, so the Settings page
+is always reachable to whoever can sign in as `admin`.
 
-**Enabling it on an existing install**: choose **2) Reinstall** from the
-menu (prompts "The web Settings page is disabled (no UI token). Enable
-it now?" when one isn't already set), or pass a flag non-interactively:
+**`CP_UI_TOKEN` today** is optional and no longer gates the Settings
+page at all: set it only if you also want script/CI access to the same
+endpoints without going through the sign-in flow.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scripts/install-hub.sh \
@@ -658,39 +800,118 @@ curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scr
 - `--rotate-ui-token` always generates a **new** token, replacing any
   existing one (use this to invalidate a token you suspect has leaked).
 - Either way, a token that was newly generated or rotated **this run**
-  is printed exactly once in the final summary (`Web UI token: ...`);
-  an unchanged existing token instead prints a hint to read it from
+  is printed exactly once in the final summary (`API token: ...`); an
+  unchanged existing token instead prints a hint to read it from
   `hub.env` (`sudo grep CP_UI_TOKEN /etc/cloud-pulse/hub.env`) rather
   than ever re-printing its value.
 
 Manual alternative (no installer re-run): generate a token with
 `cloud-pulse-hub -gen-token`, add `CP_UI_TOKEN=<token>` to
 `/etc/cloud-pulse/hub.env`, then `sudo systemctl restart cloud-pulse-hub`.
-Once set, every read endpoint and the dashboard itself will prompt for
-that token, and the Settings page becomes reachable.
+
+## Network settings
+
+Since v0.4.0, the dashboard's Settings → Network page manages the hub's
+own listen address(es) and access allowlist as **hub-managed state**
+(persisted in SQLite), instead of requiring an edit to `hub.env` and a
+service restart for every change:
+
+- **Adapters**: lists every network interface the hub host has (via
+  `net.Interfaces()`), each address's family (IPv4/IPv6), scope
+  (global/link-local/loopback), and a best-effort classification —
+  `loopback`, `tailscale` (by interface name or membership in
+  Tailscale's `100.64.0.0/10` / `fd7a:115c:a1e0::/48` ranges), `virtual`
+  (Docker/veth/bridge/VPN-style names), or `physical`. Each address
+  carries a `suggested_cidr` for the "Allow" one-click shortcuts in the
+  allowlist editor (e.g. a Tailscale address suggests
+  `100.64.0.0/10`/`fd7a:115c:a1e0::/48`; a loopback address suggests
+  `127.0.0.0/8`/`::1/128`; anything else suggests its own subnet). A
+  failure to enumerate interfaces (rare; platform-dependent) is reported
+  as an `interfaces_error` string in the response — **never** a `500`,
+  since the rest of the page still needs to work.
+- **Listen selection**: choose "all interfaces" or one or more specific
+  addresses, plus a port (1024–65535). Applying a change opens the new
+  listener(s) **before** closing any removed ones, and a removed
+  listener's socket stays open for a further second after that so any
+  in-flight HTTP response (including the API response confirming the
+  change) has time to flush — a client is never abruptly cut off by its
+  own request.
+- **Access allowlist**: the same CIDR/IP list `CP_ALLOWED_CIDRS`
+  represents, editable live; a swap of the effective list is atomic.
+- **Change safety — a Network settings change can never lock out the
+  admin who's making it**:
+  - A new allowlist that would exclude the requesting client's own IP is
+    rejected outright, before anything is applied: `409` with code
+    `would_lock_out`.
+  - A new listen configuration where **no** address ends up `listening`
+    or `waiting` is rolled back to the previous configuration
+    automatically: `409` with code `bind_failed` and a per-address error
+    summary.
+  - If the change still binds successfully but would stop serving the
+    *requesting client's own connection* (e.g. removing the address the
+    admin is currently connected through), the hub does **not** apply it
+    unconditionally — it opens the new listener(s) immediately (so they
+    can be tested) but treats the change as **pending**: it keeps
+    serving the old configuration's address(es) too, returns the set of
+    candidate URLs to verify the new configuration from, and starts a
+    120-second deadline. `POST .../confirm` from a connection that
+    already proves the new configuration works persists it for good;
+    `POST .../revert` (or simply doing nothing until the deadline) puts
+    the previous configuration back automatically — logged at `warn`
+    either way. Only one change may be pending at a time; a second `PUT`
+    while one is pending gets `409` `change_pending`.
+  - `DELETE /api/v1/settings/network` drops the hub-side override
+    entirely, reverting to `CP_LISTEN`/`CP_ALLOWED_CIDRS` from the
+    environment — subject to the same lock-out/bind-failure checks as a
+    `PUT`.
+- **`sudo cloud-pulse-hub reset-network [--data-dir DIR]`**: the offline
+  recovery path if an admin manages to lock themselves out anyway (e.g.
+  by editing the allowlist from a session that then expired, or by
+  restarting the hub while a config that only barely worked was active).
+  Deletes the persisted override so the *next restart* falls back to
+  `CP_LISTEN`/`CP_ALLOWED_CIDRS`; same data-directory resolution and
+  root-owned-chown behavior as `reset-password`.
+- The **`AF_NETLINK`** capability the hub's systemd unit gained in
+  v0.4.0 (see [systemd-unit](#hub-systemd-unit-subcommand-cloud-pulse-hub-systemd-unit))
+  exists solely so `net.Interfaces()` can enumerate adapters for this
+  page — the agent unit is unaffected, since agents read network
+  metrics from `/proc`, not netlink sockets.
 
 ## REST API
 
+
 All responses are JSON. Read endpoints (`GET`, except `/healthz` and static
-assets) require `Authorization: Bearer <CP_UI_TOKEN>` only when
-`CP_UI_TOKEN` is set. **Admin** endpoints additionally require
-`CP_UI_TOKEN` to be configured at all — see [Settings UI](#settings-ui).
+assets) require signing in (session bearer token) or the optional
+`CP_UI_TOKEN` bearer token — see [Sign-in and accounts](#sign-in-and-accounts).
+**Admin** endpoints require the same; there is no longer an
+"admin_disabled" mode.
 
 | Method & path | Purpose | Auth |
 |---|---|---|
 | `POST /api/v1/agent/report` | Ingest a batch of samples; response includes `server_time_ms` | Agent token |
 | `GET /api/v1/agent/time` | Hub wall clock, for agent NTP-style offset estimation | Agent token |
-| `GET /api/v1/hosts` | List all hosts with status, latest sample, outbound + inbound egress usage | UI token (if set) |
-| `GET /api/v1/hosts/{id}` | One host's summary | UI token (if set) |
-| `GET /api/v1/hosts/{id}/metrics?range=1h\|6h\|24h\|7d\|30d` | Time series for charts (default `1h`) | UI token (if set) |
-| `GET /api/v1/egress?month=YYYY-MM` | Per-host outbound + inbound egress usage for a month (default current) | UI token (if set) |
-| `GET /api/v1/buckets` | Latest S3/R2 stats, 24h history, collector status | UI token (if set) |
-| `GET /api/v1/version` | Build version/commit/date + self-update check status (see [Update notifications](#update-notifications)) | UI token (if set) |
+| `POST /api/v1/auth/login` | Sign in with `admin`/password; issues a session token | None (rate-limited) |
+| `POST /api/v1/auth/logout` | Delete the caller's current session | Session or API token |
+| `GET /api/v1/auth/me` | Identify the caller (username, must-change flag, auth method) | Session or API token |
+| `POST /api/v1/auth/password` | Change the admin password; issues a fresh session, revokes all others | Session or API token |
+| `GET /api/v1/auth/sessions` | List active sessions (creation/last-seen/expiry/remote/user agent) | Session or API token |
+| `POST /api/v1/auth/sessions/revoke-others` | Sign out every session except the caller's own | Session or API token |
+| `GET /api/v1/hosts` | List all hosts with status, latest sample, outbound + inbound egress usage | Session or API token |
+| `GET /api/v1/hosts/{id}` | One host's summary | Session or API token |
+| `GET /api/v1/hosts/{id}/metrics?range=1h\|6h\|24h\|7d\|30d` | Time series for charts (default `1h`) | Session or API token |
+| `GET /api/v1/egress?month=YYYY-MM` | Per-host outbound + inbound egress usage for a month (default current) | Session or API token |
+| `GET /api/v1/buckets` | Latest S3/R2 stats, 24h history, collector status | Session or API token |
+| `GET /api/v1/version` | Build version/commit/date + self-update check status (see [Update notifications](#update-notifications)) | Session or API token |
 | `GET /api/v1/settings` | Hub config summary + per-host limits | Admin |
 | `GET /api/v1/settings/agent-token` | Reveal the agent token + a ready-to-run install command | Admin |
 | `PUT /api/v1/hosts/{id}/limits` | Set/clear a host's outbound/inbound limit overrides | Admin |
 | `PUT /api/v1/settings/alerts` | Set/clear the hub-side alert webhook URL override | Admin |
 | `POST /api/v1/settings/alerts/test` | Send a test notification to the effective webhook URL | Admin |
+| `GET /api/v1/settings/network` | Adapters, listen config, allowlist, listener status, pending change | Admin |
+| `PUT /api/v1/settings/network` | Set the listen config + allowlist (validated; may return `pending`) | Admin |
+| `POST /api/v1/settings/network/confirm` | Persist a pending network change | Admin |
+| `POST /api/v1/settings/network/revert` | Revert a pending network change immediately | Admin |
+| `DELETE /api/v1/settings/network` | Drop the hub-side network override, revert to env config | Admin |
 | `GET /healthz` | Liveness check | None |
 | `GET /` and static assets | Embedded dashboard | None |
 
@@ -714,15 +935,62 @@ see [Update notifications](#update-notifications).
 - **Network access control**: an IP allowlist checked against
   `http.Request.RemoteAddr` only; `X-Forwarded-For` and other
   client-supplied headers are never trusted, so a reverse proxy in front
-  of the hub is seen as its own IP, not the original client's.
-- **Optional UI token**: `CP_UI_TOKEN` gates all read endpoints and the
-  dashboard when set.
-- **Admin endpoints require `CP_UI_TOKEN` to be configured at all**:
-  settings/limits/webhook/agent-token endpoints respond `403
-  {"code":"admin_disabled"}` when `CP_UI_TOKEN` is unset, and `401` for a
-  missing/wrong bearer token when it is set — there is no unauthenticated
-  path to the agent token or write access to limits/webhook settings.
-  Bearer-header auth only, no cookies, so there's no CSRF surface.
+  of the hub is seen as its own IP, not the original client's. The
+  allowlist is now editable live from the dashboard, but a change that
+  would exclude the requesting admin's own address is always rejected
+  before being applied — see [Network settings](#network-settings).
+- **Dashboard sign-in required, always**: every read/write/admin route
+  (other than `/healthz`, static assets, agent endpoints, and
+  `/auth/login` itself) requires either a valid session bearer token or
+  the optional `CP_UI_TOKEN`. There is no more "no `CP_UI_TOKEN` ⇒ open
+  read API" or `admin_disabled` mode from v0.3.x — see
+  [Sign-in and accounts](#sign-in-and-accounts).
+- **Password hashing**: PBKDF2-HMAC-SHA256, 600,000 iterations, a fresh
+  random 16-byte salt per hash (Go standard library `crypto/pbkdf2`, no
+  third-party crypto dependency). Verification always performs the full
+  computation, including for an unknown username or a missing/malformed
+  stored hash, so there is no timing signal distinguishing "wrong
+  username" from "wrong password for a real username."
+- **Sessions are hashed at rest**: the database stores only
+  `sha256(token)`, never the bearer token itself — a stolen database
+  backup does not expose usable session tokens. Sessions slide forward
+  on activity (7-day idle window) but expire absolutely 30 days after
+  creation regardless of activity.
+- **Login/password-change rate limiting**: 5 failures from the same
+  client IP (host only, port stripped) within 15 minutes locks that
+  client out, starting at 1 minute and doubling per further lockout up
+  to 15 minutes; a fleet-wide 30-failures/minute threshold locks out
+  every client for 60 seconds. At most 2 PBKDF2 computations run
+  concurrently, bounding CPU usage under a login burst. See
+  [Sign-in and accounts](#sign-in-and-accounts).
+- **Must-change-password gate**: a session whose account still has the
+  default (or otherwise flagged) password can reach only
+  `/api/v1/auth/me`, `/api/v1/auth/password`, and `/api/v1/auth/logout`
+  — every other route responds `403 password_change_required` until the
+  password is changed.
+- **Well-known default password, by design, with mitigations**: a fresh
+  hub always bootstraps `admin`/`changeme` so first-run setup never
+  requires an out-of-band secret exchange — but this is a real exposure
+  if the hub is reachable before the operator signs in. Mitigations:
+  the must-change gate above forces a password change on the very first
+  login before any other route is usable; the hub logs a warning on
+  every startup while the default is still in effect, escalated to an
+  error-level warning when `CP_ALLOWED_CIDRS` also allows every address
+  (i.e. the default password is reachable from anywhere the hub is
+  exposed); and the default network allowlist restricts access to
+  Tailscale/loopback ranges only, so on a stock install the exposure
+  window is bounded to the tailnet, not the public internet. Operators
+  who widen the allowlist should treat signing in and changing the
+  password as the very next step, not an eventual one.
+- **Optional API token**: `CP_UI_TOKEN`, when set, authenticates
+  scripts/CI as `api_token` with full read/admin access, bypassing the
+  sign-in flow and the must-change gate — but it never gates the
+  dashboard's own login, and it is not a substitute for changing the
+  default admin password.
+- **Network settings changes are reversible by construction**: no
+  listen/allowlist change can be applied in a way that locks out the
+  admin making it — see the lock-out/bind-failure/pending/auto-revert
+  rules in [Network settings](#network-settings).
 - **Security headers** on every response: CSP (`script-src 'self'`, no
   inline scripts, `frame-ancestors 'none'`), `X-Content-Type-Options:
   nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`.
@@ -730,10 +998,13 @@ see [Update notifications](#update-notifications).
   `ProtectHome=read-only`, `PrivateTmp`, `PrivateDevices`,
   `ProtectKernelTunables`, `ProtectControlGroups`, `RestrictSUIDSGID`,
   `LockPersonality`, empty capability set, `RestrictAddressFamilies=AF_INET
-  AF_INET6 AF_UNIX` (neither binary needs `AF_NETLINK` — network metrics
-  are read from `/proc`, not netlink sockets).
-- **No secrets logged**: tokens and webhook URLs are logged only as
-  `(set)`/`(not set)`, never their value, including in `-check-config`
+  AF_INET6 AF_UNIX` on the agent (network metrics are read from `/proc`,
+  not netlink sockets) and `RestrictAddressFamilies=AF_INET AF_INET6
+  AF_UNIX AF_NETLINK` on the hub (the extra `AF_NETLINK` is required by
+  `net.Interfaces()` for the Network settings page's adapter list).
+- **No secrets logged**: tokens, webhook URLs, and passwords are logged
+  only as `(set)`/`(not set)` or never at all (failed logins log the
+  remote address only), including in `-check-config`
   output.
 
 ## Development
