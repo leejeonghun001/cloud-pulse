@@ -21,7 +21,6 @@ import (
 	"net/http"
 	"sort"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
@@ -309,14 +308,4 @@ func classifyBindError(err error) (status, message string) {
 		return "waiting", err.Error()
 	}
 	return "error", err.Error()
-}
-
-// isAddrNotAvailable reports whether err (or a wrapped cause) is
-// syscall.EADDRNOTAVAIL, portable across windows/darwin/freebsd/linux:
-// errors.Is against the syscall package's own constant works uniformly
-// because each OS's syscall package defines EADDRNOTAVAIL as its
-// platform's numeric errno and net.OpError wraps the underlying
-// os.SyscallError/syscall.Errno without translation.
-func isAddrNotAvailable(err error) bool {
-	return errors.Is(err, syscall.EADDRNOTAVAIL)
 }
