@@ -12,6 +12,12 @@
 #     | sudo bash -s -- --hub-url http://100.x.y.z:8090 --token TOKEN
 #
 # Flags:
+# Flags:
+#   --install                    Fresh install. Errors (with a hint) if
+#                               already installed.
+#   --reinstall                   Upgrade/reinstall an existing install in
+#                               place, keeping all env values. Errors
+#                               (with a hint) if not installed.
 #   --hub-url URL          cloud-pulse hub base URL. Required on first
 #                         install; on upgrade, reuses the existing value
 #                         from agent.env unless given again.
@@ -29,13 +35,28 @@
 #                         and binary. Config is kept unless --purge.
 #   --purge                  With --uninstall, also remove
 #                         /etc/cloud-pulse/agent.env.
+#   -y, --yes                Assume default answers to any confirmation
+#                         prompt (Y for install/reinstall, N for purge
+#                         unless --purge is also given); never blocks on
+#                         a prompt.
 #   --dry-run                Print the actions that would be taken and
 #                         exit without changing anything.
 #   -h, --help                Show this help and exit.
 #
-# Re-running this script (without --uninstall) upgrades an existing
-# install in place: the binary and systemd unit are replaced, but
-# agent.env is preserved unless an explicit flag supplies a new value.
+# Interactive menu:
+#   Running with NO arguments at all, from a real terminal (stdin/stdout
+#   attached to a tty, and CP_NONINTERACTIVE is not "1"), shows a menu
+#   (Install / Reinstall / Uninstall / Exit) instead of the flag-driven
+#   behavior below. All menu prompts (including the hidden agent-token
+#   prompt) read from /dev/tty, never stdin, so `curl ... | sudo bash`
+#   (whose stdin is the script itself) still shows the menu correctly
+#   when run at a terminal. Piping any flag, or running without a tty,
+#   always skips the menu.
+#
+# Re-running this script (without --uninstall, and without a tty/menu)
+# upgrades an existing install in place: the binary and systemd unit are
+# replaced, but agent.env is preserved unless an explicit flag supplies
+# a new value.
 #
 # Environment overrides:
 #   CP_RELEASE_BASE_URL   Override the base URL assets are downloaded
@@ -54,6 +75,17 @@
 #                         sandboxed paths.
 #   CP_TEST_UNAME_M       Override the value used in place of `uname -m`
 #                         (test hook for the unknown-arch path).
+#   CP_NONINTERACTIVE     Set to "1" to force non-interactive behavior
+#                         (skip the menu) even when a tty is attached.
+#                         Always set by scripts/test-install.sh's
+#                         non-menu test cases so they never block.
+#   CP_INSTALL_FORCE_SCRIPT_UNIT
+#                         Set to "1" to force the bash heredoc fallback
+#                         for systemd unit rendering, skipping the
+#                         "$BIN_PATH systemd-unit print" call entirely
+#                         (test hook for the unit-rendering drift test;
+#                         also useful on a version pinned older than the
+#                         binary subcommand's introduction).
 #
 # All logic lives inside main(), invoked at the very end of the file, so
 # that a connection that is cut off mid-download (when this script itself
@@ -84,9 +116,12 @@ OPT_INTERVAL=""
 OPT_PROVIDER=""
 OPT_EGRESS_LIMIT_GB=""
 OPT_PREFIX="/usr/local"
+OPT_ACTION=""
 OPT_UNINSTALL=0
 OPT_PURGE=0
+OPT_YES=0
 OPT_DRY_RUN=0
+OPT_ANY_FLAG_GIVEN=0
 
 SANDBOX_ROOT="${CP_INSTALL_ROOT:-}"
 IS_SANDBOX=0
@@ -283,13 +318,89 @@ probe_existing_version() {
   printf '%s\n' "$out" | head -n1 | awk '{print $1}'
 }
 
+# tty_available — true iff /dev/tty can be opened for both read and
+# write in this process. See install-hub.sh's identical helper for the
+# full rationale (piped `curl | sudo bash` invocations never read menu
+# prompts from stdin).
+tty_available() {
+  if [ "${CP_NONINTERACTIVE:-0}" = "1" ]; then
+    return 1
+  fi
+  { : <"/dev/tty"; } 2>/dev/null && { : >"/dev/tty"; } 2>/dev/null
+}
+
+# prompt_tty PROMPT_TEXT — print PROMPT_TEXT to /dev/tty with no
+# trailing newline.
+prompt_tty() {
+  printf '%s' "$1" >/dev/tty
+}
+
+# read_line_tty VARNAME — read one line from /dev/tty into VARNAME.
+read_line_tty() {
+  local __varname="$1"
+  # shellcheck disable=SC2229
+  IFS= read -r "$__varname" </dev/tty
+}
+
+# read_hidden_tty VARNAME PROMPT_TEXT — prompt on /dev/tty and read one
+# line from /dev/tty with echo disabled (for the agent token), printing
+# a newline afterward since -s suppresses the one the terminal would
+# otherwise echo.
+read_hidden_tty() {
+  local __varname="$1" __prompt="$2"
+  prompt_tty "$__prompt"
+  local status
+  # shellcheck disable=SC2229
+  IFS= read -rs "$__varname" </dev/tty
+  status=$?
+  printf '\n' >/dev/tty
+  return "$status"
+}
+
+# confirm_tty PROMPT_TEXT DEFAULT_YES — see install-hub.sh's identical
+# helper. If OPT_YES is set, returns DEFAULT_YES immediately without
+# prompting.
+confirm_tty() {
+  local text="$1" default_yes="$2"
+  if [ "$OPT_YES" -eq 1 ]; then
+    return "$((1 - default_yes))"
+  fi
+  local suffix="[Y/n]"
+  if [ "$default_yes" -ne 1 ]; then
+    suffix="[y/N]"
+  fi
+  local answer
+  prompt_tty "${text} ${suffix}: "
+  if ! read_line_tty answer; then
+    err "unexpected EOF on /dev/tty"
+    exit 1
+  fi
+  case "$answer" in
+    '') return "$((1 - default_yes))" ;;
+    [Yy]|[Yy][Ee][Ss]) return 0 ;;
+    [Nn]|[Nn][Oo]) return 1 ;;
+    *) return "$((1 - default_yes))" ;;
+  esac
+}
+
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
 
 parse_args() {
+  if [ "$#" -gt 0 ]; then
+    OPT_ANY_FLAG_GIVEN=1
+  fi
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --install)
+        OPT_ACTION="install"
+        shift
+        ;;
+      --reinstall)
+        OPT_ACTION="reinstall"
+        shift
+        ;;
       --hub-url)
         OPT_HUB_URL="${2:?--hub-url requires an argument}"
         validate_env_value "$OPT_HUB_URL" --hub-url
@@ -334,6 +445,10 @@ parse_args() {
         ;;
       --purge)
         OPT_PURGE=1
+        shift
+        ;;
+      -y|--yes)
+        OPT_YES=1
         shift
         ;;
       --dry-run)
@@ -530,67 +645,198 @@ resolve_required_value() {
   return 1
 }
 
+resolve_optional_value() {
+  # resolve_optional_value FLAG_VALUE ENV_KEY FLAG_NAME — explicit flag
+  # wins, followed by the existing active env-file value. An empty result
+  # means the setting remains at the binary default.
+  local flag_value="$1" env_key="$2" flag_name="$3" value
+  value="$flag_value"
+  if [ -z "$value" ]; then
+    value="$(env_get_existing "$env_key")"
+  fi
+  if [ -n "$value" ]; then
+    validate_env_value "$value" "$flag_name"
+  fi
+  printf '%s\n' "$value"
+}
+
+rewrite_agent_env() {
+  # Rewrite managed settings in their original positions while copying
+  # comments and every unrecognised line verbatim. Commented managed keys
+  # count as present and remain comments unless no active form exists and a
+  # resolved non-empty value needs activating. This never sources agent.env.
+  local tmp_env="$1" hub_url="$2" token="$3" host_id="$4" interval="$5"
+  local provider="$6" egress_limit="$7" net_exclude="$8" time_sync="$9"
+  local send_jitter="${10}" log_level="${11}" log_format="${12}"
+  local seen_hub=0 seen_token=0 seen_host=0 seen_interval=0 seen_provider=0
+  local seen_egress=0 seen_net=0 seen_time=0 seen_jitter=0 seen_log_level=0 seen_log_format=0
+  local active_hub=0 active_token=0 active_host=0 active_interval=0 active_provider=0
+  local active_egress=0 active_net=0 active_time=0 active_jitter=0 active_log_level=0 active_log_format=0
+  local line normalized is_commented
+
+  if [ -f "$ENV_FILE" ]; then
+    # Find active keys first so an active assignment wins over any commented
+    # default even if the comment appears before it in the file.
+    while IFS= read -r line || [ -n "$line" ]; do
+      normalized="${line#"${line%%[![:space:]]*}"}"
+      case "$normalized" in
+        \#*) ;;
+        CP_HUB_URL=*) active_hub=1 ;;
+        CP_AGENT_TOKEN=*) active_token=1 ;;
+        CP_HOST_ID=*) active_host=1 ;;
+        CP_INTERVAL=*) active_interval=1 ;;
+        CP_PROVIDER=*) active_provider=1 ;;
+        CP_EGRESS_LIMIT_GB=*) active_egress=1 ;;
+        CP_NET_EXCLUDE=*) active_net=1 ;;
+        CP_TIME_SYNC=*) active_time=1 ;;
+        CP_SEND_JITTER=*) active_jitter=1 ;;
+        CP_LOG_LEVEL=*) active_log_level=1 ;;
+        CP_LOG_FORMAT=*) active_log_format=1 ;;
+      esac
+    done < "$ENV_FILE"
+
+    while IFS= read -r line || [ -n "$line" ]; do
+      normalized="${line#"${line%%[![:space:]]*}"}"
+      is_commented=0
+      if [[ "$normalized" == \#* ]]; then
+        is_commented=1
+        normalized="${normalized#\#}"
+        normalized="${normalized#"${normalized%%[![:space:]]*}"}"
+      fi
+      case "$normalized" in
+        CP_HUB_URL=*)
+          seen_hub=1
+          if [ "$is_commented" -eq 1 ] && [ "$active_hub" -eq 1 ]; then printf '%s\n' "$line"; else printf 'CP_HUB_URL=%s\n' "$hub_url"; fi
+          ;;
+        CP_AGENT_TOKEN=*)
+          seen_token=1
+          if [ "$is_commented" -eq 1 ] && [ "$active_token" -eq 1 ]; then printf '%s\n' "$line"; else printf 'CP_AGENT_TOKEN=%s\n' "$token"; fi
+          ;;
+        CP_HOST_ID=*)
+          seen_host=1
+          if [ "$is_commented" -eq 1 ]; then
+            if [ "$active_host" -eq 1 ] || [ -z "$host_id" ]; then printf '%s\n' "$line"; else printf 'CP_HOST_ID=%s\n' "$host_id"; fi
+          else
+            printf 'CP_HOST_ID=%s\n' "$host_id"
+          fi
+          ;;
+        CP_INTERVAL=*)
+          seen_interval=1
+          if [ "$is_commented" -eq 1 ]; then
+            if [ "$active_interval" -eq 1 ] || [ -z "$interval" ]; then printf '%s\n' "$line"; else printf 'CP_INTERVAL=%s\n' "$interval"; fi
+          else
+            printf 'CP_INTERVAL=%s\n' "$interval"
+          fi
+          ;;
+        CP_PROVIDER=*)
+          seen_provider=1
+          if [ "$is_commented" -eq 1 ]; then
+            if [ "$active_provider" -eq 1 ] || [ -z "$provider" ]; then printf '%s\n' "$line"; else printf 'CP_PROVIDER=%s\n' "$provider"; fi
+          else
+            printf 'CP_PROVIDER=%s\n' "$provider"
+          fi
+          ;;
+        CP_EGRESS_LIMIT_GB=*)
+          seen_egress=1
+          if [ "$is_commented" -eq 1 ]; then
+            if [ "$active_egress" -eq 1 ] || [ -z "$egress_limit" ]; then printf '%s\n' "$line"; else printf 'CP_EGRESS_LIMIT_GB=%s\n' "$egress_limit"; fi
+          else
+            printf 'CP_EGRESS_LIMIT_GB=%s\n' "$egress_limit"
+          fi
+          ;;
+        CP_NET_EXCLUDE=*)
+          seen_net=1
+          if [ "$is_commented" -eq 1 ]; then
+            if [ "$active_net" -eq 1 ] || [ -z "$net_exclude" ]; then printf '%s\n' "$line"; else printf 'CP_NET_EXCLUDE=%s\n' "$net_exclude"; fi
+          else
+            printf 'CP_NET_EXCLUDE=%s\n' "$net_exclude"
+          fi
+          ;;
+        CP_TIME_SYNC=*)
+          seen_time=1
+          if [ "$is_commented" -eq 1 ]; then
+            if [ "$active_time" -eq 1 ] || [ -z "$time_sync" ]; then printf '%s\n' "$line"; else printf 'CP_TIME_SYNC=%s\n' "$time_sync"; fi
+          else
+            printf 'CP_TIME_SYNC=%s\n' "$time_sync"
+          fi
+          ;;
+        CP_SEND_JITTER=*)
+          seen_jitter=1
+          if [ "$is_commented" -eq 1 ]; then
+            if [ "$active_jitter" -eq 1 ] || [ -z "$send_jitter" ]; then printf '%s\n' "$line"; else printf 'CP_SEND_JITTER=%s\n' "$send_jitter"; fi
+          else
+            printf 'CP_SEND_JITTER=%s\n' "$send_jitter"
+          fi
+          ;;
+        CP_LOG_LEVEL=*)
+          seen_log_level=1
+          if [ "$is_commented" -eq 1 ]; then
+            if [ "$active_log_level" -eq 1 ] || [ -z "$log_level" ]; then printf '%s\n' "$line"; else printf 'CP_LOG_LEVEL=%s\n' "$log_level"; fi
+          else
+            printf 'CP_LOG_LEVEL=%s\n' "$log_level"
+          fi
+          ;;
+        CP_LOG_FORMAT=*)
+          seen_log_format=1
+          if [ "$is_commented" -eq 1 ]; then
+            if [ "$active_log_format" -eq 1 ] || [ -z "$log_format" ]; then printf '%s\n' "$line"; else printf 'CP_LOG_FORMAT=%s\n' "$log_format"; fi
+          else
+            printf 'CP_LOG_FORMAT=%s\n' "$log_format"
+          fi
+          ;;
+        *) printf '%s\n' "$line" ;;
+      esac
+    done < "$ENV_FILE" > "$tmp_env"
+  else
+    {
+      echo "# cloud-pulse-agent configuration. Managed by install-agent.sh;"
+      echo "# manual edits are preserved across re-runs of the installer."
+    } > "$tmp_env"
+  fi
+
+  {
+    [ "$seen_hub" -eq 1 ] || printf 'CP_HUB_URL=%s\n' "$hub_url"
+    [ "$seen_token" -eq 1 ] || printf 'CP_AGENT_TOKEN=%s\n' "$token"
+    if [ "$seen_host" -eq 0 ]; then
+      if [ -n "$host_id" ]; then printf 'CP_HOST_ID=%s\n' "$host_id"; else echo "#CP_HOST_ID="; fi
+    fi
+    if [ "$seen_interval" -eq 0 ]; then
+      if [ -n "$interval" ]; then printf 'CP_INTERVAL=%s\n' "$interval"; else echo "#CP_INTERVAL=15s"; fi
+    fi
+    if [ "$seen_provider" -eq 0 ]; then
+      if [ -n "$provider" ]; then printf 'CP_PROVIDER=%s\n' "$provider"; else echo "#CP_PROVIDER=auto"; fi
+    fi
+    if [ "$seen_egress" -eq 0 ]; then
+      if [ -n "$egress_limit" ]; then printf 'CP_EGRESS_LIMIT_GB=%s\n' "$egress_limit"; else echo "#CP_EGRESS_LIMIT_GB="; fi
+    fi
+    [ "$seen_net" -eq 1 ] || echo "#CP_NET_EXCLUDE=lo,lo0,docker*,veth*,br-*,virbr*,tailscale*,utun*,cni*,flannel*,cali*,kube*,vxlan*,tun*,wg*,zt*"
+    [ "$seen_time" -eq 1 ] || echo "#CP_TIME_SYNC=hub"
+    [ "$seen_jitter" -eq 1 ] || echo "#CP_SEND_JITTER=0s"
+    [ "$seen_log_level" -eq 1 ] || echo "#CP_LOG_LEVEL=info"
+    [ "$seen_log_format" -eq 1 ] || echo "#CP_LOG_FORMAT=text"
+  } >> "$tmp_env"
+}
+
 write_env_file() {
-  local hub_url token host_id interval provider egress_limit
+  local hub_url token host_id interval provider egress_limit net_exclude time_sync send_jitter log_level log_format
 
-  if ! hub_url="$(resolve_required_value "$OPT_HUB_URL" CP_HUB_URL --hub-url)"; then
-    exit 1
-  fi
-  if ! token="$(resolve_required_value "$OPT_TOKEN" CP_AGENT_TOKEN --token)"; then
-    exit 1
-  fi
-
-  host_id="$OPT_HOST_ID"
-  if [ -z "$host_id" ]; then
-    host_id="$(env_get_existing CP_HOST_ID)"
-  fi
-
-  interval="$OPT_INTERVAL"
-  if [ -z "$interval" ]; then
-    interval="$(env_get_existing CP_INTERVAL)"
-  fi
-
-  provider="$OPT_PROVIDER"
-  if [ -z "$provider" ]; then
-    provider="$(env_get_existing CP_PROVIDER)"
-  fi
-
-  egress_limit="$OPT_EGRESS_LIMIT_GB"
-  if [ -z "$egress_limit" ]; then
-    egress_limit="$(env_get_existing CP_EGRESS_LIMIT_GB)"
-  fi
+  if ! hub_url="$(resolve_required_value "$OPT_HUB_URL" CP_HUB_URL --hub-url)"; then exit 1; fi
+  if ! token="$(resolve_required_value "$OPT_TOKEN" CP_AGENT_TOKEN --token)"; then exit 1; fi
+  validate_env_value "$hub_url" --hub-url
+  validate_env_value "$token" --token
+  host_id="$(resolve_optional_value "$OPT_HOST_ID" CP_HOST_ID --host-id)"
+  interval="$(resolve_optional_value "$OPT_INTERVAL" CP_INTERVAL --interval)"
+  provider="$(resolve_optional_value "$OPT_PROVIDER" CP_PROVIDER --provider)"
+  egress_limit="$(resolve_optional_value "$OPT_EGRESS_LIMIT_GB" CP_EGRESS_LIMIT_GB --egress-limit-gb)"
+  net_exclude="$(resolve_optional_value "" CP_NET_EXCLUDE CP_NET_EXCLUDE)"
+  time_sync="$(resolve_optional_value "" CP_TIME_SYNC CP_TIME_SYNC)"
+  send_jitter="$(resolve_optional_value "" CP_SEND_JITTER CP_SEND_JITTER)"
+  log_level="$(resolve_optional_value "" CP_LOG_LEVEL CP_LOG_LEVEL)"
+  log_format="$(resolve_optional_value "" CP_LOG_FORMAT CP_LOG_FORMAT)"
 
   mkdir -p "$ETC_DIR"
-
   local tmp_env="${TMP_DIR}/agent.env"
-  {
-    echo "# cloud-pulse-agent configuration. Managed by install-agent.sh;"
-    echo "# manual edits are preserved across re-runs of the installer."
-    echo "CP_HUB_URL=${hub_url}"
-    echo "CP_AGENT_TOKEN=${token}"
-    if [ -n "$host_id" ]; then
-      echo "CP_HOST_ID=${host_id}"
-    else
-      echo "#CP_HOST_ID="
-    fi
-    if [ -n "$interval" ]; then
-      echo "CP_INTERVAL=${interval}"
-    else
-      echo "#CP_INTERVAL=15s"
-    fi
-    if [ -n "$provider" ]; then
-      echo "CP_PROVIDER=${provider}"
-    else
-      echo "#CP_PROVIDER=auto"
-    fi
-    if [ -n "$egress_limit" ]; then
-      echo "CP_EGRESS_LIMIT_GB=${egress_limit}"
-    else
-      echo "#CP_EGRESS_LIMIT_GB="
-    fi
-    echo "#CP_NET_EXCLUDE=lo,lo0,docker*,veth*,br-*,virbr*,tailscale*,utun*,cni*,flannel*,cali*,kube*,vxlan*,tun*,wg*,zt*"
-    echo "#CP_LOG_LEVEL=info"
-  } > "$tmp_env"
+  rewrite_agent_env "$tmp_env" "$hub_url" "$token" "$host_id" "$interval" "$provider" "$egress_limit" "$net_exclude" "$time_sync" "$send_jitter" "$log_level" "$log_format"
 
   install -m 0640 "$tmp_env" "$ENV_FILE"
   if [ "$IS_SANDBOX" -eq 1 ]; then
@@ -599,7 +845,6 @@ write_env_file() {
     chown "root:${CP_SERVICE_GROUP}" "$ENV_FILE"
   fi
   log "wrote ${ENV_FILE}"
-
   RESOLVED_HUB_URL="$hub_url"
 }
 RESOLVED_HUB_URL=""
@@ -611,6 +856,37 @@ RESOLVED_HUB_URL=""
 render_unit() {
   mkdir -p "$SYSTEMD_DIR"
   local tmp_unit="${TMP_DIR}/cloud-pulse-agent.service"
+
+  if [ "${CP_INSTALL_FORCE_SCRIPT_UNIT:-0}" != "1" ] && render_unit_via_binary "$tmp_unit"; then
+    log "rendered ${UNIT_FILE} via '${BIN_PATH} systemd-unit print'"
+  else
+    render_unit_fallback "$tmp_unit"
+    log "rendered ${UNIT_FILE} via built-in fallback template"
+  fi
+
+  install -m 0644 "$tmp_unit" "$UNIT_FILE"
+  log "wrote ${UNIT_FILE}"
+}
+
+# render_unit_via_binary OUT_PATH — ask the freshly installed agent
+# binary to render its own systemd unit (SPEC-v0.3.1 B,
+# internal/systemdunit). See install-hub.sh's identical helper for the
+# full rationale. Returns non-zero if the binary doesn't support the
+# subcommand yet; the caller falls back to render_unit_fallback.
+render_unit_via_binary() {
+  local out_path="$1"
+  if [ ! -x "$BIN_PATH" ]; then
+    return 1
+  fi
+  timeout 10 "$BIN_PATH" systemd-unit print --bin-path "$BIN_PATH" --env-file "$ENV_FILE" \
+    --user "$CP_SERVICE_USER" --group "$CP_SERVICE_GROUP" >"$out_path" 2>/dev/null
+}
+
+# render_unit_fallback OUT_PATH — bash heredoc fallback kept
+# byte-identical to internal/systemdunit.Render's agent template (see
+# SPEC-v0.3.1 B and the drift test in test-install.sh).
+render_unit_fallback() {
+  local out_path="$1"
   {
     echo "[Unit]"
     echo "Description=cloud-pulse agent (host metrics collector)"
@@ -651,10 +927,7 @@ render_unit() {
     echo
     echo "[Install]"
     echo "WantedBy=multi-user.target"
-  } > "$tmp_unit"
-
-  install -m 0644 "$tmp_unit" "$UNIT_FILE"
-  log "wrote ${UNIT_FILE}"
+  } > "$out_path"
 }
 
 verify_unit() {
@@ -747,7 +1020,13 @@ print_version_hint() {
 
   if [ "$IS_UPGRADE" -eq 1 ]; then
     if [ -n "$PREVIOUS_VERSION" ] && [ -n "$new_version" ]; then
-      echo "Upgraded ${PREVIOUS_VERSION} → ${new_version}"
+      if [ "$PREVIOUS_VERSION" = "$new_version" ]; then
+        echo "Reinstalled ${new_version}"
+      elif semver_lt "$new_version" "$PREVIOUS_VERSION"; then
+        echo "Downgraded ${PREVIOUS_VERSION} → ${new_version}"
+      else
+        echo "Upgraded ${PREVIOUS_VERSION} → ${new_version}"
+      fi
     elif [ -n "$new_version" ]; then
       echo "Upgraded (previous version unknown) → ${new_version}"
     fi
@@ -786,6 +1065,178 @@ print_dry_run() {
 }
 
 # ---------------------------------------------------------------------------
+# Interactive menu (SPEC-v0.3.1 A)
+# ---------------------------------------------------------------------------
+
+# is_installed — true iff an agent binary is currently installed at
+# BIN_PATH (setup_paths must have already run).
+is_installed() {
+  [ -x "$BIN_PATH" ]
+}
+
+# service_status_text — human-readable "(service: active|inactive|...)"
+# suffix for the menu's status line. Best-effort only.
+service_status_text() {
+  if [ "$IS_SANDBOX" -eq 1 ]; then
+    echo ""
+    return
+  fi
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo ""
+    return
+  fi
+  local state
+  state="$(systemctl is-active cloud-pulse-agent.service 2>/dev/null || true)"
+  if [ -n "$state" ]; then
+    echo " (service: ${state})"
+  else
+    echo ""
+  fi
+}
+
+# prompt_fresh_install_values — interactively collect the values a fresh
+# agent install needs (SPEC-v0.3.1 A "1) Install" prompts): hub URL,
+# hidden agent token, and optional host ID. Same validate_env_value
+# checks as the equivalent flags.
+prompt_fresh_install_values() {
+  local answer sanitized_default
+
+  prompt_tty "Hub URL (e.g. http://100.x.y.z:8090): "
+  if ! read_line_tty answer; then
+    err "unexpected EOF on /dev/tty"
+    exit 1
+  fi
+  case "$answer" in
+    http://*|https://*) ;;
+    *)
+      err "hub URL must start with http:// or https://"
+      exit 1
+      ;;
+  esac
+  validate_env_value "$answer" --hub-url
+  OPT_HUB_URL="$answer"
+
+  if ! read_hidden_tty answer "Agent token (input hidden): "; then
+    err "unexpected EOF on /dev/tty"
+    exit 1
+  fi
+  if [ "${#answer}" -lt 16 ]; then
+    err "agent token must be at least 16 characters"
+    exit 1
+  fi
+  validate_env_value "$answer" --token
+  OPT_TOKEN="$answer"
+
+  sanitized_default="$(hostname 2>/dev/null | tr -c 'A-Za-z0-9._-' '-' || true)"
+  prompt_tty "Host ID [${sanitized_default:-<hostname>}]: "
+  if ! read_line_tty answer; then
+    err "unexpected EOF on /dev/tty"
+    exit 1
+  fi
+  if [ -n "$answer" ]; then
+    validate_env_value "$answer" --host-id
+    OPT_HOST_ID="$answer"
+  fi
+}
+
+print_menu() {
+  local status_line
+  if is_installed; then
+    local v
+    v="$(probe_existing_version "$BIN_PATH")"
+    status_line="installed ${v:-(unknown version)}$(service_status_text)"
+  else
+    status_line="not installed"
+  fi
+  {
+    echo "cloud-pulse agent installer"
+    echo "  Status: ${status_line}"
+    echo "  1) Install      (설치)"
+    echo "  2) Reinstall    (재설치: latest version, keeps settings, tokens and data)"
+    echo "  3) Uninstall    (삭제)"
+    echo "  0) Exit"
+  } >/dev/tty
+}
+
+# run_menu — show the menu and read a single choice from /dev/tty,
+# re-prompting on invalid input up to 5 times.
+run_menu() {
+  local tries=0 choice
+  while [ "$tries" -lt 5 ]; do
+    print_menu
+    prompt_tty "Select [1-3, 0]: "
+    if ! read_line_tty choice; then
+      err "unexpected EOF on /dev/tty"
+      exit 1
+    fi
+    case "$choice" in
+      1) OPT_ACTION="install"; return ;;
+      2) OPT_ACTION="reinstall"; return ;;
+      3) OPT_ACTION="uninstall"; return ;;
+      0) exit 0 ;;
+      *)
+        tries=$((tries + 1))
+        echo "Invalid choice: ${choice}" >/dev/tty
+        ;;
+    esac
+  done
+  err "too many invalid menu selections"
+  exit 1
+}
+
+menu_loop() {
+  while :; do
+    run_menu
+    case "$OPT_ACTION" in
+      install)
+        if is_installed; then
+          echo >/dev/tty
+          echo "cloud-pulse-agent is already installed. Choose 2 to reinstall/upgrade, or run 'sudo cloud-pulse-agent update' on v0.3.0+." >/dev/tty
+          echo >/dev/tty
+          OPT_ACTION=""
+          continue
+        fi
+        prompt_fresh_install_values
+        run_install_flow
+        exit 0
+        ;;
+      reinstall)
+        if ! is_installed; then
+          echo >/dev/tty
+          echo "cloud-pulse-agent is not installed. Choose 1 to install." >/dev/tty
+          echo >/dev/tty
+          OPT_ACTION=""
+          continue
+        fi
+        local cur target
+        cur="$(probe_existing_version "$BIN_PATH")"
+        target="${OPT_VERSION:-latest}"
+        echo >/dev/tty
+        echo "Current version: ${cur:-unknown}" >/dev/tty
+        echo "Target version:  ${target}" >/dev/tty
+        if ! confirm_tty "Continue?" 1; then
+          OPT_ACTION=""
+          continue
+        fi
+        run_install_flow
+        exit 0
+        ;;
+      uninstall)
+        if ! confirm_tty "Uninstall cloud-pulse-agent?" 0; then
+          OPT_ACTION=""
+          continue
+        fi
+        if confirm_tty "Also delete configuration and tokens (${ENV_FILE})?" 0; then
+          OPT_PURGE=1
+        fi
+        do_uninstall
+        exit 0
+        ;;
+    esac
+  done
+}
+
+# ---------------------------------------------------------------------------
 # uninstall
 # ---------------------------------------------------------------------------
 
@@ -818,6 +1269,26 @@ do_uninstall() {
 # main
 # ---------------------------------------------------------------------------
 
+# run_install_flow — the actual download/install/start sequence, shared
+# by the flag-driven path and the interactive menu.
+run_install_flow() {
+  require_cmd awk
+  require_cmd grep
+
+  TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cloud-pulse-agent-install.XXXXXX")"
+  trap 'rm -rf "$TMP_DIR"' EXIT
+
+  download_and_verify
+  ensure_system_user
+  install_binary
+  write_env_file
+  render_unit
+  verify_unit
+  start_service
+  run_sanity_checks
+  print_summary
+}
+
 main() {
   parse_args "$@"
   detect_sandbox
@@ -840,21 +1311,32 @@ main() {
     exit 0
   fi
 
-  require_cmd awk
-  require_cmd grep
+  # Menu only when: no arguments at all AND interactive. See
+  # install-hub.sh's identical check for the full rationale.
+  if [ "$OPT_ANY_FLAG_GIVEN" -eq 0 ] && tty_available; then
+    menu_loop
+    return
+  fi
 
-  TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cloud-pulse-agent-install.XXXXXX")"
-  trap 'rm -rf "$TMP_DIR"' EXIT
+  case "$OPT_ACTION" in
+    install)
+      if is_installed; then
+        err "already installed; choose --reinstall to upgrade, or run 'sudo cloud-pulse-agent update' on v0.3.0+"
+        exit 1
+      fi
+      ;;
+    reinstall)
+      if ! is_installed; then
+        err "not installed; use --install for a fresh install (requires --hub-url/--token)"
+        exit 1
+      fi
+      ;;
+    "")
+      : # auto: fall through to run_install_flow regardless of state
+      ;;
+  esac
 
-  download_and_verify
-  ensure_system_user
-  install_binary
-  write_env_file
-  render_unit
-  verify_unit
-  start_service
-  run_sanity_checks
-  print_summary
+  run_install_flow
 }
 
 main "$@"

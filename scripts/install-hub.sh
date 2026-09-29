@@ -12,12 +12,21 @@
 #     | sudo bash -s -- [flags]
 #
 # Flags:
+#   --install                    Fresh install. Errors (with a hint) if
+#                               already installed.
+#   --reinstall                   Upgrade/reinstall an existing install in
+#                               place, keeping all env values and data.
+#                               Errors (with a hint) if not installed.
 #   --version vX.Y.Z          Install a specific release (default: latest).
 #   --listen ADDR              Listen address (default: :8090).
 #   --allowed-cidrs LIST        Comma-separated CIDR allowlist (default:
 #                               tailscale + loopback, matches hub default).
 #   --ui-token TOKEN            Set CP_UI_TOKEN explicitly.
-#   --generate-ui-token         Generate a random CP_UI_TOKEN.
+#   --generate-ui-token         Generate a random CP_UI_TOKEN if none is
+#                               already set (idempotent; keeps an existing
+#                               token unchanged).
+#   --rotate-ui-token           Always generate a new CP_UI_TOKEN, even if
+#                               one already exists.
 #   --agent-token TOKEN         Set CP_AGENT_TOKEN explicitly.
 #   --webhook-url URL           Set CP_ALERT_WEBHOOK_URL.
 #   --prefix DIR                Binary install prefix (default: /usr/local).
@@ -26,14 +35,29 @@
 #                               --purge is also given.
 #   --purge                     With --uninstall, also remove
 #                               /etc/cloud-pulse/hub.env and the data dir.
+#   -y, --yes                    Assume default answers to any
+#                               confirmation prompt (Y for install/
+#                               reinstall, N for purge unless --purge is
+#                               also given); never blocks on a prompt.
 #   --dry-run                   Print the actions that would be taken and
 #                               exit without changing anything.
 #   -h, --help                  Show this help and exit.
 #
-# Re-running this script (without --uninstall) upgrades an existing
-# install in place: the binary and systemd unit are replaced, but
-# hub.env is preserved unless an explicit flag supplies a new value
-# for one of its fields.
+# Interactive menu:
+#   Running with NO arguments at all, from a real terminal (stdin/stdout
+#   attached to a tty, and CP_NONINTERACTIVE is not "1"), shows a menu
+#   (Install / Reinstall / Uninstall / Exit) instead of the flag-driven
+#   behavior below. All menu prompts read from /dev/tty, never stdin, so
+#   `curl ... | sudo bash` (whose stdin is the script itself) still shows
+#   the menu correctly when run at a terminal. Piping any flag, or
+#   running without a tty (e.g. from CI or `curl | bash` with a flag),
+#   always skips the menu.
+#
+# Re-running this script (without --uninstall, and without a tty/menu)
+# upgrades an existing install in place: the binary and systemd unit are
+# replaced, but hub.env is preserved unless an explicit flag supplies a
+# new value for one of its fields. This is the same behavior whether or
+# not --reinstall is passed explicitly.
 #
 # Environment overrides:
 #   CP_RELEASE_BASE_URL   Override the base URL assets are downloaded
@@ -56,6 +80,17 @@
 #                         script logic without root or a real systemd.
 #   CP_TEST_UNAME_M       Override the value used in place of `uname -m`
 #                         (test hook for exercising the unknown-arch path).
+#   CP_NONINTERACTIVE     Set to "1" to force non-interactive behavior
+#                         (skip the menu) even when a tty is attached.
+#                         Always set by scripts/test-install.sh's
+#                         non-menu test cases so they never block.
+#   CP_INSTALL_FORCE_SCRIPT_UNIT
+#                         Set to "1" to force the bash heredoc fallback
+#                         for systemd unit rendering, skipping the
+#                         "$BIN_PATH systemd-unit print" call entirely
+#                         (test hook for the unit-rendering drift test;
+#                         also useful on a version pinned older than the
+#                         binary subcommand's introduction).
 #
 # All logic lives inside main(), invoked at the very end of the file, so
 # that a connection that is cut off mid-download (when this script itself
@@ -79,17 +114,30 @@ CP_SERVICE_GROUP="cloud-pulse"
 # main() reads as a straight-line summary of the install flow.
 # ---------------------------------------------------------------------------
 
+DEFAULT_LISTEN=":8090"
+DEFAULT_ALLOWED_CIDRS="100.64.0.0/10,fd7a:115c:a1e0::/48,127.0.0.0/8,::1/128"
+
 OPT_VERSION=""
-OPT_LISTEN=":8090"
-OPT_ALLOWED_CIDRS="100.64.0.0/10,fd7a:115c:a1e0::/48,127.0.0.0/8,::1/128"
+# Empty means the option was omitted. Resolve it only after paths have
+# been set up, so reinstall can prefer a value already in hub.env.
+OPT_LISTEN=""
+OPT_ALLOWED_CIDRS=""
 OPT_UI_TOKEN=""
 OPT_GENERATE_UI_TOKEN=0
+OPT_ROTATE_UI_TOKEN=0
 OPT_AGENT_TOKEN=""
 OPT_WEBHOOK_URL=""
 OPT_PREFIX="/usr/local"
+OPT_ACTION=""
 OPT_UNINSTALL=0
 OPT_PURGE=0
+OPT_YES=0
 OPT_DRY_RUN=0
+OPT_ANY_FLAG_GIVEN=0
+
+# Set when a UI token was newly generated/rotated during this run, so
+# print_summary can print it exactly once (D in SPEC-v0.3.1 A).
+UI_TOKEN_WAS_GENERATED=0
 
 SANDBOX_ROOT="${CP_INSTALL_ROOT:-}"
 IS_SANDBOX=0
@@ -307,13 +355,99 @@ probe_existing_version() {
   printf '%s\n' "$out" | head -n1 | awk '{print $1}'
 }
 
+# tty_available — true iff /dev/tty can be opened for both read and
+# write in this process. Used to decide whether the interactive menu
+# (and any prompt) may be shown at all: a script piped via
+# `curl | sudo bash` has its stdin consumed by the script body itself,
+# so every prompt in this file reads from /dev/tty explicitly rather
+# than stdin, and this check guards against the case where no
+# controlling terminal exists at all (cron, CI, `bash script.sh` with
+# stdin/stdout redirected to files) where opening /dev/tty would itself
+# fail or hang.
+tty_available() {
+  if [ "${CP_NONINTERACTIVE:-0}" = "1" ]; then
+    return 1
+  fi
+  { : <"/dev/tty"; } 2>/dev/null && { : >"/dev/tty"; } 2>/dev/null
+}
+
+# prompt_tty PROMPT_TEXT — print PROMPT_TEXT to /dev/tty with no
+# trailing newline (caller's read then reads the answer from /dev/tty).
+prompt_tty() {
+  printf '%s' "$1" >/dev/tty
+}
+
+# read_line_tty VARNAME — read one line from /dev/tty into VARNAME.
+# Returns the read builtin's exit status (1 on EOF) so callers can
+# distinguish "user typed nothing" from "stdin/tty closed".
+read_line_tty() {
+  local __varname="$1"
+  # shellcheck disable=SC2229 # intentional: read -r into a
+  # caller-provided variable name passed as $1, not a literal "r".
+  IFS= read -r "$__varname" </dev/tty
+}
+
+# read_hidden_tty VARNAME PROMPT_TEXT — prompt on /dev/tty and read one
+# line from /dev/tty with echo disabled (for secrets like the agent
+# token), printing a newline afterward since -s suppresses the one the
+# terminal would otherwise echo.
+read_hidden_tty() {
+  local __varname="$1" __prompt="$2"
+  prompt_tty "$__prompt"
+  local status
+  # shellcheck disable=SC2229
+  IFS= read -rs "$__varname" </dev/tty
+  status=$?
+  printf '\n' >/dev/tty
+  return "$status"
+}
+
+# confirm_tty PROMPT_TEXT DEFAULT_YES — print "PROMPT_TEXT [Y/n]: " (or
+# "[y/N]: " when DEFAULT_YES=0) to /dev/tty, read one line from /dev/tty,
+# and return 0 for yes / 1 for no. Empty input takes DEFAULT_YES. If
+# OPT_YES is set, returns DEFAULT_YES immediately without prompting (-y
+# never blocks on a confirmation).
+confirm_tty() {
+  local text="$1" default_yes="$2"
+  if [ "$OPT_YES" -eq 1 ]; then
+    return "$((1 - default_yes))"
+  fi
+  local suffix="[Y/n]"
+  if [ "$default_yes" -ne 1 ]; then
+    suffix="[y/N]"
+  fi
+  local answer
+  prompt_tty "${text} ${suffix}: "
+  if ! read_line_tty answer; then
+    err "unexpected EOF on /dev/tty"
+    exit 1
+  fi
+  case "$answer" in
+    '') return "$((1 - default_yes))" ;;
+    [Yy]|[Yy][Ee][Ss]) return 0 ;;
+    [Nn]|[Nn][Oo]) return 1 ;;
+    *) return "$((1 - default_yes))" ;;
+  esac
+}
+
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
 
 parse_args() {
+  if [ "$#" -gt 0 ]; then
+    OPT_ANY_FLAG_GIVEN=1
+  fi
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --install)
+        OPT_ACTION="install"
+        shift
+        ;;
+      --reinstall)
+        OPT_ACTION="reinstall"
+        shift
+        ;;
       --version)
         OPT_VERSION="${2:?--version requires an argument}"
         shift 2
@@ -337,6 +471,10 @@ parse_args() {
         OPT_GENERATE_UI_TOKEN=1
         shift
         ;;
+      --rotate-ui-token)
+        OPT_ROTATE_UI_TOKEN=1
+        shift
+        ;;
       --agent-token)
         OPT_AGENT_TOKEN="${2:?--agent-token requires an argument}"
         validate_env_value "$OPT_AGENT_TOKEN" --agent-token
@@ -357,6 +495,10 @@ parse_args() {
         ;;
       --purge)
         OPT_PURGE=1
+        shift
+        ;;
+      -y|--yes)
+        OPT_YES=1
         shift
         ;;
       --dry-run)
@@ -570,15 +712,53 @@ resolve_ui_token() {
     echo "$OPT_UI_TOKEN"
     return
   fi
+  if [ "$OPT_ROTATE_UI_TOKEN" -eq 1 ]; then
+    # --rotate-ui-token always generates a fresh token, even if one
+    # already exists.
+    generate_token_value
+    return
+  fi
   if [ "$OPT_GENERATE_UI_TOKEN" -eq 1 ]; then
-    if [ -x "$BIN_PATH" ]; then
-      "$BIN_PATH" -gen-token 2>/dev/null || random_hex_token_fallback 32
-    else
-      random_hex_token_fallback 32
+    # --generate-ui-token is idempotent: keep an existing token
+    # unchanged, only generating a new one when none is set yet.
+    if [ -n "$existing" ]; then
+      echo "$existing"
+      return
     fi
+    generate_token_value
     return
   fi
   echo "$existing"
+}
+
+# ui_token_will_be_generated — true iff the next resolve_ui_token call
+# will mint a brand-new token rather than reusing/keeping an existing
+# one or an explicit --ui-token value. Must be checked BEFORE calling
+# resolve_ui_token via command substitution: bash runs command
+# substitutions in a subshell, so a flag set as a side effect inside
+# resolve_ui_token itself would never be visible to the parent shell.
+ui_token_will_be_generated() {
+  if [ -n "$OPT_UI_TOKEN" ]; then
+    return 1
+  fi
+  if [ "$OPT_ROTATE_UI_TOKEN" -eq 1 ]; then
+    return 0
+  fi
+  if [ "$OPT_GENERATE_UI_TOKEN" -eq 1 ] && [ -z "$(env_get_existing CP_UI_TOKEN)" ]; then
+    return 0
+  fi
+  return 1
+}
+
+# generate_token_value — print a freshly generated random hex token,
+# preferring the just-installed binary's -gen-token (matches the exact
+# format the hub expects) and falling back to /dev/urandom.
+generate_token_value() {
+  if [ -x "$BIN_PATH" ]; then
+    "$BIN_PATH" -gen-token 2>/dev/null || random_hex_token_fallback 32
+  else
+    random_hex_token_fallback 32
+  fi
 }
 
 resolve_webhook_url() {
@@ -591,48 +771,149 @@ resolve_webhook_url() {
   echo "$existing"
 }
 
+resolve_value() {
+  # resolve_value FLAG_VALUE ENV_KEY DEFAULT FLAG_NAME — omitted flags use
+  # the existing active value first, then the fresh-install default.
+  local flag_value="$1" env_key="$2" default_value="$3" flag_name="$4" value
+  value="$flag_value"
+  if [ -z "$value" ]; then
+    value="$(env_get_existing "$env_key")"
+  fi
+  if [ -z "$value" ]; then
+    value="$default_value"
+  fi
+  validate_env_value "$value" "$flag_name"
+  printf '%s\n' "$value"
+}
+
+rewrite_hub_env() {
+  # Rewrite managed keys in their original positions, preserving comments and
+  # unrecognised settings verbatim. A commented managed key counts as present:
+  # it is only activated when no active form exists and its resolved value is
+  # non-empty. Do not source env files; manually edited configuration is data.
+  local tmp_env="$1" listen="$2" agent_token="$3" allowed_cidrs="$4"
+  local ui_token="$5" webhook_url="$6"
+  local seen_listen=0 seen_data=0 seen_agent=0 seen_allowed=0 seen_ui=0 seen_webhook=0
+  local active_listen=0 active_data=0 active_agent=0 active_allowed=0 active_ui=0 active_webhook=0
+  local line normalized is_commented
+
+  if [ -f "$ENV_FILE" ]; then
+    # Identify active keys first. This makes an active assignment win over a
+    # separately commented default regardless of their order in the file.
+    while IFS= read -r line || [ -n "$line" ]; do
+      normalized="${line#"${line%%[![:space:]]*}"}"
+      case "$normalized" in
+        \#*) ;;
+        CP_LISTEN=*) active_listen=1 ;;
+        CP_DATA_DIR=*) active_data=1 ;;
+        CP_AGENT_TOKEN=*) active_agent=1 ;;
+        CP_ALLOWED_CIDRS=*) active_allowed=1 ;;
+        CP_UI_TOKEN=*) active_ui=1 ;;
+        CP_ALERT_WEBHOOK_URL=*) active_webhook=1 ;;
+      esac
+    done < "$ENV_FILE"
+
+    while IFS= read -r line || [ -n "$line" ]; do
+      normalized="${line#"${line%%[![:space:]]*}"}"
+      is_commented=0
+      if [[ "$normalized" == \#* ]]; then
+        is_commented=1
+        normalized="${normalized#\#}"
+        normalized="${normalized#"${normalized%%[![:space:]]*}"}"
+      fi
+      case "$normalized" in
+        CP_LISTEN=*)
+          seen_listen=1
+          if [ "$is_commented" -eq 1 ] && [ "$active_listen" -eq 1 ]; then printf '%s\n' "$line"; else printf 'CP_LISTEN=%s\n' "$listen"; fi
+          ;;
+        CP_DATA_DIR=*)
+          seen_data=1
+          if [ "$is_commented" -eq 1 ] && [ "$active_data" -eq 1 ]; then printf '%s\n' "$line"; else echo "CP_DATA_DIR=/var/lib/cloud-pulse"; fi
+          ;;
+        CP_AGENT_TOKEN=*)
+          seen_agent=1
+          if [ "$is_commented" -eq 1 ] && [ "$active_agent" -eq 1 ]; then printf '%s\n' "$line"; else printf 'CP_AGENT_TOKEN=%s\n' "$agent_token"; fi
+          ;;
+        CP_ALLOWED_CIDRS=*)
+          seen_allowed=1
+          if [ "$is_commented" -eq 1 ] && [ "$active_allowed" -eq 1 ]; then printf '%s\n' "$line"; else printf 'CP_ALLOWED_CIDRS=%s\n' "$allowed_cidrs"; fi
+          ;;
+        CP_UI_TOKEN=*)
+          seen_ui=1
+          if [ "$is_commented" -eq 1 ]; then
+            if [ "$active_ui" -eq 1 ] || [ -z "$ui_token" ]; then printf '%s\n' "$line"; else printf 'CP_UI_TOKEN=%s\n' "$ui_token"; fi
+          elif [ -n "$ui_token" ]; then
+            printf 'CP_UI_TOKEN=%s\n' "$ui_token"
+          else
+            echo "#CP_UI_TOKEN="
+          fi
+          ;;
+        CP_ALERT_WEBHOOK_URL=*)
+          seen_webhook=1
+          if [ "$is_commented" -eq 1 ]; then
+            if [ "$active_webhook" -eq 1 ] || [ -z "$webhook_url" ]; then printf '%s\n' "$line"; else printf 'CP_ALERT_WEBHOOK_URL=%s\n' "$webhook_url"; fi
+          elif [ -n "$webhook_url" ]; then
+            printf 'CP_ALERT_WEBHOOK_URL=%s\n' "$webhook_url"
+          else
+            echo "#CP_ALERT_WEBHOOK_URL="
+          fi
+          ;;
+        *) printf '%s\n' "$line" ;;
+      esac
+    done < "$ENV_FILE" > "$tmp_env"
+  else
+    {
+      echo "# cloud-pulse-hub configuration. Managed by install-hub.sh;"
+      echo "# manual edits are preserved across re-runs of the installer."
+    } > "$tmp_env"
+  fi
+
+  {
+    [ "$seen_listen" -eq 1 ] || printf 'CP_LISTEN=%s\n' "$listen"
+    [ "$seen_data" -eq 1 ] || echo "CP_DATA_DIR=/var/lib/cloud-pulse"
+    [ "$seen_agent" -eq 1 ] || printf 'CP_AGENT_TOKEN=%s\n' "$agent_token"
+    [ "$seen_allowed" -eq 1 ] || printf 'CP_ALLOWED_CIDRS=%s\n' "$allowed_cidrs"
+    if [ "$seen_ui" -eq 0 ]; then
+      if [ -n "$ui_token" ]; then printf 'CP_UI_TOKEN=%s\n' "$ui_token"; else echo "#CP_UI_TOKEN="; fi
+    fi
+    if [ "$seen_webhook" -eq 0 ]; then
+      if [ -n "$webhook_url" ]; then printf 'CP_ALERT_WEBHOOK_URL=%s\n' "$webhook_url"; else echo "#CP_ALERT_WEBHOOK_URL="; fi
+    fi
+    if [ ! -f "$ENV_FILE" ]; then
+      echo "#CP_OFFLINE_AFTER=60s"
+      echo "#CP_CLOUD_INTERVAL=15m"
+      echo "#CP_LOG_LEVEL=info"
+      echo "#CP_LOG_FORMAT=text"
+      echo "# S3 bucket monitoring (optional):"
+      echo "#CP_S3_BUCKETS=my-bucket:us-east-1"
+      echo "#CP_S3_REGION=us-east-1"
+      echo "#AWS_ACCESS_KEY_ID="
+      echo "#AWS_SECRET_ACCESS_KEY="
+      echo "#AWS_SESSION_TOKEN="
+      echo "#CP_S3_FILTER_ID=EntireBucket"
+      echo "# Cloudflare R2 bucket monitoring (optional):"
+      echo "#CP_R2_ACCOUNT_ID="
+      echo "#CP_R2_API_TOKEN="
+      echo "#CP_R2_BUCKETS="
+    fi
+  } >> "$tmp_env"
+}
+
 write_env_file() {
-  local agent_token ui_token webhook_url
+  local agent_token ui_token webhook_url listen allowed_cidrs
   agent_token="$(resolve_agent_token)"
+  validate_env_value "$agent_token" --agent-token
+  if ui_token_will_be_generated; then UI_TOKEN_WAS_GENERATED=1; fi
   ui_token="$(resolve_ui_token)"
   webhook_url="$(resolve_webhook_url)"
+  if [ -n "$ui_token" ]; then validate_env_value "$ui_token" --ui-token; fi
+  if [ -n "$webhook_url" ]; then validate_env_value "$webhook_url" --webhook-url; fi
+  listen="$(resolve_value "$OPT_LISTEN" CP_LISTEN "$DEFAULT_LISTEN" --listen)"
+  allowed_cidrs="$(resolve_value "$OPT_ALLOWED_CIDRS" CP_ALLOWED_CIDRS "$DEFAULT_ALLOWED_CIDRS" --allowed-cidrs)"
 
   mkdir -p "$ETC_DIR"
-
   local tmp_env="${TMP_DIR}/hub.env"
-  {
-    echo "# cloud-pulse-hub configuration. Managed by install-hub.sh;"
-    echo "# manual edits are preserved across re-runs of the installer."
-    echo "CP_LISTEN=${OPT_LISTEN}"
-    echo "CP_DATA_DIR=/var/lib/cloud-pulse"
-    echo "CP_AGENT_TOKEN=${agent_token}"
-    echo "CP_ALLOWED_CIDRS=${OPT_ALLOWED_CIDRS}"
-    if [ -n "$ui_token" ]; then
-      echo "CP_UI_TOKEN=${ui_token}"
-    else
-      echo "#CP_UI_TOKEN="
-    fi
-    if [ -n "$webhook_url" ]; then
-      echo "CP_ALERT_WEBHOOK_URL=${webhook_url}"
-    else
-      echo "#CP_ALERT_WEBHOOK_URL="
-    fi
-    echo "#CP_OFFLINE_AFTER=60s"
-    echo "#CP_CLOUD_INTERVAL=15m"
-    echo "#CP_LOG_LEVEL=info"
-    echo "#CP_LOG_FORMAT=text"
-    echo "# S3 bucket monitoring (optional):"
-    echo "#CP_S3_BUCKETS=my-bucket:us-east-1"
-    echo "#CP_S3_REGION=us-east-1"
-    echo "#AWS_ACCESS_KEY_ID="
-    echo "#AWS_SECRET_ACCESS_KEY="
-    echo "#AWS_SESSION_TOKEN="
-    echo "#CP_S3_FILTER_ID=EntireBucket"
-    echo "# Cloudflare R2 bucket monitoring (optional):"
-    echo "#CP_R2_ACCOUNT_ID="
-    echo "#CP_R2_API_TOKEN="
-    echo "#CP_R2_BUCKETS="
-  } > "$tmp_env"
+  rewrite_hub_env "$tmp_env" "$listen" "$agent_token" "$allowed_cidrs" "$ui_token" "$webhook_url"
 
   install -m 0640 "$tmp_env" "$ENV_FILE"
   if [ "$IS_SANDBOX" -eq 1 ]; then
@@ -642,17 +923,68 @@ write_env_file() {
   fi
   log "wrote ${ENV_FILE}"
 
-  # Export resolved values for later use (dashboard URL / one-liner
-  # printing) without re-reading the file.
+  # Export values used by the dashboard/agent summary without re-reading.
   RESOLVED_AGENT_TOKEN="$agent_token"
+  RESOLVED_UI_TOKEN="$ui_token"
+  RESOLVED_LISTEN="$listen"
 }
 RESOLVED_AGENT_TOKEN=""
+RESOLVED_UI_TOKEN=""
+RESOLVED_LISTEN=""
 
 # ---------------------------------------------------------------------------
 # systemd unit rendering
 # ---------------------------------------------------------------------------
 
 render_unit() {
+  mkdir -p "$SYSTEMD_DIR"
+  local tmp_unit="${TMP_DIR}/cloud-pulse-hub.service"
+
+  if [ "${CP_INSTALL_FORCE_SCRIPT_UNIT:-0}" != "1" ] && render_unit_via_binary "$tmp_unit"; then
+    log "rendered ${UNIT_FILE} via '${BIN_PATH} systemd-unit print'"
+  else
+    render_unit_fallback "$tmp_unit"
+    log "rendered ${UNIT_FILE} via built-in fallback template"
+  fi
+
+  install -m 0644 "$tmp_unit" "$UNIT_FILE"
+  log "wrote ${UNIT_FILE}"
+}
+
+# render_unit_via_binary OUT_PATH — ask the freshly installed hub binary
+# to render its own systemd unit (SPEC-v0.3.1 B, internal/systemdunit),
+# so the unit definition has a single source of truth shared with
+# `cloud-pulse-hub systemd-unit apply` (used by the self-updater to keep
+# an existing unit in sync with future template changes). Returns
+# non-zero (leaving OUT_PATH untouched/undefined) if the binary doesn't
+# support the subcommand yet (older binary, or --version pinned to a
+# release before it existed) or the call otherwise fails; the caller
+# falls back to render_unit_fallback in that case, so this is never
+# fatal on its own.
+render_unit_via_binary() {
+  local out_path="$1"
+  if [ ! -x "$BIN_PATH" ]; then
+    return 1
+  fi
+  local read_write_path=""
+  if [ "$IS_SANDBOX" -eq 1 ]; then
+    read_write_path="$DATA_DIR"
+  fi
+  local -a args=(systemd-unit print --bin-path "$BIN_PATH" --env-file "$ENV_FILE"
+    --user "$CP_SERVICE_USER" --group "$CP_SERVICE_GROUP")
+  if [ -n "$read_write_path" ]; then
+    args+=(--read-write-path "$read_write_path")
+  fi
+  timeout 10 "$BIN_PATH" "${args[@]}" >"$out_path" 2>/dev/null
+}
+
+# render_unit_fallback OUT_PATH — bash heredoc fallback kept
+# byte-identical to internal/systemdunit.Render's hub template (see
+# SPEC-v0.3.1 B and the drift test in test-install.sh). Used when the
+# installed binary doesn't support `systemd-unit print` yet (pre-v0.3.1
+# binary, explicit --version pin, or CP_INSTALL_FORCE_SCRIPT_UNIT=1).
+render_unit_fallback() {
+  local out_path="$1"
   local exec_start="$BIN_PATH"
   local state_directory_line=""
   local read_write_paths=""
@@ -666,8 +998,6 @@ render_unit() {
     state_directory_line="StateDirectory=cloud-pulse"
   fi
 
-  mkdir -p "$SYSTEMD_DIR"
-  local tmp_unit="${TMP_DIR}/cloud-pulse-hub.service"
   {
     echo "[Unit]"
     echo "Description=cloud-pulse hub (metrics ingestion + dashboard)"
@@ -706,10 +1036,7 @@ render_unit() {
     echo
     echo "[Install]"
     echo "WantedBy=multi-user.target"
-  } > "$tmp_unit"
-
-  install -m 0644 "$tmp_unit" "$UNIT_FILE"
-  log "wrote ${UNIT_FILE}"
+  } > "$out_path"
 }
 
 verify_unit() {
@@ -852,8 +1179,8 @@ detect_dashboard_host() {
 
 print_summary() {
   local host listen_port listen_host
-  listen_port="${OPT_LISTEN##*:}"
-  listen_host="${OPT_LISTEN%:*}"
+  listen_port="${RESOLVED_LISTEN##*:}"
+  listen_host="${RESOLVED_LISTEN%:*}"
   # An explicit bind address (e.g. 127.0.0.1:8090 or [fd7a::1]:8090) is the only
   # address the hub answers on, so print it; wildcards fall back to detection.
   case "$listen_host" in
@@ -868,8 +1195,24 @@ print_summary() {
   echo "  Service:        cloud-pulse-hub.service"
   echo
   print_version_hint
+  print_ui_token_summary
   echo "Agent one-liner (token shown once here; also stored in ${ENV_FILE}):"
   echo "  curl -fsSL https://raw.githubusercontent.com/${CP_REPO}/main/scripts/install-agent.sh | sudo bash -s -- --hub-url http://${host}:${listen_port} --token ${RESOLVED_AGENT_TOKEN}"
+  echo
+}
+
+# print_ui_token_summary — SPEC-v0.3.1 A: print the UI token exactly once
+# if it was newly generated/rotated this run, "unchanged" if one already
+# existed and was kept, or a hint to enable it via Reinstall if none is
+# set at all.
+print_ui_token_summary() {
+  if [ "$UI_TOKEN_WAS_GENERATED" -eq 1 ]; then
+    echo "Web UI token (enter it in the dashboard login; shown once, stored in ${ENV_FILE}): ${RESOLVED_UI_TOKEN}"
+  elif [ -n "$RESOLVED_UI_TOKEN" ]; then
+    echo "Web UI token: unchanged (sudo grep CP_UI_TOKEN ${ENV_FILE})"
+  else
+    echo "Settings page: disabled (re-run the installer and choose Reinstall to enable it)"
+  fi
   echo
 }
 
@@ -885,7 +1228,13 @@ print_version_hint() {
 
   if [ "$IS_UPGRADE" -eq 1 ]; then
     if [ -n "$PREVIOUS_VERSION" ] && [ -n "$new_version" ]; then
-      echo "Upgraded ${PREVIOUS_VERSION} → ${new_version}"
+      if [ "$PREVIOUS_VERSION" = "$new_version" ]; then
+        echo "Reinstalled ${new_version}"
+      elif semver_lt "$new_version" "$PREVIOUS_VERSION"; then
+        echo "Downgraded ${PREVIOUS_VERSION} → ${new_version}"
+      else
+        echo "Upgraded ${PREVIOUS_VERSION} → ${new_version}"
+      fi
     elif [ -n "$new_version" ]; then
       echo "Upgraded (previous version unknown) → ${new_version}"
     fi
@@ -924,6 +1273,195 @@ print_dry_run() {
 }
 
 # ---------------------------------------------------------------------------
+# Interactive menu (SPEC-v0.3.1 A)
+# ---------------------------------------------------------------------------
+
+# is_installed — true iff a hub binary is currently installed at
+# BIN_PATH (setup_paths must have already run).
+is_installed() {
+  [ -x "$BIN_PATH" ]
+}
+
+# service_status_text — human-readable "(service: active|inactive|...)"
+# suffix for the menu's status line, or empty outside sandbox detection
+# failure. Best-effort only; never fails the script.
+service_status_text() {
+  if [ "$IS_SANDBOX" -eq 1 ]; then
+    echo ""
+    return
+  fi
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo ""
+    return
+  fi
+  local state
+  state="$(systemctl is-active cloud-pulse-hub.service 2>/dev/null || true)"
+  if [ -n "$state" ]; then
+    echo " (service: ${state})"
+  else
+    echo ""
+  fi
+}
+
+# prompt_fresh_install_values — interactively collect the values a fresh
+# install needs (SPEC-v0.3.1 A "1) Install" prompts), applying the same
+# validate_env_value checks used for the equivalent flags. Only called
+# when OPT_ACTION=install (menu path or --install flag) and nothing is
+# installed yet.
+prompt_fresh_install_values() {
+  local answer
+
+  prompt_tty "Listen port [8090]: "
+  if ! read_line_tty answer; then
+    err "unexpected EOF on /dev/tty"
+    exit 1
+  fi
+  if [ -n "$answer" ]; then
+    case "$answer" in
+      ''|*[!0-9]*)
+        err "listen port must be numeric"
+        exit 1
+        ;;
+    esac
+    if [ "$answer" -lt 1 ] || [ "$answer" -gt 65535 ]; then
+      err "listen port must be between 1 and 65535"
+      exit 1
+    fi
+    OPT_LISTEN=":${answer}"
+    validate_env_value "$OPT_LISTEN" --listen
+  fi
+
+  if confirm_tty "Enable the web Settings page (creates a UI token)?" 1; then
+    OPT_GENERATE_UI_TOKEN=1
+  fi
+
+  prompt_tty "Alert webhook URL (optional, Enter to skip): "
+  if ! read_line_tty answer; then
+    err "unexpected EOF on /dev/tty"
+    exit 1
+  fi
+  if [ -n "$answer" ]; then
+    validate_env_value "$answer" --webhook-url
+    OPT_WEBHOOK_URL="$answer"
+  fi
+}
+
+# prompt_reinstall_ui_token — SPEC-v0.3.1 A "2) Reinstall": if no
+# CP_UI_TOKEN is configured yet, ask whether to enable the Settings page
+# now, generating one idempotently (same semantics as
+# --generate-ui-token) if the user agrees.
+prompt_reinstall_ui_token() {
+  if [ -n "$(env_get_existing CP_UI_TOKEN)" ]; then
+    return
+  fi
+  if confirm_tty "The web Settings page is disabled (no UI token). Enable it now?" 1; then
+    OPT_GENERATE_UI_TOKEN=1
+  fi
+}
+
+print_menu() {
+  local status_line
+  if is_installed; then
+    local v
+    v="$(probe_existing_version "$BIN_PATH")"
+    status_line="installed ${v:-(unknown version)}$(service_status_text)"
+  else
+    status_line="not installed"
+  fi
+  {
+    echo "cloud-pulse hub installer"
+    echo "  Status: ${status_line}"
+    echo "  1) Install      (설치)"
+    echo "  2) Reinstall    (재설치: latest version, keeps settings, tokens and data)"
+    echo "  3) Uninstall    (삭제)"
+    echo "  0) Exit"
+  } >/dev/tty
+}
+
+# run_menu — show the menu and read a single choice from /dev/tty,
+# re-prompting on invalid input up to 5 times. Sets OPT_ACTION or exits
+# (0 for explicit Exit, 1 for too many invalid tries or EOF).
+run_menu() {
+  local tries=0 choice
+  while [ "$tries" -lt 5 ]; do
+    print_menu
+    prompt_tty "Select [1-3, 0]: "
+    if ! read_line_tty choice; then
+      err "unexpected EOF on /dev/tty"
+      exit 1
+    fi
+    case "$choice" in
+      1) OPT_ACTION="install"; return ;;
+      2) OPT_ACTION="reinstall"; return ;;
+      3) OPT_ACTION="uninstall"; return ;;
+      0) exit 0 ;;
+      *)
+        tries=$((tries + 1))
+        echo "Invalid choice: ${choice}" >/dev/tty
+        ;;
+    esac
+  done
+  err "too many invalid menu selections"
+  exit 1
+}
+
+# menu_loop — the full interactive session: shows the menu repeatedly
+# (SPEC: "1) Install on installed -> message + menu again"; every other
+# choice performs the action once and exits).
+menu_loop() {
+  while :; do
+    run_menu
+    case "$OPT_ACTION" in
+      install)
+        if is_installed; then
+          echo >/dev/tty
+          echo "cloud-pulse-hub is already installed. Choose 2 to reinstall/upgrade, or run 'sudo cloud-pulse-hub update' on v0.3.0+." >/dev/tty
+          echo >/dev/tty
+          OPT_ACTION=""
+          continue
+        fi
+        prompt_fresh_install_values
+        run_install_flow
+        exit 0
+        ;;
+      reinstall)
+        if ! is_installed; then
+          echo >/dev/tty
+          echo "cloud-pulse-hub is not installed. Choose 1 to install." >/dev/tty
+          echo >/dev/tty
+          OPT_ACTION=""
+          continue
+        fi
+        local cur target
+        cur="$(probe_existing_version "$BIN_PATH")"
+        target="${OPT_VERSION:-latest}"
+        echo >/dev/tty
+        echo "Current version: ${cur:-unknown}" >/dev/tty
+        echo "Target version:  ${target}" >/dev/tty
+        if ! confirm_tty "Continue?" 1; then
+          OPT_ACTION=""
+          continue
+        fi
+        prompt_reinstall_ui_token
+        run_install_flow
+        exit 0
+        ;;
+      uninstall)
+        if ! confirm_tty "Uninstall cloud-pulse-hub?" 0; then
+          OPT_ACTION=""
+          continue
+        fi
+        if confirm_tty "Also delete configuration and tokens (${ENV_FILE}) and ALL collected data (${DATA_DIR})?" 0; then
+          OPT_PURGE=1
+        fi
+        do_uninstall
+        exit 0
+        ;;
+    esac
+  done
+}
+
+# ---------------------------------------------------------------------------
 # uninstall
 # ---------------------------------------------------------------------------
 
@@ -957,6 +1495,26 @@ do_uninstall() {
 # main
 # ---------------------------------------------------------------------------
 
+# run_install_flow — the actual download/install/start sequence, shared
+# by the flag-driven path and the interactive menu.
+run_install_flow() {
+  require_cmd awk
+  require_cmd grep
+
+  TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cloud-pulse-hub-install.XXXXXX")"
+  trap 'rm -rf "$TMP_DIR"' EXIT
+
+  download_and_verify
+  ensure_system_user
+  install_binary
+  write_env_file
+  render_unit
+  verify_unit
+  run_check_config
+  start_service
+  print_summary
+}
+
 main() {
   parse_args "$@"
   detect_sandbox
@@ -979,21 +1537,37 @@ main() {
     exit 0
   fi
 
-  require_cmd awk
-  require_cmd grep
+  # Menu only when: no arguments at all AND interactive (tty available
+  # for both read+write). Any flag at all, or no tty, means the
+  # existing flag-driven behavior below runs unmodified: an explicit
+  # action (--install/--reinstall) is validated against the current
+  # install state; no action at all keeps the historical "auto"
+  # behavior (install when not installed, reinstall/upgrade when
+  # installed).
+  if [ "$OPT_ANY_FLAG_GIVEN" -eq 0 ] && tty_available; then
+    menu_loop
+    return
+  fi
 
-  TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cloud-pulse-hub-install.XXXXXX")"
-  trap 'rm -rf "$TMP_DIR"' EXIT
+  case "$OPT_ACTION" in
+    install)
+      if is_installed; then
+        err "already installed; choose --reinstall to upgrade, or run 'sudo cloud-pulse-hub update' on v0.3.0+"
+        exit 1
+      fi
+      ;;
+    reinstall)
+      if ! is_installed; then
+        err "not installed; use --install for a fresh install"
+        exit 1
+      fi
+      ;;
+    "")
+      : # auto: fall through to run_install_flow regardless of state
+      ;;
+  esac
 
-  download_and_verify
-  ensure_system_user
-  install_binary
-  write_env_file
-  render_unit
-  verify_unit
-  run_check_config
-  start_service
-  print_summary
+  run_install_flow
 }
 
 main "$@"

@@ -352,6 +352,109 @@ PYEOF
     fail "update --check --version v0.1.0 exited 1 (error): ${downgrade_out}"
   fi
 
+  # ---------------------------------------------------------------------
+  # systemd-unit apply --unit-path <tmp> --no-reload (SPEC-v0.3.1 B/D):
+  # an outdated on-disk unit file gets rewritten in place (with a .bak
+  # of the previous content); a second run against the now-current unit
+  # reports "up to date" and makes no further changes. --no-reload
+  # avoids any real `systemctl daemon-reload` call in this sandbox.
+  # ---------------------------------------------------------------------
+  local unit_path="${sandbox_dir}/cloud-pulse-hub.service"
+  cat >"$unit_path" <<'UNITEOF'
+[Unit]
+Description=cloud-pulse hub (metrics ingestion + dashboard)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/cloud-pulse/hub.env
+Environment=CP_DATA_DIR=/var/lib/cloud-pulse
+ExecStart=/usr/local/bin/cloud-pulse-hub
+User=cloud-pulse
+Group=cloud-pulse
+Restart=on-failure
+RestartSec=3
+StateDirectory=cloud-pulse
+
+# --- sandboxing / hardening ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+  # RestartSec=3 above (current Render always writes RestartSec=5) is
+  # the deliberately "outdated" delta this unit file needs rewritten.
+  local before_apply_sha
+  before_apply_sha="$(sha256sum "$unit_path" | awk '{print $1}')"
+
+  local apply1_out apply1_status
+  set +e
+  apply1_out="$("$sandbox_hub" systemd-unit apply --unit-path "$unit_path" --no-reload 2>&1)"
+  apply1_status=$?
+  set -e
+  if [ "$apply1_status" -eq 0 ]; then
+    pass "systemd-unit apply (outdated unit) exits 0"
+  else
+    echo "$apply1_out" >&2
+    fail "systemd-unit apply (outdated unit) exited ${apply1_status}, want 0"
+  fi
+  case "$apply1_out" in
+    *"updated systemd unit"*) pass "systemd-unit apply (outdated unit) reports it updated the unit" ;;
+    *) fail "systemd-unit apply (outdated unit) did not report an update: ${apply1_out}" ;;
+  esac
+  if [ -f "${unit_path}.bak" ]; then
+    pass "systemd-unit apply (outdated unit) wrote a .bak of the previous content"
+  else
+    fail "systemd-unit apply (outdated unit) did not create ${unit_path}.bak"
+  fi
+  local bak_sha
+  bak_sha="$(sha256sum "${unit_path}.bak" 2>/dev/null | awk '{print $1}')"
+  if [ "$bak_sha" = "$before_apply_sha" ]; then
+    pass "systemd-unit apply .bak content matches the pre-apply unit (sha256 identical)"
+  else
+    fail "systemd-unit apply .bak content does not match pre-apply unit (${bak_sha} != ${before_apply_sha})"
+  fi
+  if grep -q '^RestartSec=5$' "$unit_path"; then
+    pass "systemd-unit apply rewrote RestartSec=3 -> RestartSec=5 (current Render output)"
+  else
+    fail "systemd-unit apply did not rewrite the unit to current Render output"
+  fi
+
+  local apply2_out apply2_status
+  set +e
+  apply2_out="$("$sandbox_hub" systemd-unit apply --unit-path "$unit_path" --no-reload 2>&1)"
+  apply2_status=$?
+  set -e
+  if [ "$apply2_status" -eq 0 ]; then
+    pass "systemd-unit apply (rerun, up to date) exits 0"
+  else
+    echo "$apply2_out" >&2
+    fail "systemd-unit apply (rerun, up to date) exited ${apply2_status}, want 0"
+  fi
+  case "$apply2_out" in
+    *"up to date"*) pass "systemd-unit apply (rerun) reports the unit is up to date" ;;
+    *) fail "systemd-unit apply (rerun) did not report up-to-date: ${apply2_out}" ;;
+  esac
+  local bak_sha_after_second
+  bak_sha_after_second="$(sha256sum "${unit_path}.bak" | awk '{print $1}')"
+  if [ "$bak_sha_after_second" = "$before_apply_sha" ]; then
+    pass "systemd-unit apply (rerun) left the existing .bak untouched (no spurious second backup)"
+  else
+    fail "systemd-unit apply (rerun) modified .bak unexpectedly"
+  fi
+
   # agent gets a lighter equivalent of the same self-update-works check,
   # to cover cmd/agent/update.go's identical wiring.
   local sandbox_agent="${sandbox_dir}/cloud-pulse-agent"
