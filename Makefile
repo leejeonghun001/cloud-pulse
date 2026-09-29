@@ -30,6 +30,20 @@ vet: ## Run go vet
 lint: ## Run the full pre-commit check suite on demand
 	CP_CHECK_ALL=1 .githooks/pre-commit
 
+.PHONY: staticcheck
+staticcheck: ## Run pinned staticcheck with the Go 1.25 toolchain
+	GOTOOLCHAIN=go1.25.0 go run honnef.co/go/tools/cmd/staticcheck@v0.6.1 ./...
+
+.PHONY: test-py
+test-py: ## Compile Python helpers and run stdlib unit tests
+	python3 -m py_compile scripts/*.py
+	python3 -m unittest discover -s scripts/tests
+
+.PHONY: test-js
+test-js: ## Syntax-check dashboard modules and run Node tests
+	find web/assets/js -type f -name '*.js' -exec node --check {} +
+	node --test web/test/*.test.mjs
+
 .PHONY: test
 test: ## Run all tests (CGO always disabled)
 	CGO_ENABLED=0 go test ./...

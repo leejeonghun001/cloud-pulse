@@ -11,3 +11,5 @@ node_modules/
 /cloud-pulse-agent
 *.exe
 tmp/
+__pycache__/
+*.pyc

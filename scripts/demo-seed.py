@@ -49,6 +49,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from dataclasses import dataclass, field
 
 DEMO_BANNER = (
@@ -445,7 +446,7 @@ def apply_hub_limit_overrides(hub_url: str, ui_token: str, host: DemoHost, timeo
     return ", ".join(parts)
 
 
-def seed_hub(hub_url: str, token: str, db_path: str | None = None, ui_token: str | None = None) -> None:
+def seed_hub(hub_url: str, token: str, db_path: Path | None = None, ui_token: str | None = None) -> None:
     now = int(time.time())
     print(f"==> seeding hub {hub_url} with {len(DEMO_HOSTS)} demo hosts")
     down_host_ids: list[str] = []
@@ -485,7 +486,7 @@ def seed_hub(hub_url: str, token: str, db_path: str | None = None, ui_token: str
             )
 
 
-def backdate_last_seen(db_path: str, host_ids: list[str], now: int) -> None:
+def backdate_last_seen(db_path: Path, host_ids: list[str], now: int) -> None:
     """Directly sets hosts.last_seen far in the past for host_ids so they
     render as offline immediately after seeding, without waiting out
     CP_OFFLINE_AFTER. Dev/demo-only direct DB write (mirrors the existing
@@ -558,7 +559,7 @@ def seed_bucket_history(provider: str, bucket_cfg: dict, now: int, rng: random.R
     return rows
 
 
-def seed_db(db_path: str) -> None:
+def seed_db(db_path: Path) -> None:
     print(f"==> seeding bucket_stats demo rows into {db_path}")
     conn = sqlite3.connect(db_path)
     try:
@@ -621,7 +622,7 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("--hub", help="Hub base URL, e.g. http://127.0.0.1:8090")
     parser.add_argument("--token", help="CP_AGENT_TOKEN for the target hub")
-    parser.add_argument("--db", help="Path to the hub's SQLite database file")
+    parser.add_argument("--db", type=Path, help="Path to the hub's SQLite database file")
     parser.add_argument(
         "--ui-token",
         help=(

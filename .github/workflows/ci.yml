@@ -29,6 +29,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
       - name: Run pre-commit hook (whole tree)
         run: CP_CHECK_ALL=1 bash .githooks/pre-commit
 
@@ -56,6 +61,10 @@ jobs:
 
       - name: Run tests
         run: go test -count=1 -coverprofile=coverage.out ./...
+
+      - name: Run shuffled tests
+        if: matrix.os == 'ubuntu-latest'
+        run: go test -count=1 -shuffle=on ./...
 
       - name: Coverage summary
         if: runner.os == 'Linux' && matrix.os == 'ubuntu-latest'

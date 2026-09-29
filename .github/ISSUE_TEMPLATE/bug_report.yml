@@ -1,0 +1,41 @@
+name: Bug report
+description: Report reproducible cloud-pulse behavior that differs from expectations
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not include tokens, webhook URLs, database contents, or private host details."
+  - type: input
+    id: version
+    attributes:
+      label: cloud-pulse version
+      placeholder: v0.5.0
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, architecture, deployment method, and relevant non-secret configuration.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. ...\n2. ...\n3. ..."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and sanitized logs
+    validations:
+      required: true

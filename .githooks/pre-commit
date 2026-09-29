@@ -411,10 +411,83 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 8) Secret heuristics
+# 8) staticcheck
 # ---------------------------------------------------------------------------
 
-header "8) secret heuristics"
+header "8) staticcheck"
+if [[ "$HAVE_GO_MOD" != "1" || "$HAVE_GO_PACKAGES" != "1" ]]; then
+  skip "staticcheck ./... (no go.mod or no Go packages)"
+else
+  if STATICCHECK_OUT="$(GOTOOLCHAIN=go1.25.0 go run honnef.co/go/tools/cmd/staticcheck@v0.6.1 ./... 2>&1)"; then
+    pass "staticcheck@v0.6.1 ./..."
+  else
+    fail "staticcheck@v0.6.1 ./..."
+    echo "$STATICCHECK_OUT" | sed 's/^/    /'
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 9) JavaScript and Python
+# ---------------------------------------------------------------------------
+
+header "9) JavaScript and Python"
+if command -v node >/dev/null 2>&1; then
+  JS_FILES=()
+  if [[ -d web/assets/js ]]; then
+    while IFS= read -r -d '' file; do
+      JS_FILES+=("$file")
+    done < <(find web/assets/js -type f -name '*.js' -print0)
+  fi
+  if [[ ${#JS_FILES[@]} -eq 0 ]]; then
+    skip "node --check (no web/assets/js modules)"
+  else
+    JS_FAILED=0
+    for file in "${JS_FILES[@]}"; do
+      if JS_OUT="$(node --check "$file" 2>&1)"; then
+        :
+      else
+        fail "node --check $file"
+        echo "$JS_OUT" | sed 's/^/    /'
+        JS_FAILED=1
+      fi
+    done
+    if [[ "$JS_FAILED" == "0" ]]; then
+      pass "node --check (${#JS_FILES[@]} web module(s))"
+    fi
+  fi
+else
+  skip "node --check (node not installed; optional)"
+fi
+
+if command -v python3 >/dev/null 2>&1; then
+  PY_FILES=(scripts/*.py)
+  if [[ ${#PY_FILES[@]} -eq 0 ]]; then
+    skip "python3 checks (no scripts/*.py files)"
+  elif PY_OUT="$(python3 -m py_compile "${PY_FILES[@]}" 2>&1)"; then
+    pass "python3 -m py_compile scripts/*.py"
+  else
+    fail "python3 -m py_compile scripts/*.py"
+    echo "$PY_OUT" | sed 's/^/    /'
+  fi
+  if [[ -d scripts/tests ]]; then
+    if PY_TEST_OUT="$(python3 -m unittest discover -s scripts/tests 2>&1)"; then
+      pass "python3 -m unittest discover -s scripts/tests"
+    else
+      fail "python3 -m unittest discover -s scripts/tests"
+      echo "$PY_TEST_OUT" | sed 's/^/    /'
+    fi
+  else
+    skip "python3 unittest (scripts/tests not present)"
+  fi
+else
+  skip "python3 checks (python3 not installed; optional)"
+fi
+
+# ---------------------------------------------------------------------------
+# 10) Secret heuristics
+# ---------------------------------------------------------------------------
+
+header "10) secret heuristics"
 SECRET_HITS=""
 if [[ ${#NON_VENDOR_FILES[@]} -gt 0 ]]; then
   SECRET_HITS="$(grep -nEI \

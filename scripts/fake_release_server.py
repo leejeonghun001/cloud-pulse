@@ -1,97 +1,134 @@
 #!/usr/bin/env python3
-"""fake_release_server.py — a minimal HTTP server standing in for GitHub
-Releases, used by scripts/smoke.sh and scripts/test-update.sh so their
-`update`/`update --check` exercises never depend on real network access.
+"""Serve local release assets for smoke and self-update tests.
 
-Usage:
-    python3 fake_release_server.py <port> <assets-dir> <latest-tag>
-
-Endpoints:
-    GET /releases/latest       -> 302 Location: /releases/tag/<latest-tag>
-    GET /releases/tag/<tag>    -> 200 text/plain "tag: <tag>" (informational only)
-    GET /releases/download/<tag>/<asset> -> serves <assets-dir>/<tag>/<asset>
-        (checksums.txt and binaries are looked up the same way; the
-        caller is responsible for laying out <assets-dir>/<tag>/ to
-        match what internal/selfupdate.Source expects for that tag)
-
-Binds to 127.0.0.1 only. Intended for short-lived use in tests: the
-caller starts it in the background, records its PID, and kills that PID
-directly when done (never pkill -f).
+The server deliberately binds only loopback and exposes a minimal subset of
+GitHub Releases. It is a test fixture, never a production release service.
 """
+
+from __future__ import annotations
+
+import argparse
 import http.server
-import os
 import sys
 import urllib.parse
+from dataclasses import dataclass
+from pathlib import Path
+from typing import cast
 
 
-def main() -> int:
-    if len(sys.argv) != 4:
-        print(f"usage: {sys.argv[0]} <port> <assets-dir> <latest-tag>", file=sys.stderr)
-        return 2
+@dataclass(frozen=True)
+class ReleaseServerConfig:
+    """Configuration shared by the fake release request handler."""
 
-    port = int(sys.argv[1])
-    assets_dir = os.path.abspath(sys.argv[2])
-    latest_tag = sys.argv[3]
+    assets_dir: Path
+    latest_tag: str
 
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def log_message(self, fmt, *args):  # noqa: A002 - stdlib signature
-            # Keep test output quiet; failures are asserted by the
-            # caller via HTTP status/body, not by scraping server logs.
-            pass
 
-        def do_GET(self):  # noqa: N802 - stdlib method name
-            parsed = urllib.parse.urlparse(self.path)
-            path = parsed.path
+def port_number(value: str) -> int:
+    """Parse a valid TCP port for argparse."""
+    try:
+        port = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("port must be an integer") from exc
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("port must be between 1 and 65535")
+    return port
 
-            if path == "/releases/latest":
-                self.send_response(302)
-                self.send_header("Location", f"/releases/tag/{latest_tag}")
-                self.end_headers()
+
+def resolve_asset_path(assets_dir: Path, tag: str, asset: str) -> Path | None:
+    """Return an existing flat asset below assets_dir, rejecting traversal."""
+    if not tag or not asset or any(separator in tag or separator in asset for separator in ("/", "\\")):
+        return None
+    root = assets_dir.resolve()
+    candidate = (root / tag / asset).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    if not candidate.is_file():
+        return None
+    return candidate
+
+
+class ReleaseHTTPServer(http.server.ThreadingHTTPServer):
+    """HTTP server carrying immutable request-handler configuration."""
+
+    config: ReleaseServerConfig
+
+    def __init__(self, address: tuple[str, int], config: ReleaseServerConfig) -> None:
+        super().__init__(address, ReleaseRequestHandler)
+        self.config = config
+
+
+class ReleaseRequestHandler(http.server.BaseHTTPRequestHandler):
+    """Implement fake latest/tag/download endpoints for local test assets."""
+
+    server: ReleaseHTTPServer
+
+    def log_message(self, format_string: str, *args: object) -> None:
+        """Suppress routine fixture traffic; callers assert HTTP results."""
+
+    def do_GET(self) -> None:  # noqa: N802 - required BaseHTTPRequestHandler API
+        """Serve a release redirect, tag page, or verified local asset."""
+        path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
+        config = cast(ReleaseHTTPServer, self.server).config
+        if path == "/releases/latest":
+            self.send_response(http.HTTPStatus.FOUND)
+            self.send_header("Location", f"/releases/tag/{config.latest_tag}")
+            self.end_headers()
+            return
+        if path.startswith("/releases/tag/"):
+            tag = path.removeprefix("/releases/tag/")
+            self._send_bytes(http.HTTPStatus.OK, "text/plain", f"tag: {tag}\n".encode())
+            return
+        if path.startswith("/releases/download/"):
+            rest = path.removeprefix("/releases/download/")
+            parts = rest.split("/", 1)
+            if len(parts) != 2:
+                self.send_error(http.HTTPStatus.NOT_FOUND, "not found")
                 return
-
-            if path.startswith("/releases/tag/"):
-                tag = path[len("/releases/tag/"):]
-                body = f"tag: {tag}\n".encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "text/plain")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+            asset_path = resolve_asset_path(config.assets_dir, parts[0], parts[1])
+            if asset_path is None:
+                self.send_error(http.HTTPStatus.NOT_FOUND, "not found")
                 return
+            try:
+                self._send_bytes(http.HTTPStatus.OK, "application/octet-stream", asset_path.read_bytes())
+            except OSError:
+                self.send_error(http.HTTPStatus.INTERNAL_SERVER_ERROR, "could not read asset")
+            return
+        self.send_error(http.HTTPStatus.NOT_FOUND, "not found")
 
-            if path.startswith("/releases/download/"):
-                rest = path[len("/releases/download/"):]
-                parts = rest.split("/", 1)
-                if len(parts) != 2:
-                    self.send_error(404, "not found")
-                    return
-                tag, asset = parts
-                # Guard against path traversal via the URL; only a
-                # plain tag/asset pair resolving inside assets_dir is
-                # ever served.
-                candidate = os.path.abspath(os.path.join(assets_dir, tag, asset))
-                if not candidate.startswith(assets_dir + os.sep) and candidate != assets_dir:
-                    self.send_error(403, "forbidden")
-                    return
-                if not os.path.isfile(candidate):
-                    self.send_error(404, "not found")
-                    return
-                with open(candidate, "rb") as f:
-                    data = f.read()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/octet-stream")
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-                return
+    def _send_bytes(self, status: http.HTTPStatus, content_type: str, body: bytes) -> None:
+        """Write one complete fixed-length response body."""
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
-            self.send_error(404, "not found")
 
-    server = http.server.HTTPServer(("127.0.0.1", port), Handler)
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse the test fixture's stable positional command-line interface."""
+    parser = argparse.ArgumentParser(description="Serve local cloud-pulse release test assets.")
+    parser.add_argument("port", type=port_number)
+    parser.add_argument("assets_dir", type=Path)
+    parser.add_argument("latest_tag")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the loopback-only fake release server until interrupted."""
+    args = parse_args(argv)
+    server = ReleaseHTTPServer(
+        ("127.0.0.1", args.port),
+        ReleaseServerConfig(assets_dir=args.assets_dir, latest_tag=args.latest_tag),
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        pass
+        return 0
+    finally:
+        server.server_close()
     return 0
 
 
