@@ -13,7 +13,7 @@ import {
   formatRelativeTimeFromUnixSeconds,
   formatNumber,
   formatLoad,
-} from "../assets/js/format.js";
+} from "../assets/js/core/format.js";
 
 test("clamp restricts to range", () => {
   assert.equal(clamp(5, 0, 10), 5);

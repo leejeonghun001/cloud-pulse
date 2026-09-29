@@ -1,0 +1,172 @@
+/* settings.css — Settings page redesign: sidebar layout + Network
+   section components (adapters, allowlist chips, pending banner,
+   confirm dialog diff). Component classes shared across pages
+   (cp-card, cp-host-detail-meta, cp-settings-row, cp-chip, etc.) live
+   in base.css/input.css's legacy layer; this file owns only what's
+   new for the sidebar + Network UI. */
+
+@layer components {
+  /* ---------------------------------------------------------------- */
+  /* Sidebar layout                                                    */
+  /* ---------------------------------------------------------------- */
+
+  .cp-settings-layout {
+    @apply flex flex-col gap-6 md:flex-row md:items-start;
+  }
+
+  .cp-settings-nav {
+    @apply shrink-0 md:w-56;
+  }
+
+  .cp-settings-nav-list {
+    @apply flex list-none gap-1 overflow-x-auto p-0 m-0 md:flex-col md:overflow-visible;
+  }
+
+  .cp-settings-nav-link {
+    @apply flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium text-[rgb(var(--muted))] no-underline hover:bg-[rgb(var(--surface-raised))] hover:text-[rgb(var(--text))] transition-colors;
+  }
+
+  .cp-settings-nav-link-active {
+    @apply bg-cp-accent/10 text-cp-accent hover:bg-cp-accent/10 hover:text-cp-accent;
+  }
+
+  .cp-settings-content {
+    @apply flex-1 min-w-0 flex flex-col gap-4;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Network section: adapters                                        */
+  /* ---------------------------------------------------------------- */
+
+  .cp-network-config-card {
+    @apply gap-4;
+  }
+
+  .cp-network-subheading {
+    @apply text-sm font-semibold text-[rgb(var(--text))] mt-2;
+  }
+
+  .cp-network-all-row {
+    @apply rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] px-3 py-2;
+  }
+
+  .cp-network-adapter-list {
+    @apply flex flex-col gap-3;
+  }
+
+  .cp-network-adapter {
+    @apply flex flex-col gap-1.5 rounded-lg border border-[rgb(var(--border))] p-3;
+  }
+
+  .cp-network-adapter-header {
+    @apply flex items-center gap-2 flex-wrap mb-1;
+  }
+
+  .cp-network-adapter-name {
+    @apply text-sm font-semibold text-[rgb(var(--text))];
+  }
+
+  .cp-network-kind-loopback {
+    @apply bg-[rgb(var(--muted-surface))] text-[rgb(var(--muted))];
+  }
+
+  .cp-network-kind-tailscale {
+    @apply bg-cp-accent/15 text-cp-accent;
+  }
+
+  .cp-network-kind-virtual {
+    @apply bg-[rgb(var(--muted-surface))] text-[rgb(var(--muted))];
+  }
+
+  .cp-network-kind-physical {
+    @apply bg-cp-ok/15 text-emerald-600 dark:text-emerald-400;
+  }
+
+  .cp-network-addr-row {
+    @apply pl-1;
+  }
+
+  .cp-network-addr-muted {
+    @apply opacity-60;
+  }
+
+  .cp-network-port-field {
+    @apply max-w-[10rem];
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Network section: allowlist chips                                 */
+  /* ---------------------------------------------------------------- */
+
+  .cp-network-allowlist {
+    @apply flex flex-col gap-2;
+  }
+
+  .cp-network-chip-list {
+    @apply flex flex-wrap gap-1.5 min-h-[1.75rem];
+  }
+
+  .cp-network-allow-chip {
+    @apply gap-1.5 bg-[rgb(var(--muted-surface))] text-[rgb(var(--text))] pr-1;
+  }
+
+  .cp-network-chip-remove {
+    @apply inline-flex items-center justify-center h-4 w-4 rounded-full text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] hover:bg-[rgb(var(--border))] cursor-pointer;
+  }
+
+  .cp-network-suggestions {
+    @apply flex flex-wrap gap-1.5;
+  }
+
+  .cp-network-warning {
+    @apply text-cp-warning;
+  }
+
+  .cp-network-actions {
+    @apply flex items-center gap-2 flex-wrap mt-2;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Pending change banner                                            */
+  /* ---------------------------------------------------------------- */
+
+  .cp-network-pending-banner {
+    @apply flex items-start gap-3 rounded-xl border border-cp-warning/40 bg-cp-warning/10 p-4;
+  }
+
+  .cp-network-pending-body {
+    @apply flex flex-col gap-2 flex-1 min-w-0;
+  }
+
+  .cp-network-pending-title {
+    @apply text-sm font-semibold text-[rgb(var(--text))];
+  }
+
+  .cp-network-pending-countdown {
+    @apply text-sm text-[rgb(var(--text))] tabular-nums;
+  }
+
+  .cp-network-pending-urls {
+    @apply flex flex-col gap-1 list-none p-0 m-0 text-sm;
+  }
+
+  .cp-network-pending-actions {
+    @apply flex items-center gap-2 flex-wrap mt-1;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Misc shared-by-this-redesign helpers                             */
+  /* ---------------------------------------------------------------- */
+
+  .cp-code-inline {
+    @apply rounded bg-[rgb(var(--muted-surface))] px-1.5 py-0.5 font-mono text-xs text-[rgb(var(--text))];
+  }
+
+  .cp-link {
+    @apply text-sm font-medium text-cp-accent hover:underline;
+  }
+
+  .cp-settings-form {
+    @apply flex flex-col gap-3 max-w-md;
+  }
+}

@@ -1,8 +1,8 @@
 // buckets.js — builds the overview page's object storage section: a
 // card per bucket (S3/R2) with usage stats, a request-rate sparkline,
 // R2 free-tier progress bars, and a collector status list.
-import { el, progressBar, storageBadge, emptyState, errorBanner } from "./components.js";
-import { formatBytes, formatNumber, formatRelativeTimeFromUnixSeconds } from "./format.js";
+import { el, progressBar, storageBadge, emptyState, errorBanner } from "../ui/components.js";
+import { formatBytes, formatNumber, formatRelativeTimeFromUnixSeconds } from "../core/format.js";
 import { createSparkline, SERIES_COLORS } from "./charts.js";
 
 /**

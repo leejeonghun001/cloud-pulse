@@ -13,7 +13,7 @@ import {
   hubInfoUpdateFields,
   LEGACY_AGENT_EXPLANATION,
   VERSION_REFRESH_INTERVAL_MS,
-} from "../assets/js/updates.js";
+} from "../assets/js/core/updates.js";
 
 test("shouldShowUpdateBanner: false when update_available is false", () => {
   assert.equal(shouldShowUpdateBanner({ update_available: false, latest_version: "v0.3.1" }, null), false);

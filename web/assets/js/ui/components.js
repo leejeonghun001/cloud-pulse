@@ -1,9 +1,10 @@
-// components.js — DOM builder helpers for the cloud-pulse dashboard.
-// Every function here builds elements with document.createElement and
-// assigns text via .textContent, never .innerHTML with API-derived
-// data, so nothing an agent reports (hostname, bucket name, error
-// strings, ...) can execute as markup.
-
+// components.js — general-purpose DOM builder helpers + the ported
+// v0.3.x dashboard component builders (host cards, progress bars,
+// badges, etc.), rewritten to use the new design tokens/classes from
+// base.css and CSS-var-based theme. Every function here builds elements
+// with document.createElement and assigns text via .textContent, never
+// .innerHTML with API-derived data, so nothing an agent reports
+// (hostname, bucket name, error strings, ...) can execute as markup.
 import {
   formatBytes,
   formatBitrate,
@@ -13,8 +14,9 @@ import {
   formatNumber,
   formatLoad,
   clamp,
-} from "./format.js";
-import { bannerText, hostUpdateBadgeText, agentVersionText, agentUpdatePanelText, LEGACY_AGENT_EXPLANATION } from "./updates.js";
+} from "../core/format.js";
+import { bannerText, hostUpdateBadgeText, agentVersionText, agentUpdatePanelText, LEGACY_AGENT_EXPLANATION } from "../core/updates.js";
+import { icon } from "./icons.js";
 
 /**
  * el creates an element with optional class names, attributes, and
@@ -161,7 +163,7 @@ export function levelClassForBar(level) {
  */
 export function metricRow(label, percent, detail) {
   const row = el("div", { class: "cp-metric-row" });
-  const head = el("div", { class: "cp-metric-head" }, );
+  const head = el("div", { class: "cp-metric-head" });
   head.append(
     el("span", { class: "cp-metric-label", text: label }),
     el("span", { class: "cp-metric-value", text: detail ? `${formatPercent(percent)} · ${detail}` : formatPercent(percent) }),
@@ -328,10 +330,9 @@ export function egressDirectionRow({ label, bytes, limitBytes, level, projectedB
 
 /**
  * egressSection builds the monthly egress mini card shown inside a host
- * card: separate Outbound and Inbound rows (see SPEC-v0.2), each with
- * its own bar/limit/level/projection or "no limit" text, and a "hub
- * override" badge when that direction's limit came from a hub-side
- * override.
+ * card: separate Outbound and Inbound rows, each with its own
+ * bar/limit/level/projection or "no limit" text, and a "hub override"
+ * badge when that direction's limit came from a hub-side override.
  * @param {Object} egress a models.EgressUsage JSON object
  * @returns {HTMLElement}
  */
@@ -364,7 +365,7 @@ export function egressSection(egress) {
 
 /**
  * updateBanner builds the global "new version available" banner shown
- * below the header on every page when the hub reports an update. The
+ * below the navbar on every page when the hub reports an update. The
  * caller wires up the Copy and Dismiss button handlers (kept out of
  * this pure builder so it stays easily composable/testable); this
  * function only builds the DOM structure and fills in the text/link.
@@ -453,10 +454,18 @@ export function agentUpdatePanel(update) {
  * @param {string} opts.title
  * @param {string} opts.message
  * @param {string} [opts.code]
+ * @param {string} [opts.iconName] optional icon name shown above the title
  * @returns {HTMLElement}
  */
-export function emptyState({ title, message, code }) {
+export function emptyState({ title, message, code, iconName }) {
   const wrap = el("div", { class: "cp-empty-state" });
+  if (iconName) {
+    const iconWrap = el("div", { class: "cp-muted" });
+    const ic = icon(iconName);
+    ic.classList.add("h-8", "w-8");
+    iconWrap.append(ic);
+    wrap.append(iconWrap);
+  }
   wrap.append(el("h3", { text: title }));
   wrap.append(el("p", { text: message }));
   if (code) {
@@ -468,16 +477,16 @@ export function emptyState({ title, message, code }) {
 }
 
 /**
- * errorBanner builds a non-blocking error banner/toast element.
+ * errorBanner builds a non-blocking error banner element.
  * @param {string} message
  * @returns {HTMLElement}
  */
 export function errorBanner(message) {
-  return el("div", {
-    class: "cp-error-banner",
-    attrs: { role: "alert" },
-    text: message,
-  });
+  const wrap = el("div", { class: "cp-error-banner", attrs: { role: "alert" } });
+  const ic = icon("circleAlert");
+  ic.classList.add("h-4", "w-4", "shrink-0");
+  wrap.append(ic, el("span", { text: message }));
+  return wrap;
 }
 
 /**
@@ -491,8 +500,7 @@ export function errorBanner(message) {
  * @param {number} stats.bucketsTracked
  * @param {number} stats.lastRefreshMs
  * @param {number} [stats.outdatedAgents] count of hosts with an agent
- *   update available; omitted or 0 skips the summary item entirely (see
- *   SPEC-v0.3 D-U6: "only if it fits the 6-col strip").
+ *   update available; omitted or 0 skips the summary item entirely.
  * @returns {HTMLElement}
  */
 export function summaryStrip(stats) {

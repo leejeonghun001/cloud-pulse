@@ -2,7 +2,7 @@
 // GiB<->bytes parsing/validation and token masking helpers).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { GIB, parseLimitGiB, formatLimitGiB, maskToken } from "../assets/js/limits.js";
+import { GIB, parseLimitGiB, formatLimitGiB, maskToken } from "../assets/js/core/limits.js";
 
 test("parseLimitGiB: blank means no override", () => {
   assert.deepEqual(parseLimitGiB(""), { ok: true, bytes: null });

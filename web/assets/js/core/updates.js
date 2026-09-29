@@ -1,7 +1,7 @@
-// updates.js — pure helpers for D-U6 (update banner, host card/detail
-// update badges, settings hub-info panel). No DOM access here so these
+// updates.js — pure helpers for the update banner, host card/detail
+// update badges, settings hub-info panel. No DOM access here so these
 // are covered by node --test without a browser environment; DOM
-// building for these pieces lives in components.js/settings.js.
+// building for these pieces lives in ui/components.js/pages/settings.
 
 const DISMISSED_STORAGE_KEY = "cp_update_dismissed";
 
@@ -158,6 +158,5 @@ export function hubInfoUpdateFields(versionInfo) {
 }
 
 /** VERSION_REFRESH_INTERVAL_MS is the polling interval for
- * GET /api/v1/version driving the update banner (30 minutes, per
- * SPEC-v0.3 D-U6 — much slower than the 15s host-metrics refresh). */
+ * GET /api/v1/version driving the update banner (30 minutes). */
 export const VERSION_REFRESH_INTERVAL_MS = 30 * 60 * 1000;

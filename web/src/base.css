@@ -1,0 +1,666 @@
+/* base.css — design tokens (light + dark) and shell/component styles
+   shared across every page. Page-specific styles live in
+   web/src/pages/*.css. Zinc-like neutral palette, shadcn-inspired,
+   dark by default with a `.dark` class on <html> switched by
+   theme-init.js before first paint. */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas, monospace;
+
+  /* Status / level colors — same hue mapping in both themes. */
+  --color-cp-ok: #10b981;
+  --color-cp-warning: #f59e0b;
+  --color-cp-critical: #fb923c;
+  --color-cp-exceeded: #ef4444;
+
+  --color-cp-aws: #f59e0b;
+  --color-cp-oci: #ef4444;
+  --color-cp-other: #64748b;
+  --color-cp-r2: #f97316;
+
+  --color-cp-accent: #0ea5e9;
+  --color-cp-accent-strong: #0284c7;
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+
+    /* Zinc-like light theme */
+    --bg: 255 255 255;
+    --surface: 250 250 250;
+    --surface-raised: 255 255 255;
+    --border: 228 228 231;
+    --text: 24 24 27;
+    --muted: 113 113 122;
+    --muted-surface: 244 244 245;
+    --ring: 14 165 233;
+    --shadow-color: 0 0% 0%;
+  }
+
+  .dark {
+    color-scheme: dark;
+
+    /* Zinc-like dark theme */
+    --bg: 9 9 11;
+    --surface: 15 15 17;
+    --surface-raised: 20 20 23;
+    --border: 39 39 42;
+    --text: 244 244 245;
+    --muted: 161 161 170;
+    --muted-surface: 24 24 27;
+    --ring: 56 189 248;
+    --shadow-color: 0 0% 0%;
+  }
+
+  * {
+    scrollbar-color: rgb(var(--border)) transparent;
+  }
+
+  html {
+    background: rgb(var(--bg));
+  }
+
+  body {
+    background: rgb(var(--bg));
+    color: rgb(var(--text));
+    font-family: var(--font-sans);
+  }
+
+  :focus-visible {
+    outline: 2px solid rgb(var(--ring));
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::selection {
+    background: rgb(var(--ring) / 0.3);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  /* -------------------------------------------------------------- */
+  /* Utility surfaces                                                */
+  /* -------------------------------------------------------------- */
+
+  .cp-skip-link {
+    @apply sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:bg-[rgb(var(--surface-raised))] focus:px-4 focus:py-2 focus:text-[rgb(var(--text))] focus:shadow-lg;
+  }
+
+  .cp-sr-only,
+  .cp-sr-only-summary {
+    @apply sr-only;
+  }
+
+  .cp-noscript-banner {
+    @apply bg-cp-exceeded/20 border border-cp-exceeded text-[rgb(var(--text))] p-4 text-center;
+  }
+
+  .cp-tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* -------------------------------------------------------------- */
+  /* App shell / navbar                                             */
+  /* -------------------------------------------------------------- */
+
+  .cp-app {
+    @apply min-h-screen flex flex-col;
+  }
+
+  .cp-shell-header {
+    @apply sticky top-0 z-40 px-3 pt-3 sm:px-6;
+  }
+
+  .cp-navbar {
+    @apply mx-auto max-w-7xl flex items-center gap-3 rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))]/95 backdrop-blur px-4 py-2.5 shadow-sm;
+  }
+
+  .cp-navbar-brand {
+    @apply flex items-center gap-2 text-[rgb(var(--text))] no-underline shrink-0;
+  }
+
+  .cp-navbar-brand .cp-icon {
+    @apply h-6 w-6 text-cp-accent;
+  }
+
+  .cp-navbar-wordmark {
+    @apply text-base font-semibold tracking-tight hidden sm:inline;
+  }
+
+  .cp-navbar-search {
+    @apply flex-1 flex items-center gap-2 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--muted-surface))] px-3 py-1.5 text-sm text-[rgb(var(--muted))] hover:border-cp-accent/50 transition-colors cursor-pointer max-w-md;
+  }
+
+  .cp-navbar-search .cp-icon {
+    @apply h-4 w-4 shrink-0;
+  }
+
+  .cp-navbar-search-label {
+    @apply flex-1 text-left truncate;
+  }
+
+  .cp-kbd {
+    @apply hidden sm:inline-flex items-center gap-0.5 rounded border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] px-1.5 py-0.5 text-[10px] font-medium text-[rgb(var(--muted))] font-mono;
+  }
+
+  .cp-navbar-actions {
+    @apply ml-auto flex items-center gap-1.5 shrink-0;
+  }
+
+  .cp-icon-btn {
+    @apply inline-flex items-center justify-center h-9 w-9 rounded-lg text-[rgb(var(--muted))] hover:bg-[rgb(var(--muted-surface))] hover:text-[rgb(var(--text))] transition-colors cursor-pointer border border-transparent;
+  }
+
+  .cp-icon-btn .cp-icon {
+    @apply h-[18px] w-[18px];
+  }
+
+  .cp-shell-banners {
+    @apply mx-auto max-w-7xl px-3 sm:px-6 flex flex-col gap-2 mt-2;
+  }
+
+  .cp-main {
+    @apply mx-auto max-w-7xl w-full px-3 py-6 sm:px-6 flex-1 flex flex-col gap-6;
+  }
+
+  .cp-footer {
+    @apply mx-auto max-w-7xl w-full px-3 py-4 sm:px-6 text-xs text-[rgb(var(--muted))];
+  }
+
+  /* -------------------------------------------------------------- */
+  /* Cards / surfaces                                                */
+  /* -------------------------------------------------------------- */
+
+  .cp-card {
+    @apply rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-4 sm:p-5 shadow-sm flex flex-col gap-3;
+  }
+
+  .cp-card-header {
+    @apply flex items-start justify-between gap-3 flex-wrap;
+  }
+
+  .cp-card-title {
+    @apply text-base font-semibold text-[rgb(var(--text))];
+  }
+
+  .cp-card-subtitle {
+    @apply text-sm text-[rgb(var(--muted))];
+  }
+
+  .cp-page-title {
+    @apply text-2xl font-semibold text-[rgb(var(--text))] tracking-tight;
+  }
+
+  .cp-page-subtitle {
+    @apply text-sm text-[rgb(var(--muted))];
+  }
+
+  .cp-section {
+    @apply flex flex-col gap-3;
+  }
+
+  .cp-section h2 {
+    @apply text-lg font-semibold text-[rgb(var(--text))];
+  }
+
+  /* -------------------------------------------------------------- */
+  /* Buttons                                                         */
+  /* -------------------------------------------------------------- */
+
+  .cp-btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] px-3 py-1.5 text-sm font-medium text-[rgb(var(--text))] hover:bg-[rgb(var(--muted-surface))] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .cp-btn .cp-icon {
+    @apply h-4 w-4;
+  }
+
+  .cp-btn-primary {
+    @apply bg-cp-accent border-cp-accent-strong text-white hover:bg-cp-accent-strong;
+  }
+
+  .cp-btn-danger {
+    @apply bg-cp-exceeded border-red-600 text-white hover:bg-red-600;
+  }
+
+  .cp-btn-ghost {
+    @apply border-transparent bg-transparent hover:bg-[rgb(var(--muted-surface))];
+  }
+
+  .cp-btn-sm {
+    @apply px-2 py-1 text-xs;
+  }
+
+  .cp-btn-icon {
+    @apply px-2 py-1;
+  }
+
+  .cp-btn-block {
+    @apply w-full;
+  }
+
+  /* Defined after .cp-btn (not just as a modifier alongside it) so its
+     responsive `display` wins the same-specificity cascade tie-break
+     against .cp-btn's own unconditional `display: inline-flex` — see
+     notes/v04-web-visual.md for the bug this fixes (the "Add agent"
+     button never actually hid below the sm breakpoint). */
+  .cp-navbar-primary-btn {
+    @apply hidden sm:inline-flex;
+  }
+
+  /* -------------------------------------------------------------- */
+  /* Inputs / forms                                                  */
+  /* -------------------------------------------------------------- */
+
+  .cp-input {
+    color-scheme: light dark;
+    @apply w-full appearance-none rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] px-3 py-1.5 text-sm text-[rgb(var(--text))] placeholder:text-[rgb(var(--muted))] focus:border-cp-accent transition-colors;
+  }
+
+  .cp-input-sm {
+    @apply px-2 py-1 text-xs;
+  }
+
+  .cp-label {
+    @apply text-sm font-medium text-[rgb(var(--text))];
+  }
+
+  .cp-help-text {
+    @apply text-xs text-[rgb(var(--muted))];
+  }
+
+  .cp-field {
+    @apply flex flex-col gap-1.5;
+  }
+
+  .cp-input-group {
+    @apply relative flex items-center;
+  }
+
+  .cp-input-group-btn {
+    @apply absolute right-1.5 inline-flex items-center justify-center h-6 w-6 rounded text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] cursor-pointer;
+  }
+
+  .cp-error-text {
+    @apply text-xs text-cp-exceeded min-h-[1rem];
+  }
+
+  .cp-checkbox-row {
+    @apply flex items-center gap-2 text-sm text-[rgb(var(--text))];
+  }
+
+  /* -------------------------------------------------------------- */
+  /* Badges / chips / dots                                          */
+  /* -------------------------------------------------------------- */
+
+  .cp-dot {
+    @apply inline-block h-2.5 w-2.5 rounded-full shrink-0;
+  }
+
+  .cp-dot-up {
+    @apply bg-cp-ok;
+  }
+
+  .cp-dot-down {
+    @apply bg-cp-exceeded;
+  }
+
+  .cp-badge {
+    @apply inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shrink-0;
+  }
+
+  .cp-badge-aws {
+    @apply bg-cp-aws/90;
+  }
+
+  .cp-badge-oci {
+    @apply bg-cp-oci/90;
+  }
+
+  .cp-badge-other {
+    @apply bg-cp-other/90;
+  }
+
+  .cp-badge-r2 {
+    @apply bg-cp-r2/90;
+  }
+
+  .cp-badge-hub {
+    @apply bg-cp-accent/90 normal-case tracking-normal;
+  }
+
+  .cp-badge-update {
+    @apply bg-cp-warning/90 normal-case tracking-normal;
+  }
+
+  .cp-chip {
+    @apply inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium;
+  }
+
+  .cp-chip-ok {
+    @apply bg-cp-ok/15 text-emerald-600 dark:text-emerald-400;
+  }
+
+  .cp-chip-warning {
+    @apply bg-cp-warning/15 text-amber-600 dark:text-amber-400;
+  }
+
+  .cp-chip-critical {
+    @apply bg-cp-critical/15 text-orange-600 dark:text-orange-400;
+  }
+
+  .cp-chip-exceeded {
+    @apply bg-cp-exceeded/15 text-red-600 dark:text-red-400;
+  }
+
+  /* -------------------------------------------------------------- */
+  /* Progress bars                                                   */
+  /* -------------------------------------------------------------- */
+
+  .cp-bar {
+    @apply flex items-center gap-2;
+  }
+
+  .cp-bar-track {
+    @apply relative h-1.5 flex-1 rounded-full bg-[rgb(var(--muted-surface))] overflow-hidden;
+  }
+
+  .cp-bar-fill {
+    @apply h-full rounded-full transition-[width];
+  }
+
+  .cp-bar-ok {
+    @apply bg-cp-ok;
+  }
+
+  .cp-bar-warning {
+    @apply bg-cp-warning;
+  }
+
+  .cp-bar-critical {
+    @apply bg-cp-critical;
+  }
+
+  .cp-bar-exceeded {
+    @apply bg-cp-exceeded;
+  }
+
+  .cp-bar-text {
+    @apply text-xs text-[rgb(var(--muted))] w-auto whitespace-nowrap tabular-nums;
+  }
+
+  /* -------------------------------------------------------------- */
+  /* Empty state / errors                                            */
+  /* -------------------------------------------------------------- */
+
+  .cp-empty-state {
+    @apply col-span-full flex flex-col items-center gap-3 rounded-xl border border-dashed border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-10 text-center;
+  }
+
+  .cp-empty-state h3 {
+    @apply text-lg font-semibold text-[rgb(var(--text))];
+  }
+
+  .cp-empty-state p {
+    @apply text-sm text-[rgb(var(--muted))] max-w-md;
+  }
+
+  .cp-code-block {
+    @apply w-full max-w-2xl overflow-x-auto rounded-lg bg-[rgb(var(--muted-surface))] border border-[rgb(var(--border))] p-3 text-left text-xs text-[rgb(var(--text))] font-mono;
+  }
+
+  .cp-code-block-wrap {
+    @apply max-w-none whitespace-pre-wrap break-all;
+  }
+
+  .cp-error-banner {
+    @apply rounded-lg border border-cp-exceeded bg-cp-exceeded/10 text-red-700 dark:text-red-300 px-4 py-2 text-sm flex items-center gap-2;
+  }
+
+  .cp-hint {
+    @apply text-xs text-amber-600 dark:text-amber-400;
+  }
+
+  .cp-muted {
+    @apply text-sm text-[rgb(var(--muted))];
+  }
+
+  .cp-muted-small {
+    @apply text-xs text-[rgb(var(--muted))];
+  }
+
+  /* -------------------------------------------------------------- */
+  /* Skeletons                                                       */
+  /* -------------------------------------------------------------- */
+
+  .cp-skeleton {
+    @apply animate-pulse rounded-md bg-[rgb(var(--muted-surface))];
+  }
+
+  /* -------------------------------------------------------------- */
+  /* Toasts                                                          */
+  /* -------------------------------------------------------------- */
+
+  .cp-toast-region {
+    @apply fixed bottom-4 right-4 z-[100] flex flex-col gap-2 w-[min(22rem,calc(100vw-2rem))];
+  }
+
+  .cp-toast {
+    @apply flex items-start gap-2 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] px-4 py-3 text-sm text-[rgb(var(--text))] shadow-lg;
+    animation: cp-toast-in 0.15s ease-out;
+  }
+
+  .cp-toast-error {
+    @apply border-cp-exceeded/50;
+  }
+
+  .cp-toast-success {
+    @apply border-cp-ok/50;
+  }
+
+  .cp-toast-body {
+    @apply flex-1 flex flex-col gap-1;
+  }
+
+  .cp-toast-action {
+    @apply text-cp-accent hover:underline text-sm font-medium cursor-pointer bg-transparent border-0 p-0 text-left;
+  }
+
+  .cp-toast-close {
+    @apply text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] cursor-pointer shrink-0;
+  }
+
+  @keyframes cp-toast-in {
+    from { opacity: 0; transform: translateY(0.5rem); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* -------------------------------------------------------------- */
+  /* Dialogs                                                         */
+  /* -------------------------------------------------------------- */
+
+  .cp-dialog {
+    @apply rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-[rgb(var(--text))] p-6 max-w-md w-[calc(100vw-2rem)] shadow-2xl m-auto;
+    position: fixed;
+    inset: 0;
+    max-height: calc(100vh - 2rem);
+    overflow-y: auto;
+  }
+
+  .cp-dialog::backdrop {
+    @apply bg-black/50 backdrop-blur-sm;
+  }
+
+  .cp-dialog-wide {
+    @apply max-w-lg;
+  }
+
+  .cp-dialog-header {
+    @apply flex items-start justify-between gap-3 mb-1;
+  }
+
+  .cp-dialog-title {
+    @apply text-lg font-semibold text-[rgb(var(--text))];
+  }
+
+  .cp-dialog-desc {
+    @apply text-sm text-[rgb(var(--muted))];
+  }
+
+  .cp-dialog form {
+    @apply flex flex-col gap-3;
+  }
+
+  .cp-dialog-actions {
+    @apply flex justify-end gap-2 mt-2;
+  }
+
+  /* -------------------------------------------------------------- */
+  /* Command palette                                                 */
+  /* -------------------------------------------------------------- */
+
+  .cp-palette {
+    @apply rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-[rgb(var(--text))] p-0 w-[min(36rem,calc(100vw-2rem))] shadow-2xl overflow-hidden m-auto;
+    position: fixed;
+    inset: 0;
+    top: 10vh;
+    max-height: calc(100vh - 12vh);
+  }
+
+  .cp-palette::backdrop {
+    @apply bg-black/50 backdrop-blur-sm;
+  }
+
+  .cp-palette-input-row {
+    @apply flex items-center gap-2 border-b border-[rgb(var(--border))] px-4 py-3;
+  }
+
+  .cp-palette-input-row .cp-icon {
+    @apply h-4 w-4 text-[rgb(var(--muted))] shrink-0;
+  }
+
+  .cp-palette-input {
+    @apply flex-1 bg-transparent border-0 outline-none text-sm text-[rgb(var(--text))] placeholder:text-[rgb(var(--muted))];
+  }
+
+  .cp-palette-list {
+    @apply max-h-96 overflow-y-auto p-2 flex flex-col gap-0.5;
+  }
+
+  .cp-palette-group-label {
+    @apply text-[11px] font-medium uppercase tracking-wide text-[rgb(var(--muted))] px-2 pt-2 pb-1;
+  }
+
+  .cp-palette-item {
+    @apply flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-[rgb(var(--text))] cursor-pointer;
+  }
+
+  .cp-palette-item .cp-icon {
+    @apply h-4 w-4 text-[rgb(var(--muted))] shrink-0;
+  }
+
+  .cp-palette-item[aria-selected="true"] {
+    @apply bg-cp-accent/15;
+  }
+
+  .cp-palette-empty {
+    @apply px-4 py-6 text-center text-sm text-[rgb(var(--muted))];
+  }
+
+  /* -------------------------------------------------------------- */
+  /* Dropdown / select                                               */
+  /* -------------------------------------------------------------- */
+
+  .cp-dropdown {
+    @apply relative inline-block;
+  }
+
+  .cp-dropdown-menu {
+    @apply absolute right-0 z-30 mt-2 min-w-[12rem] rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] p-1 shadow-lg;
+  }
+
+  .cp-dropdown-menu[hidden] {
+    display: none;
+  }
+
+  .cp-dropdown-item {
+    @apply flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-sm text-[rgb(var(--text))] hover:bg-[rgb(var(--muted-surface))] cursor-pointer border-0 bg-transparent text-left;
+  }
+
+  .cp-dropdown-item .cp-icon {
+    @apply h-4 w-4 text-[rgb(var(--muted))];
+  }
+
+  .cp-dropdown-separator {
+    @apply my-1 border-t border-[rgb(var(--border))];
+  }
+
+  .cp-select {
+    @apply w-full rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] px-3 py-1.5 pr-8 text-sm text-[rgb(var(--text))] focus:border-cp-accent transition-colors appearance-none bg-no-repeat;
+  }
+
+  /* -------------------------------------------------------------- */
+  /* Table primitives                                                */
+  /* -------------------------------------------------------------- */
+
+  .cp-table-wrap {
+    @apply overflow-x-auto rounded-lg border border-[rgb(var(--border))];
+  }
+
+  .cp-table {
+    @apply w-full text-sm border-collapse;
+  }
+
+  .cp-table th {
+    @apply text-left text-xs text-[rgb(var(--muted))] font-medium uppercase tracking-wide border-b border-[rgb(var(--border))] bg-[rgb(var(--muted-surface))] py-2.5 px-3 whitespace-nowrap;
+  }
+
+  .cp-table th[aria-sort] {
+    @apply cursor-pointer select-none;
+  }
+
+  .cp-table td {
+    @apply py-2.5 px-3 border-b border-[rgb(var(--border))]/60 text-[rgb(var(--text))];
+  }
+
+  .cp-table tr:last-child td {
+    @apply border-b-0;
+  }
+
+  .cp-table-row-link {
+    @apply hover:bg-[rgb(var(--muted-surface))] transition-colors cursor-pointer;
+  }
+
+  .cp-table-row-offline {
+    @apply opacity-60;
+  }
+
+  /* -------------------------------------------------------------- */
+  /* Back link / misc                                                */
+  /* -------------------------------------------------------------- */
+
+  .cp-back-link {
+    @apply text-sm text-cp-accent hover:underline inline-flex items-center gap-1;
+  }
+
+  .cp-back-link .cp-icon {
+    @apply h-4 w-4;
+  }
+
+  .cp-row-highlighted {
+    @apply outline outline-2 outline-cp-accent;
+  }
+}

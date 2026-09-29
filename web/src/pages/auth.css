@@ -1,0 +1,94 @@
+/* auth.css — login page + forced password-change modal + password
+   checklist/strength meter. Owned by web-foundation. */
+
+@layer components {
+  .cp-auth-page {
+    @apply min-h-screen flex items-center justify-center p-4;
+  }
+
+  .cp-auth-card {
+    @apply w-full max-w-sm rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-6 sm:p-8 shadow-lg flex flex-col gap-5;
+  }
+
+  .cp-auth-brand {
+    @apply flex flex-col items-center gap-2 text-center;
+  }
+
+  .cp-auth-brand .cp-icon {
+    @apply h-8 w-8 text-cp-accent;
+  }
+
+  .cp-auth-brand h1 {
+    @apply text-lg font-semibold text-[rgb(var(--text))];
+  }
+
+  .cp-auth-form {
+    @apply flex flex-col gap-4;
+  }
+
+  .cp-auth-submit-row {
+    @apply flex flex-col gap-2 mt-1;
+  }
+
+  .cp-auth-footer {
+    @apply text-center text-xs text-[rgb(var(--muted))];
+  }
+
+  .cp-spinner {
+    @apply inline-block h-4 w-4 rounded-full border-2 border-white/40 border-t-white animate-spin;
+  }
+
+  .cp-spinner-dark {
+    @apply border-[rgb(var(--muted))]/30 border-t-[rgb(var(--text))];
+  }
+
+  /* Password requirement checklist */
+  .cp-pw-checklist {
+    @apply flex flex-col gap-1 text-xs;
+  }
+
+  .cp-pw-checklist-item {
+    @apply flex items-center gap-1.5 text-[rgb(var(--muted))];
+  }
+
+  .cp-pw-checklist-item .cp-icon {
+    @apply h-3.5 w-3.5 shrink-0;
+  }
+
+  .cp-pw-checklist-item[data-met="true"] {
+    @apply text-cp-ok;
+  }
+
+  /* Password strength meter */
+  .cp-pw-strength {
+    @apply flex flex-col gap-1;
+  }
+
+  .cp-pw-strength-track {
+    @apply flex gap-1 h-1.5;
+  }
+
+  .cp-pw-strength-seg {
+    @apply flex-1 rounded-full bg-[rgb(var(--muted-surface))] transition-colors;
+  }
+
+  .cp-pw-strength-seg[data-active="true"][data-level="weak"] {
+    @apply bg-cp-exceeded;
+  }
+
+  .cp-pw-strength-seg[data-active="true"][data-level="fair"] {
+    @apply bg-cp-warning;
+  }
+
+  .cp-pw-strength-seg[data-active="true"][data-level="good"] {
+    @apply bg-cp-accent;
+  }
+
+  .cp-pw-strength-seg[data-active="true"][data-level="strong"] {
+    @apply bg-cp-ok;
+  }
+
+  .cp-pw-strength-label {
+    @apply text-xs text-[rgb(var(--muted))];
+  }
+}

@@ -3,8 +3,8 @@
 // (prev/next + <input type=month>), and a list of per-host egress rows
 // with progress bars and level chips for the selected direction (with
 // the other direction's total shown as secondary text).
-import { el, progressBar, egressLevelChip, levelClassForBar, hubOverrideBadge } from "./components.js";
-import { formatBytes } from "./format.js";
+import { el, progressBar, egressLevelChip, levelClassForBar, hubOverrideBadge } from "../ui/components.js";
+import { formatBytes } from "../core/format.js";
 
 /** DIRECTION_STORAGE_KEY is the localStorage key remembering the last
  * selected egress direction across page loads. */

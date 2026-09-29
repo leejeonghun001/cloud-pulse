@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { runHostDetailRefresh } from "../assets/js/refresh.js";
+import { runHostDetailRefresh } from "../assets/js/core/refresh.js";
 
 test("missing host stops the detail refresh chain", async () => {
   let metricsCalls = 0;

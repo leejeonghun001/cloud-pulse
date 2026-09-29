@@ -1,9 +1,12 @@
-// charts.js — uPlot wrappers with a dark theme, resize-aware sizing, a
-// local-timezone time axis, and lifecycle management (destroy on
-// navigation). Depends only on the vendored uPlot ESM build.
-import uPlot from "../vendor/uplot/uPlot.esm.js";
+// charts.js — uPlot wrappers with a theme-aware palette (re-reads CSS
+// variables on "cp-theme-change" via re-creation by callers), resize
+// -aware sizing, a local-timezone time axis, and lifecycle management
+// (destroy on navigation). Depends only on the vendored uPlot ESM
+// build.
+import uPlot from "../../vendor/uplot/uPlot.esm.js";
 
-/** Dark-theme series colors, reused across charts for visual consistency. */
+/** Series colors, reused across charts for visual consistency. Chosen
+ * to hold up against both the light and dark surface colors. */
 export const SERIES_COLORS = {
   cpu: "#22d3ee",
   mem: "#a78bfa",
@@ -15,6 +18,18 @@ export const SERIES_COLORS = {
   load1: "#f87171",
   sparkline: "#38bdf8",
 };
+
+/**
+ * readThemeColors reads the current axis/grid colors from CSS
+ * variables so charts match the active light/dark theme.
+ * @returns {{axis: string, grid: string}}
+ */
+function readThemeColors() {
+  const isDark = document.documentElement.classList.contains("dark");
+  return isDark
+    ? { axis: "#a1a1aa", grid: "#27272a" }
+    : { axis: "#71717a", grid: "#e4e4e7" };
+}
 
 /**
  * timeAxisValues formats x-axis tick labels in the browser's local
@@ -29,8 +44,8 @@ function formatTickTime(rawValue) {
 }
 
 /**
- * baseOpts returns uPlot options shared by every chart: dark background
- * via CSS (styling lives in app.css), a local-time x axis, and no
+ * baseOpts returns uPlot options shared by every chart: a themed
+ * background (styling lives in app.css), a local-time x axis, and no
  * built-in legend (we render our own accessible legend/tooltip text).
  * @param {number} width
  * @param {number} height
@@ -41,7 +56,8 @@ function formatTickTime(rawValue) {
  *   pass a formatter for byte-rate charts so ticks read e.g. "1.0 MiB/s").
  * @returns {Object}
  */
-function baseOpts(width, height, title, yAxisFormatter) {
+function baseOpts(width, height, title, yAxisFormatter, syncKey) {
+  const colors = readThemeColors();
   return {
     width,
     height,
@@ -49,21 +65,27 @@ function baseOpts(width, height, title, yAxisFormatter) {
     class: "cp-uplot",
     cursor: {
       points: { size: 6 },
+      // Sharing a sync key across a set of charts (host detail's
+      // CPU/Memory/Disk/Bandwidth/Disk IO/Load charts) makes uPlot
+      // broadcast cursor position/focus between them, so hovering one
+      // chart highlights the same timestamp on every other chart in
+      // the group ("synced cursor across charts" per SPEC-v0.4 §4).
+      sync: syncKey ? { key: syncKey } : undefined,
     },
     legend: {
       show: true,
     },
     axes: [
       {
-        stroke: "#8b98a5",
-        grid: { stroke: "#1f2a37", width: 1 },
-        ticks: { stroke: "#1f2a37" },
+        stroke: colors.axis,
+        grid: { stroke: colors.grid, width: 1 },
+        ticks: { stroke: colors.grid },
         values: (_u, vals) => vals.map(formatTickTime),
       },
       {
-        stroke: "#8b98a5",
-        grid: { stroke: "#1f2a37", width: 1 },
-        ticks: { stroke: "#1f2a37" },
+        stroke: colors.axis,
+        grid: { stroke: colors.grid, width: 1 },
+        ticks: { stroke: colors.grid },
         values: yAxisFormatter
           ? (_u, vals) => vals.map((v) => (v == null ? "" : yAxisFormatter(v)))
           : undefined,
@@ -142,7 +164,7 @@ export class ChartHandle {
  * @returns {ChartHandle}
  */
 export function createTimeSeriesChart(container, opts) {
-  const { title, series, timestamps, values, valueFormatter, yAxisFormatter } = opts;
+  const { title, series, timestamps, values, valueFormatter, yAxisFormatter, syncKey } = opts;
 
   const uplotSeries = [
     { label: "Time" },
@@ -150,6 +172,10 @@ export function createTimeSeriesChart(container, opts) {
       label: s.label,
       stroke: s.color,
       width: 2,
+      // A translucent fill under the line ("area chart" per
+      // SPEC-v0.4 §4) using the series' own color at low alpha so
+      // multiple overlapping series (e.g. Rx/Tx) stay readable.
+      fill: `${s.color}26`,
       points: { show: false },
       value: valueFormatter
         ? (_u, v, seriesIdx) => (v == null ? "–" : valueFormatter(v, seriesIdx))
@@ -158,7 +184,7 @@ export function createTimeSeriesChart(container, opts) {
   ];
 
   const options = {
-    ...baseOpts(container.clientWidth || 320, 220, title, yAxisFormatter),
+    ...baseOpts(container.clientWidth || 320, 220, title, yAxisFormatter, syncKey),
     series: uplotSeries,
   };
 
