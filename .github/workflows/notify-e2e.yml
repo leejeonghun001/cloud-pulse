@@ -93,14 +93,22 @@ jobs:
           {
             echo "## Notify E2E results"
             echo ""
+            echo "| Platform | Status | Attachment verified | Cleaned up | Diagnosis |"
+            echo "|---|---|---|---|---|"
+            # NotifyVerifyResult is secret-free by construction (see
+            # internal/models/notifyverify.go), so this table (and the
+            # raw JSON dumped below it) can render every field
+            # directly with no extra masking pass needed.
+            python3 "${GITHUB_WORKSPACE}/scripts/notify_e2e_summary_table.py" \
+              "${RUNNER_TEMP}/notify-verify-report.json"
+            echo ""
+            echo "<details><summary>Raw JSON report</summary>"
+            echo ""
             echo '```json'
-            # models.NotifyVerifyResult is secret-free by construction
-            # (see internal/models/notifyverify.go) -- no masking pass
-            # is needed here beyond what the CLI itself already
-            # guarantees, but cat is still scoped to the one report file
-            # this job produced, never broader output.
             cat "${RUNNER_TEMP}/notify-verify-report.json" 2>/dev/null || echo '{"note":"no report was produced"}'
             echo '```'
+            echo ""
+            echo "</details>"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Delete credentials file

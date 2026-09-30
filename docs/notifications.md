@@ -66,6 +66,57 @@ full code table (DNS/network/TLS failures, and per-platform codes like
 `discord_webhook_not_found`, `telegram_chat_not_found`,
 `whatsapp_window_closed`, etc.).
 
+## Health report
+
+Settings → Notifications → **Health** tab (SPEC-v0.8 §3-2) shows each
+channel's current health state — `healthy`, `degraded`, `failing`, or
+`unknown` (not enough data yet) — computed by
+`models.ComputeChannelHealthState` from two independent signals:
+
+1. **Delivery statistics**: 7-day and 30-day success rate, last
+   success/failure time, last failure's diagnosis code, and average/
+   max delivery latency, all derived from the same `alert_events`
+   delivery records `GET /api/v1/alerts/events` already returns — no
+   separate delivery log exists. A channel with 90%+ 7-day success is
+   `healthy`; 50-90% is `degraded`; below 50% is `failing`.
+2. **Weekly synthetic test** (opt-in per channel, default off): a
+   toggle plus a weekday and time-of-day in the channel's edit dialog.
+   The stored schedule is always UTC — the dialog converts to/from your
+   browser's local time for display only, so the same schedule reads
+   correctly regardless of which admin's browser is looking at it, and
+   is entirely unaffected by daylight-saving transitions on either
+   end. **A missed run (hub was offline at the scheduled time) runs
+   once at the next startup that falls within about an hour of the
+   missed slot — never multiple catch-up runs for multiple missed
+   weeks.**
+
+   The synthetic test sends a real message through the exact same
+   `internal/notify` send path as `cloud-pulse-hub notify verify` (see
+   below) — **this means enabling it will send a real message to your
+   Discord/Telegram/WhatsApp destination once a week**, not a simulated
+   check. Discord and Telegram messages are read back to confirm
+   delivery and then deleted automatically; WhatsApp and generic
+   webhooks have no such API and are reported `accepted` once the
+   platform's response indicates success, with no cleanup step (nothing
+   is left behind to delete for those two). The result — outcome
+   (`accepted`/`verified`/`failed`), a diagnosis code on failure, and a
+   short redacted detail string — is stored and shown as a 12-week strip
+   of colored/labeled results (with a text alternative for screen
+   readers) on the channel's card, alongside a **Run now** button that
+   triggers the same test immediately via `POST
+   /api/v1/alerts/channels/{id}/synthetic-test`.
+
+A synthetic-test failure, or 7-day delivery success dropping below the
+failing threshold, also triggers the [channel-failure fallback
+notification](alerting.md#channel-failure-fallback-notification) — a
+"channel X is failing" message sent through a different healthy
+channel (or a dashboard banner if none exists).
+
+**Nothing here is stored or ever returned via the API that could leak
+a channel secret** — synthetic-test detail strings pass through the
+same `internal/notify.DiagnoseError` redaction every other diagnosis in
+this document already relies on.
+
 ## Real-account end-to-end verification
 
 Automated tests use `httptest` fakes for every platform — nothing in
@@ -130,10 +181,15 @@ WhatsApp accounts, using repository secrets:
 - The credentials file is written to `RUNNER_TEMP` with `umask 077`
   (mode `0600`) and deleted in an `if: always()` step regardless of job
   outcome.
-- The job summary shows the JSON report — safe to display since
+- The job summary shows a per-platform result table (status, whether
+  read-back/cleanup was attempted, and diagnosis code on failure) built
+  from the same secret-free `NotifyVerifyReport` JSON, followed by the
+  raw JSON for anyone who wants it — safe to display since
   `NotifyVerifyResult` is secret-free by construction (no raw
   token/webhook-URL field exists on that type at all, not just
-  redacted).
+  redacted). The README's CI badge row links a matching
+  `notify-e2e.yml` status badge so this workflow's latest run is
+  visible without opening the Actions tab.
 - **Do not paste real tokens into chat, issues, or commits.** Add them
   directly as repository secrets through GitHub's own UI.
 

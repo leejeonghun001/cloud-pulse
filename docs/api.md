@@ -40,6 +40,9 @@ require the same; there is no "admin_disabled" mode.
 | `DELETE /api/v1/alerts/channels/{id}` | Delete a notify channel | Admin |
 | `POST /api/v1/alerts/channels/{id}/test` | Send a sample notification to a saved channel | Admin |
 | `POST /api/v1/alerts/channels/test` | Send a sample notification using an unsaved (draft) channel config | Admin |
+| `GET /api/v1/alerts/channels/health` | Channel health report: per-channel state, delivery stats, synthetic-test schedule/history, dashboard-banner flag | Admin |
+| `POST /api/v1/alerts/channels/{id}/synthetic-test` | Run a channel's synthetic connectivity test immediately | Admin |
+| `PUT /api/v1/alerts/channels/{id}/health-settings` | Set a channel's weekly synthetic-test schedule (UTC weekday/minute) | Admin |
 | `GET /api/v1/alerts/rules` | List alert rules | Admin |
 | `POST /api/v1/alerts/rules` | Create an alert rule | Admin |
 | `PUT /api/v1/alerts/rules/{id}` | Update an alert rule | Admin |

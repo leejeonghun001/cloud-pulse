@@ -6,6 +6,7 @@ dependencies, an embedded SQLite database, and a dashboard baked into
 the binary.
 
 [![CI](https://github.com/leejeonghun001/cloud-pulse/actions/workflows/ci.yml/badge.svg)](https://github.com/leejeonghun001/cloud-pulse/actions/workflows/ci.yml)
+[![Notify E2E](https://github.com/leejeonghun001/cloud-pulse/actions/workflows/notify-e2e.yml/badge.svg)](https://github.com/leejeonghun001/cloud-pulse/actions/workflows/notify-e2e.yml)
 [![Release](https://img.shields.io/github/v/release/leejeonghun001/cloud-pulse)](https://github.com/leejeonghun001/cloud-pulse/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8)](go.mod)
