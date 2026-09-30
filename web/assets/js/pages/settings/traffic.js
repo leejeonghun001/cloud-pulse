@@ -5,6 +5,7 @@ import { el, clearChildren } from "../../ui/components.js";
 import { formatBytes } from "../../core/format.js";
 import { parseLimitGiB, formatLimitGiB } from "../../core/limits.js";
 import { getSettings, setHostLimits } from "../../core/api.js";
+import { t } from "../../core/i18n.js";
 
 /**
  * mountTrafficSection renders the Traffic limits section into
@@ -50,16 +51,16 @@ function cssEscape(s) {
 
 function trafficLimitsCard({ view, signal, announce, focusHostID }) {
   const card = el("div", { class: "cp-card", attrs: { id: "cp-settings-limits" } });
-  card.append(el("h2", { class: "cp-card-title", text: "Traffic limits" }));
+  card.append(el("h2", { class: "cp-card-title", text: t("traffic.title") }));
   card.append(
     el("p", {
       class: "cp-muted-small",
-      text: "Values are in GiB (2^30 bytes), matching the agent's CP_EGRESS_LIMIT_GB units. Leave blank to use the agent default; enter 0 for explicitly unlimited.",
+      text: t("traffic.description"),
     }),
   );
 
   if (view.hosts.length === 0) {
-    card.append(el("p", { class: "cp-muted", text: "No hosts reporting yet." }));
+    card.append(el("p", { class: "cp-muted", text: t("traffic.no_hosts_reporting_yet") }));
     return card;
   }
 
@@ -68,8 +69,8 @@ function trafficLimitsCard({ view, signal, announce, focusHostID }) {
   const thead = el("thead");
   thead.append(
     el("tr", {
-      children: ["Host", "Provider", "Agent default", "Outbound override (GiB)", "Inbound override (GiB)", "Effective", ""].map(
-        (t) => el("th", { text: t }),
+      children: [t("traffic.col_host"), t("traffic.col_provider"), t("traffic.col_agent_default"), t("traffic.col_outbound_override"), t("traffic.col_inbound_override"), t("traffic.col_effective"), ""].map(
+        (tx) => el("th", { text: tx }),
       ),
     }),
   );
@@ -94,7 +95,7 @@ function hostLimitsRow({ host, signal, announce, focusHostID }) {
 
   tr.append(el("td", { text: host.hostname }));
   tr.append(el("td", { text: host.provider }));
-  tr.append(el("td", { text: host.agent_egress_limit_bytes === 0 ? "Unlimited" : formatBytes(host.agent_egress_limit_bytes) }));
+  tr.append(el("td", { text: host.agent_egress_limit_bytes === 0 ? t("traffic.unlimited") : formatBytes(host.agent_egress_limit_bytes) }));
 
   const egressInput = /** @type {HTMLInputElement} */ (
     el("input", {
@@ -103,7 +104,7 @@ function hostLimitsRow({ host, signal, announce, focusHostID }) {
         type: "text",
         inputmode: "decimal",
         value: formatLimitGiB(host.egress_limit_bytes),
-        "aria-label": `${host.hostname} outbound limit override in GiB`,
+        "aria-label": t("traffic.outbound_override_aria_label", { hostname: host.hostname }),
       },
     })
   );
@@ -116,42 +117,45 @@ function hostLimitsRow({ host, signal, announce, focusHostID }) {
         type: "text",
         inputmode: "decimal",
         value: formatLimitGiB(host.ingress_limit_bytes),
-        "aria-label": `${host.hostname} inbound limit override in GiB`,
+        "aria-label": t("traffic.inbound_override_aria_label", { hostname: host.hostname }),
       },
     })
   );
   tr.append(el("td", { children: [ingressInput] }));
 
   const effective = el("td", {
-    text: `↑ ${host.effective_egress_limit_bytes === 0 ? "unlimited" : formatBytes(host.effective_egress_limit_bytes)} · ↓ ${host.effective_ingress_limit_bytes === 0 ? "unlimited" : formatBytes(host.effective_ingress_limit_bytes)}`,
+    text: t("traffic.effective_value", {
+      outbound: host.effective_egress_limit_bytes === 0 ? t("traffic.unlimited_lower") : formatBytes(host.effective_egress_limit_bytes),
+      inbound: host.effective_ingress_limit_bytes === 0 ? t("traffic.unlimited_lower") : formatBytes(host.effective_ingress_limit_bytes),
+    }),
   });
   tr.append(effective);
 
   const actionsCell = el("td", { class: "cp-limits-actions" });
   const status = el("span", { class: "cp-muted-small", attrs: { role: "status", "aria-live": "polite" } });
-  const saveBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: "Save" });
-  const resetBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: "Reset" });
+  const saveBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: t("common.save") });
+  const resetBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: t("traffic.reset") });
 
   resetBtn.addEventListener("click", () => {
     egressInput.value = formatLimitGiB(host.egress_limit_bytes);
     ingressInput.value = formatLimitGiB(host.ingress_limit_bytes);
-    status.textContent = "Reverted to last saved values.";
+    status.textContent = t("traffic.reverted_to_saved");
   });
 
   saveBtn.addEventListener("click", async () => {
     const parsedEgress = parseLimitGiB(egressInput.value);
     const parsedIngress = parseLimitGiB(ingressInput.value);
     if (!parsedEgress.ok) {
-      status.textContent = `Outbound: ${parsedEgress.error}`;
+      status.textContent = t("traffic.outbound_error", { error: parsedEgress.error });
       return;
     }
     if (!parsedIngress.ok) {
-      status.textContent = `Inbound: ${parsedIngress.error}`;
+      status.textContent = t("traffic.inbound_error", { error: parsedIngress.error });
       return;
     }
 
     saveBtn.disabled = true;
-    status.textContent = "Saving…";
+    status.textContent = t("traffic.saving");
     try {
       const updated = await setHostLimits(
         host.host_id,
@@ -160,11 +164,11 @@ function hostLimitsRow({ host, signal, announce, focusHostID }) {
       );
       host.egress_limit_bytes = updated.egress_limit_bytes;
       host.ingress_limit_bytes = updated.ingress_limit_bytes;
-      status.textContent = "Saved.";
-      announce(`Saved traffic limits for ${host.hostname}.`);
+      status.textContent = t("traffic.saved");
+      announce(t("traffic.saved_for_host", { hostname: host.hostname }));
     } catch (err) {
       if (err?.name === "AbortError") return;
-      status.textContent = `Save failed: ${err.message}`;
+      status.textContent = t("traffic.save_failed", { error: err.message });
     } finally {
       saveBtn.disabled = false;
     }

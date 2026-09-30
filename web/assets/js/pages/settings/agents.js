@@ -4,8 +4,9 @@
 import { el, clearChildren } from "../../ui/components.js";
 import { agentVersionText, hostUpdateBadgeText } from "../../core/updates.js";
 import { formatRelativeTimeFromUnixSeconds } from "../../core/format.js";
-import { getAgentToken, getHosts } from "../../core/api.js";
+import { getAgentToken, getHosts, localizeApiError } from "../../core/api.js";
 import { copyToClipboard } from "./index.js";
+import { t } from "../../core/i18n.js";
 
 /**
  * mountAgentsSection renders the Agents section into container.
@@ -39,11 +40,11 @@ export function mountAgentsSection(container, { announce }) {
 
 function agentEnrollmentCard({ signal, announce }) {
   const card = el("div", { class: "cp-card" });
-  card.append(el("h2", { class: "cp-card-title", text: "Agent enrollment" }));
+  card.append(el("h2", { class: "cp-card-title", text: t("agents.enrollment_title") }));
   card.append(
     el("p", {
       class: "cp-muted-small",
-      text: "Reveal the agent token to enroll a new host, or copy the ready-to-run install command below.",
+      text: t("agents.enrollment_description"),
     }),
   );
 
@@ -51,19 +52,19 @@ function agentEnrollmentCard({ signal, announce }) {
   const tokenInput = /** @type {HTMLInputElement} */ (
     el("input", {
       class: "cp-input cp-token-reveal-input",
-      attrs: { type: "text", readonly: "", value: "", "aria-label": "Agent token", hidden: "" },
+      attrs: { type: "text", readonly: "", value: "", "aria-label": t("agents.agent_token"), hidden: "" },
     })
   );
-  const revealBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: "Reveal" });
+  const revealBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: t("agents.reveal") });
   const copyTokenBtn = el("button", {
     class: "cp-btn cp-btn-secondary",
     attrs: { type: "button", hidden: "" },
-    text: "Copy",
+    text: t("common.copy"),
   });
   const hideBtn = el("button", {
     class: "cp-btn cp-btn-secondary",
     attrs: { type: "button", hidden: "" },
-    text: "Hide again",
+    text: t("agents.hide_again"),
   });
   const tokenStatus = el("span", { class: "cp-muted-small", attrs: { role: "status", "aria-live": "polite" } });
 
@@ -74,12 +75,12 @@ function agentEnrollmentCard({ signal, announce }) {
   const copyInstallBtn = el("button", {
     class: "cp-btn cp-btn-secondary",
     attrs: { type: "button", hidden: "" },
-    text: "Copy install command",
+    text: t("agents.copy_install_command"),
   });
   const installFallback = /** @type {HTMLTextAreaElement} */ (
     el("textarea", {
       class: "cp-input cp-install-fallback",
-      attrs: { readonly: "", rows: "2", hidden: "", "aria-label": "Install command" },
+      attrs: { readonly: "", rows: "2", hidden: "", "aria-label": t("agents.install_command") },
     })
   );
 
@@ -99,11 +100,11 @@ function agentEnrollmentCard({ signal, announce }) {
       installBlock.removeAttribute("hidden");
       copyInstallBtn.removeAttribute("hidden");
 
-      tokenStatus.textContent = "Token revealed.";
-      announce("Agent token revealed.");
+      tokenStatus.textContent = t("agents.token_revealed");
+      announce(t("agents.agent_token_revealed"));
     } catch (err) {
       if (err?.name === "AbortError") return;
-      tokenStatus.textContent = `Failed to reveal token: ${err.message}`;
+      tokenStatus.textContent = t("agents.failed_to_reveal_token", { reason: localizeApiError(err) });
     } finally {
       revealBtn.disabled = false;
     }
@@ -121,18 +122,18 @@ function agentEnrollmentCard({ signal, announce }) {
     installBlock.setAttribute("hidden", "");
     copyInstallBtn.setAttribute("hidden", "");
     installFallback.setAttribute("hidden", "");
-    tokenStatus.textContent = "Token hidden.";
+    tokenStatus.textContent = t("agents.token_hidden");
   });
 
   copyTokenBtn.addEventListener("click", async () => {
     const result = await copyToClipboard(tokenInput.value, tokenInput);
-    tokenStatus.textContent = result === "copied" ? "Token copied to clipboard." : "Press Ctrl+C to copy.";
+    tokenStatus.textContent = result === "copied" ? t("agents.token_copied") : t("agents.press_ctrl_c");
   });
 
   copyInstallBtn.addEventListener("click", async () => {
     const result = await copyToClipboard(installCommand, installFallback);
     tokenStatus.textContent =
-      result === "copied" ? "Install command copied to clipboard." : "Press Ctrl+C to copy.";
+      result === "copied" ? t("agents.install_command_copied") : t("agents.press_ctrl_c");
   });
 
   tokenRow.append(revealBtn, tokenInput, copyTokenBtn, hideBtn, tokenStatus);
@@ -150,7 +151,7 @@ function agentEnrollmentCard({ signal, announce }) {
 
 async function renderAgentListCard(card, { signal }) {
   clearChildren(card);
-  card.append(el("h2", { class: "cp-card-title", text: "Agents" }));
+  card.append(el("h2", { class: "cp-card-title", text: t("agents.agents_title") }));
 
   let hosts;
   try {
@@ -158,12 +159,12 @@ async function renderAgentListCard(card, { signal }) {
     hosts = data.hosts || [];
   } catch (err) {
     if (err?.name === "AbortError") return;
-    card.append(el("p", { class: "cp-error-text", text: `Failed to load agents: ${err.message}` }));
+    card.append(el("p", { class: "cp-error-text", text: t("agents.failed_to_load_agents", { reason: localizeApiError(err) }) }));
     return;
   }
 
   if (hosts.length === 0) {
-    card.append(el("p", { class: "cp-muted", text: "No agents reporting yet." }));
+    card.append(el("p", { class: "cp-muted", text: t("agents.no_agents_reporting_yet") }));
     return;
   }
 
@@ -171,18 +172,18 @@ async function renderAgentListCard(card, { signal }) {
   const table = el("table", { class: "cp-table" });
   const thead = el("thead");
   thead.append(
-    el("tr", { children: ["Host", "Provider", "Agent version", "Last seen", "Update"].map((t) => el("th", { text: t })) }),
+    el("tr", { children: [t("agents.col_host"), t("agents.col_provider"), t("agents.col_agent_version"), t("agents.col_last_seen"), t("agents.col_update")].map((tx) => el("th", { text: tx })) }),
   );
   table.append(thead);
   const tbody = el("tbody");
   for (const h of hosts) {
     const tr = el("tr");
     tr.append(el("td", { text: h.host.hostname }));
-    tr.append(el("td", { text: h.host.provider || "other" }));
+    tr.append(el("td", { text: h.host.provider || t("agents.provider_other") }));
     tr.append(el("td", { text: agentVersionText(h.host.agent_version) }));
     tr.append(
       el("td", {
-        text: h.last_seen ? formatRelativeTimeFromUnixSeconds(h.last_seen) : "never",
+        text: h.last_seen ? formatRelativeTimeFromUnixSeconds(h.last_seen) : t("settings.never"),
       }),
     );
 
@@ -195,7 +196,7 @@ async function renderAgentListCard(card, { signal }) {
         updateCell.append(el("code", { class: "cp-code-inline", text: h.update.command }));
       }
     } else {
-      updateCell.append(el("span", { class: "cp-muted-small", text: "up to date" }));
+      updateCell.append(el("span", { class: "cp-muted-small", text: t("agents.up_to_date") }));
     }
     tr.append(updateCell);
     tbody.append(tr);
