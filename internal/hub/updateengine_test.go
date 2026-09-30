@@ -30,6 +30,110 @@ func capableOptedIn() models.RemoteUpdateCapability {
 	return models.RemoteUpdateCapability{Supported: true, OptedIn: true}
 }
 
+// TestRemoteUpdateCapable_PerPlatformVersionGate covers SPEC-v0.7 §6's
+// widened gate: Linux >= v0.6.0, macOS/Windows >= v0.7.0. Platform is
+// set explicitly on RemoteUpdateCapability (the v0.7.0+ agent-reported
+// field); OS is set to something deliberately different in some cases
+// to prove Platform (not the legacy OS field) drives the decision once
+// it's populated.
+func TestRemoteUpdateCapable_PerPlatformVersionGate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		platform     string
+		os           string
+		agentVersion string
+		supported    bool
+		want         bool
+	}{
+		{"linux v0.6.0 capable", "linux", "linux", "v0.6.0", true, true},
+		{"linux v0.5.9 too old", "linux", "linux", "v0.5.9", true, false},
+		{"darwin v0.7.0 capable", "darwin", "darwin", "v0.7.0", true, true},
+		{"darwin v0.6.0 too old (pre-v0.7.0 macOS never existed, but gate still enforces)", "darwin", "darwin", "v0.6.0", true, false},
+		{"windows v0.7.0 capable", "windows", "windows", "v0.7.0", true, true},
+		{"windows v0.6.9 too old", "windows", "windows", "v0.6.9", true, false},
+		{"not supported at all", "linux", "linux", "v0.6.0", false, false},
+		{"unknown platform refused", "plan9", "plan9", "v9.9.9", true, false},
+		{"empty platform falls back to OS=linux", "", "linux", "v0.6.0", true, true},
+		{"empty platform falls back to OS=darwin", "", "darwin", "v0.7.0", true, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			host := models.HostInfo{
+				OS:           tc.os,
+				AgentVersion: tc.agentVersion,
+				RemoteUpdate: models.RemoteUpdateCapability{Supported: tc.supported, Platform: tc.platform},
+			}
+			if got := remoteUpdateCapable(host); got != tc.want {
+				t.Errorf("remoteUpdateCapable(platform=%q os=%q version=%q supported=%v) = %v, want %v",
+					tc.platform, tc.os, tc.agentVersion, tc.supported, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCreateUpdateBatch_CopiesPlatformFromHostInfo guards SPEC-v0.7
+// §1's "hub이 HostInfo.RemoteUpdate.Platform을 UpdateJob.Platform으로
+// 복사" requirement.
+func TestCreateUpdateBatch_CopiesPlatformFromHostInfo(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	s := newTestServer(t, testOptions(), store)
+	ctx := context.Background()
+
+	if err := store.UpsertHost(ctx, models.HostInfo{
+		ID:           "mac1",
+		Hostname:     "mac1",
+		OS:           "darwin",
+		AgentVersion: "v0.7.0",
+		RemoteUpdate: models.RemoteUpdateCapability{Supported: true, OptedIn: true, Platform: "darwin"},
+	}, time.Now().Unix()); err != nil {
+		t.Fatalf("upsert host: %v", err)
+	}
+
+	batch, err := s.createUpdateBatch(ctx, models.UpdateBatchCreate{HostIDs: []string{"mac1"}, Target: "v0.7.1"})
+	if err != nil {
+		t.Fatalf("createUpdateBatch: %v", err)
+	}
+	if len(batch.Jobs) != 1 {
+		t.Fatalf("len(batch.Jobs) = %d, want 1", len(batch.Jobs))
+	}
+	if got := batch.Jobs[0].Platform; got != "darwin" {
+		t.Errorf("job.Platform = %q, want %q", got, "darwin")
+	}
+}
+
+// TestCreateUpdateBatch_PlatformFallsBackToHostOS covers a host whose
+// RemoteUpdate.Platform is empty (a pre-v0.7.0 agent report) — the
+// job's Platform should fall back to HostInfo.OS rather than being
+// left empty.
+func TestCreateUpdateBatch_PlatformFallsBackToHostOS(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	s := newTestServer(t, testOptions(), store)
+	ctx := context.Background()
+
+	if err := store.UpsertHost(ctx, models.HostInfo{
+		ID:           "old1",
+		Hostname:     "old1",
+		OS:           "linux",
+		AgentVersion: "v0.6.0",
+		RemoteUpdate: models.RemoteUpdateCapability{Supported: true, OptedIn: true}, // Platform unset
+	}, time.Now().Unix()); err != nil {
+		t.Fatalf("upsert host: %v", err)
+	}
+
+	batch, err := s.createUpdateBatch(ctx, models.UpdateBatchCreate{HostIDs: []string{"old1"}, Target: "v0.6.1"})
+	if err != nil {
+		t.Fatalf("createUpdateBatch: %v", err)
+	}
+	if got := batch.Jobs[0].Platform; got != "linux" {
+		t.Errorf("job.Platform = %q, want %q (fallback to HostInfo.OS)", got, "linux")
+	}
+}
+
 func TestCreateUpdateBatch_CreatesQueuedJobsPerHost(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()

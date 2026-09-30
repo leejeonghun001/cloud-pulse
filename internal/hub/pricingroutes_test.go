@@ -446,3 +446,33 @@ func seedHostWithEgress(t *testing.T, store Store, id string, provider models.Pr
 		fs.mu.Unlock()
 	}
 }
+
+// TestHandleUpdatePricingPlan_NoOpSaveWithNewTimestampSkipsAudit pins the
+// previously flaky case deterministically: the seeded plan's UpdatedAt is
+// backdated, so the store's refreshed timestamp always differs, yet an
+// unchanged save must still not create an audit entry.
+func TestHandleUpdatePricingPlan_NoOpSaveWithNewTimestampSkipsAudit(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	id := seedBuiltinPlan(t, store, "Custom", "other", 10, false)
+	store.mu.Lock()
+	p := store.pricingPlans[id]
+	p.UpdatedAt = 1 // far in the past
+	store.pricingPlans[id] = p
+	store.mu.Unlock()
+	srv := newTestServer(t, testOptions(), store)
+
+	body := []byte(`{"name":"Custom","provider":"other","egress_free_gb":10,
+		"egress_tiers":[{"up_to_gb":0,"price_per_gb":0}]}`)
+	rec := doRequest(t, srv.Handler(), "PUT", "/api/v1/billing/plans/"+strconv.FormatInt(id, 10), "127.0.0.1:1", testUIToken, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	entries, err := store.ListAuditEntries(t.Context(), "", 0, 10)
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("audit entries = %+v, want none for an unchanged save", entries)
+	}
+}

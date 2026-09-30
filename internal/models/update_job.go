@@ -50,6 +50,12 @@ type UpdateJob struct {
 	// Attempt counts retries: 1 for the original job, incremented for
 	// each job created by a retry of a failed job.
 	Attempt int `json:"attempt"`
+	// Platform is the target host's OS family at job-creation time
+	// ("linux", "darwin", "windows"), copied from
+	// HostInfo.RemoteUpdate.Platform (SPEC-v0.7 §6's migration 0006
+	// adds this column). Empty for a job created against a pre-v0.7.0
+	// hub build or an agent that never reported Platform.
+	Platform string `json:"platform,omitempty"`
 }
 
 // UpdateBatch groups the UpdateJobs created by one
@@ -105,8 +111,10 @@ type AgentUpdateStatus struct {
 // RemoteUpdateCapability describes whether/why a host can receive a
 // remote update job, shown on the Updates page per agent.
 type RemoteUpdateCapability struct {
-	// Supported is true only for Linux + systemd agents at
-	// version.SelfUpdateSince or later.
+	// Supported is true only for an agent/OS combination the hub's
+	// remote-update mechanism can drive: Linux+systemd at
+	// version.SelfUpdateSince or later, or (SPEC-v0.7 §1/§6) macOS
+	// (launchd) or Windows (service) at v0.7.0 or later.
 	Supported bool `json:"supported"`
 	// OptedIn reflects the agent's own CP_REMOTE_UPDATE=on setting, as
 	// last reported.
@@ -115,4 +123,10 @@ type RemoteUpdateCapability struct {
 	// UpdateJobReason vocabulary ("unsupported" or "not_enabled"),
 	// empty when both are true.
 	Reason UpdateJobReason `json:"reason,omitempty"`
+	// Platform is the agent's reported OS family: "linux", "darwin",
+	// "windows", or "" for an older agent build that doesn't report it
+	// yet (SPEC-v0.7 §1/§6's per-OS version gate: Linux >= v0.6.0,
+	// macOS/Windows >= v0.7.0). Populated from runtime.GOOS on the
+	// agent side, never inferred by the hub.
+	Platform string `json:"platform,omitempty"`
 }

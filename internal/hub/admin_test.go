@@ -259,6 +259,34 @@ func TestGetAgentToken_InstallCommandUsesRequestHost(t *testing.T) {
 	if !strings.Contains(got.InstallCommand, opts.AgentToken) {
 		t.Errorf("InstallCommand = %q, want it to contain the token", got.InstallCommand)
 	}
+
+	// SPEC-v0.7 §1: the "Add agent" dialog's OS tabs — Linux, macOS,
+	// Windows, in that order, each containing the hub URL and token.
+	if len(got.InstallCommands) != 3 {
+		t.Fatalf("InstallCommands len = %d, want 3", len(got.InstallCommands))
+	}
+	wantOSes := []models.AgentOS{models.AgentOSLinux, models.AgentOSDarwin, models.AgentOSWindows}
+	for i, want := range wantOSes {
+		if got.InstallCommands[i].OS != want {
+			t.Errorf("InstallCommands[%d].OS = %q, want %q", i, got.InstallCommands[i].OS, want)
+		}
+		if !strings.Contains(got.InstallCommands[i].Command, wantURL) {
+			t.Errorf("InstallCommands[%d].Command = %q, want it to contain %q", i, got.InstallCommands[i].Command, wantURL)
+		}
+		if !strings.Contains(got.InstallCommands[i].Command, opts.AgentToken) {
+			t.Errorf("InstallCommands[%d].Command = %q, want it to contain the token", i, got.InstallCommands[i].Command)
+		}
+	}
+	// The Linux entry must always match the legacy single-command
+	// field exactly, per InstallCommand's own doc comment.
+	if got.InstallCommands[0].Command != got.InstallCommand {
+		t.Errorf("InstallCommands[0].Command = %q, want it to equal InstallCommand %q", got.InstallCommands[0].Command, got.InstallCommand)
+	}
+	// The Windows entry must never use sudo (elevation is via an
+	// Administrator PowerShell prompt instead).
+	if strings.Contains(got.InstallCommands[2].Command, "sudo") {
+		t.Errorf("InstallCommands[2] (windows) Command = %q, must not contain sudo", got.InstallCommands[2].Command)
+	}
 }
 
 func TestGetAgentToken_MaliciousHostHeaderUsesPlaceholder(t *testing.T) {

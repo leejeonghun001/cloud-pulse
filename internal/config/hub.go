@@ -116,6 +116,33 @@ type Hub struct {
 	// real deployment should never need it (the CLI installed at the
 	// system-standard locations is what the default covers).
 	BillingPATH string
+
+	// StorageInterval is the initial storage-usage account polling
+	// interval (15m|1h|6h|24h, default 1h — SPEC-v0.7 §3); a hub-side
+	// "storage_interval" setting, once confirmed from the dashboard,
+	// takes precedence over this value at runtime, mirroring
+	// BillingInterval's own override precedence.
+	StorageInterval models.StorageInterval
+
+	// StorageAllowCustomEndpoints relaxes storageusage's fixed
+	// official-host SSRF allowlist (oauth2.googleapis.com,
+	// www.googleapis.com, api.dropboxapi.com, www.dropbox.com) and
+	// drops the https-only requirement, mirroring
+	// CP_NOTIFY_ALLOW_CUSTOM_ENDPOINTS's exact "single, hub-wide,
+	// test-only escape hatch" contract (see DECISIONS_LOG.md D-069) —
+	// unlike that flag, storage-account config has no per-account
+	// endpoint-override field for a legitimate self-hosted-relay use
+	// case, so the only reason to ever set this is a test/smoke
+	// harness pointing the hub at a fake local Google/Dropbox OAuth
+	// server (see scripts/smoke.sh's storage section). Never set this
+	// on a production hub with real OAuth credentials configured.
+	StorageAllowCustomEndpoints bool
+	// StorageFakeBaseURL, only consulted when
+	// StorageAllowCustomEndpoints is also true, is the base URL every
+	// Google/Dropbox OAuth and API request is redirected onto instead
+	// of the real official host (CP_STORAGE_FAKE_BASE_URL). See
+	// storageusage.SSRFOptions.RedirectBase's doc comment.
+	StorageFakeBaseURL string
 }
 
 // DBPath returns the path to the hub's SQLite database file, inside
@@ -236,6 +263,16 @@ func LoadHub(l LookupFunc) (Hub, error) {
 	h.OCITenancyID = getString(l, "CP_OCI_TENANCY_ID", "")
 	h.BillingPATH = getString(l, "CP_BILLING_PATH", "")
 
+	h.StorageInterval, err = loadStorageInterval(l)
+	if err != nil {
+		return Hub{}, err
+	}
+	h.StorageAllowCustomEndpoints, err = getBool(l, "CP_STORAGE_ALLOW_CUSTOM_ENDPOINTS", false)
+	if err != nil {
+		return Hub{}, err
+	}
+	h.StorageFakeBaseURL = getString(l, "CP_STORAGE_FAKE_BASE_URL", "")
+
 	return h, nil
 }
 
@@ -261,6 +298,21 @@ func loadBillingInterval(l LookupFunc) (models.BillingInterval, error) {
 	v := models.BillingInterval(strings.ToLower(raw))
 	if !models.ValidBillingInterval(v) {
 		return "", fmt.Errorf("config: CP_BILLING_INTERVAL must be one of 6h|12h|24h, got %q", raw)
+	}
+	return v, nil
+}
+
+// loadStorageInterval reads and validates CP_STORAGE_INTERVAL (one of
+// models.StorageInterval15m/1h/6h/24h), defaulting to
+// models.StorageIntervalDefault (1h). This is only the initial value;
+// a hub-side "storage_interval" setting confirmed from the dashboard
+// takes precedence at runtime (see SPEC-v0.7 §3, mirroring
+// loadBillingInterval's own precedence contract).
+func loadStorageInterval(l LookupFunc) (models.StorageInterval, error) {
+	raw := getString(l, "CP_STORAGE_INTERVAL", string(models.StorageIntervalDefault))
+	v := models.StorageInterval(strings.ToLower(raw))
+	if !models.ValidStorageInterval(v) {
+		return "", fmt.Errorf("config: CP_STORAGE_INTERVAL must be one of 15m|1h|6h|24h, got %q", raw)
 	}
 	return v, nil
 }

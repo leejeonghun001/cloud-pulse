@@ -3,11 +3,11 @@ package hub
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/leejeonghun001/cloud-pulse/internal/billing"
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
+	"github.com/leejeonghun001/cloud-pulse/internal/poller"
 )
 
 // SettingBillingInterval is the settings table key for the hub-side
@@ -42,21 +42,17 @@ type BillingRuntime struct {
 	// inject a fixed clock.
 	Now func() time.Time
 
-	// lastRefresh guards the 10-minute throttle on POST
-	// /api/v1/billing/refresh — stored as unix nanoseconds so it can be
-	// read/written atomically without a mutex.
-	lastRefresh atomic.Int64
+	// refreshGate implements the 10-minute manual-refresh throttle
+	// (internal/poller.RefreshGate, shared with internal/storageusage's
+	// analogous gate) instead of a runtime-owned atomic.Int64 — see
+	// SPEC-v0.7 §3's poller extraction. Configured lazily on first use
+	// via the refreshGate() accessor below.
+	gate     poller.RefreshGate
+	gateOnce sync.Once
 
 	// runMu serializes collector runs so a manual refresh and the
 	// background scheduler tick never race on the same CLI/HOME dir.
-	runMu sync.Mutex
-}
-
-func (b *BillingRuntime) now() time.Time {
-	if b.Now != nil {
-		return b.Now()
-	}
-	return time.Now()
+	runMu poller.RunMutex
 }
 
 // networkEstimator returns b.NetworkEstimator, defaulting to
@@ -68,12 +64,30 @@ func (b *BillingRuntime) networkEstimator() billing.NetworkEstimator {
 	return billing.ZeroNetworkEstimator
 }
 
+// refreshGate lazily configures and returns a pointer to b's
+// poller.RefreshGate, wiring MinInterval/Now from b's own fields on
+// first use (BillingRuntime is constructed as a struct literal by
+// cmd/hub/billing.go without a constructor function, so the gate can't
+// be pre-configured at literal-construction time).
+func (b *BillingRuntime) refreshGate() *poller.RefreshGate {
+	b.gateOnce.Do(func() {
+		b.gate.MinInterval = billingRefreshMinInterval
+		b.gate.Now = b.Now
+	})
+	return &b.gate
+}
+
 // run executes one collection pass, serialized against concurrent
 // calls via runMu.
 func (b *BillingRuntime) run(ctx context.Context, interval models.BillingInterval) ([]models.CloudCostSnapshot, error) {
-	b.runMu.Lock()
-	defer b.runMu.Unlock()
-	return b.Collector.Run(ctx, interval)
+	var (
+		results []models.CloudCostSnapshot
+		err     error
+	)
+	b.runMu.Guard(func() {
+		results, err = b.Collector.Run(ctx, interval)
+	})
+	return results, err
 }
 
 // resolveBillingInterval returns the effective billing polling interval:
@@ -117,25 +131,17 @@ func billingIntervalDuration(v models.BillingInterval) time.Duration {
 // 스케줄러에 반영") takes effect on the very next scheduling decision
 // without a restart. It blocks until ctx is canceled. A nil
 // Options.Billing makes this a no-op — callers should still be able to
-// invoke it unconditionally.
+// invoke it unconditionally. Implemented on top of internal/poller.Loop
+// (SPEC-v0.7 §3's poller extraction) with no behavior change from the
+// original hand-rolled timer loop.
 func (s *Server) RunBillingLoop(ctx context.Context) {
 	if s.opts.Billing == nil {
 		return
 	}
-
-	s.collectBillingOnce(ctx)
-
-	for {
-		interval := billingIntervalDuration(s.resolveBillingInterval(ctx))
-		timer := time.NewTimer(interval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-			s.collectBillingOnce(ctx)
-		}
-	}
+	poller.Loop(ctx,
+		func() time.Duration { return billingIntervalDuration(s.resolveBillingInterval(ctx)) },
+		s.collectBillingOnce,
+	)
 }
 
 // collectBillingOnce runs the billing collector once, logging (never
@@ -148,7 +154,7 @@ func (s *Server) collectBillingOnce(ctx context.Context) {
 	if _, err := s.opts.Billing.run(ctx, interval); err != nil {
 		s.logger.Error("billing: scheduled collection failed", "error", err)
 	}
-	s.opts.Billing.lastRefresh.Store(s.opts.Billing.now().UnixNano())
+	s.opts.Billing.refreshGate().Record()
 }
 
 // billingRefreshAllowed reports whether a manual POST
@@ -156,13 +162,5 @@ func (s *Server) collectBillingOnce(ctx context.Context) {
 // 10-minute throttle (SPEC-v0.6 §1), and if not, how long the caller
 // must wait.
 func (b *BillingRuntime) refreshAllowed() (allowed bool, retryAfter time.Duration) {
-	last := b.lastRefresh.Load()
-	if last == 0 {
-		return true, 0
-	}
-	elapsed := b.now().Sub(time.Unix(0, last))
-	if elapsed >= billingRefreshMinInterval {
-		return true, 0
-	}
-	return false, billingRefreshMinInterval - elapsed
+	return b.refreshGate().Allow()
 }

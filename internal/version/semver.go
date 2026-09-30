@@ -22,6 +22,21 @@ const SelfUpdateSince = "v0.3.0"
 // binary being installed wouldn't have the subcommand.
 const UnitManagedSince = "v0.3.1"
 
+// LaunchdManagedSince is the first released version whose binaries
+// include the `plist` subcommand (SPEC-v0.7 §1) and whose `update`
+// subcommand's default darwin PostUpdate hook is therefore safe to
+// invoke: a release at or after this tag is guaranteed to have `plist
+// apply` available. Mirrors UnitManagedSince's role for the Linux
+// systemd-unit subcommand.
+const LaunchdManagedSince = "v0.7.0"
+
+// RemoteUpdatePlatformsSince is the first released version whose
+// agents can report RemoteUpdateCapability.Platform and whose hub can
+// therefore apply the per-OS remote-update version gate (SPEC-v0.7
+// §6: "Linux >= v0.6.0, macOS/Windows >= v0.7.0") instead of the
+// v0.6.0-only Linux gate.
+const RemoteUpdatePlatformsSince = "v0.7.0"
+
 // maxVersionNumber caps the numeric value accepted for a major/minor/patch
 // component. It is well below the int32 range (~2.147e9) so that parsing a
 // tag with an absurdly large numeric component can never overflow int on a

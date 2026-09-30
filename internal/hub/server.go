@@ -280,6 +280,44 @@ type Store interface {
 	// models.AuditRetentionDays as of now.
 	PruneAuditEntries(ctx context.Context, now time.Time) error
 
+	// --- Storage usage accounts (SPEC-v0.7 §3) ---
+
+	// ListStorageAccounts returns every configured storage-usage
+	// account, sorted by ID.
+	ListStorageAccounts(ctx context.Context) ([]models.StorageAccount, error)
+	// GetStorageAccount returns one account by id, or
+	// models.ErrNotFound.
+	GetStorageAccount(ctx context.Context, id int64) (models.StorageAccount, error)
+	// CreateStorageAccount inserts a, ignoring a.ID, and returns the
+	// row with its assigned ID and CreatedAt/UpdatedAt populated.
+	CreateStorageAccount(ctx context.Context, a models.StorageAccount) (models.StorageAccount, error)
+	// UpdateStorageAccount replaces the stored account matching a.ID
+	// with a (UpdatedAt refreshed to now), or returns
+	// models.ErrNotFound if no account with that ID exists. Used by
+	// the OAuth completion step to persist a fetched refresh token into
+	// Secret.
+	UpdateStorageAccount(ctx context.Context, a models.StorageAccount) (models.StorageAccount, error)
+	// DeleteStorageAccount removes the account with id (and, via the
+	// schema's ON DELETE CASCADE, its snapshot row). Deleting a
+	// non-existent account is not an error. Callers are responsible for
+	// revoking the account's OAuth token with its provider before
+	// calling this method — the store itself performs no outbound
+	// calls.
+	DeleteStorageAccount(ctx context.Context, id int64) error
+
+	// GetStorageAccountSnapshot returns the persisted snapshot for
+	// accountID, or a zero-value
+	// models.StorageAccountSnapshot{AccountID: accountID, Status:
+	// models.StorageAccountNotConfigured} with a nil error if no row
+	// exists yet.
+	GetStorageAccountSnapshot(ctx context.Context, accountID int64) (models.StorageAccountSnapshot, error)
+	// ListStorageAccountSnapshots returns every persisted account
+	// snapshot.
+	ListStorageAccountSnapshots(ctx context.Context) ([]models.StorageAccountSnapshot, error)
+	// SetStorageAccountSnapshot upserts the snapshot for
+	// snap.AccountID, keyed on account_id (one row per account).
+	SetStorageAccountSnapshot(ctx context.Context, snap models.StorageAccountSnapshot) error
+
 	// Close releases any resources held by the store.
 	Close() error
 }
@@ -426,6 +464,14 @@ type Options struct {
 	// (owned by the "billing" v0.6.0 stage) for BillingRuntime's
 	// definition; cmd/hub/billing.go constructs the real one.
 	Billing *BillingRuntime
+	// Storage wires SPEC-v0.7 §3's storage-usage account collection/API
+	// (Google Drive/Dropbox) and its background poller — nil disables
+	// every mutating storage endpoint (501) and background polling;
+	// GET /api/v1/storage/accounts still works regardless, since
+	// listing has no external-provider dependency. See storagerun.go
+	// (owned by the "storage" v0.7.0 stage); cmd/hub/storage.go
+	// constructs the real one.
+	Storage *StorageRuntime
 }
 
 func (o Options) now() time.Time {
@@ -631,6 +677,7 @@ func (s *Server) routes() *http.ServeMux {
 	s.registerUpdateRoutes(mux)
 	s.registerAuditRoutes(mux)
 	s.registerPricingRoutes(mux)
+	s.registerStorageRoutes(mux)
 
 	// No catch-all is registered for the bare pattern "/api/" or "/":
 	// doing so with no method restriction would make it match every

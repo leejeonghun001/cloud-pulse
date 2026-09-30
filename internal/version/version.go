@@ -25,5 +25,10 @@ var Date = "unknown"
 // String returns a human-readable representation of the build metadata,
 // e.g. "dev (none, unknown)" or "v1.2.3 (abc1234, 2026-09-29T00:00:00Z)".
 func String() string {
-	return Version + " (" + Commit + ", " + Date + ")"
+	return Format(Version, Commit, Date)
+}
+
+// Format returns a human-readable representation of explicit build metadata.
+func Format(version, commit, date string) string {
+	return version + " (" + commit + ", " + date + ")"
 }

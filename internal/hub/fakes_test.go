@@ -48,6 +48,10 @@ type fakeStore struct {
 	auditEntries []models.AuditEntry
 	nextAuditID  int64
 
+	storageAccounts   map[int64]models.StorageAccount
+	nextStorageAcctID int64
+	storageSnapshots  map[int64]models.StorageAccountSnapshot // key: accountID
+
 	rollupErr   error
 	pruneErr    error
 	rollupCalls int
@@ -74,6 +78,8 @@ func newFakeStore() *fakeStore {
 		updateJobs:         make(map[int64]models.UpdateJob),
 		pricingPlans:       make(map[int64]models.PricingPlan),
 		hostPricing:        make(map[string]models.HostPricing),
+		storageAccounts:    make(map[int64]models.StorageAccount),
+		storageSnapshots:   make(map[int64]models.StorageAccountSnapshot),
 	}
 }
 
@@ -932,6 +938,89 @@ func (f *fakeStore) PruneAuditEntries(_ context.Context, now time.Time) error {
 		}
 	}
 	f.auditEntries = kept
+	return nil
+}
+
+// --- Storage usage accounts (SPEC-v0.7 §3) ---
+
+func (f *fakeStore) ListStorageAccounts(_ context.Context) ([]models.StorageAccount, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]models.StorageAccount, 0, len(f.storageAccounts))
+	for _, a := range f.storageAccounts {
+		out = append(out, a)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+func (f *fakeStore) GetStorageAccount(_ context.Context, id int64) (models.StorageAccount, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	a, ok := f.storageAccounts[id]
+	if !ok {
+		return models.StorageAccount{}, models.ErrNotFound
+	}
+	return a, nil
+}
+
+func (f *fakeStore) CreateStorageAccount(_ context.Context, a models.StorageAccount) (models.StorageAccount, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextStorageAcctID++
+	a.ID = f.nextStorageAcctID
+	now := time.Now().Unix()
+	a.CreatedAt, a.UpdatedAt = now, now
+	f.storageAccounts[a.ID] = a
+	return a, nil
+}
+
+func (f *fakeStore) UpdateStorageAccount(_ context.Context, a models.StorageAccount) (models.StorageAccount, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	existing, ok := f.storageAccounts[a.ID]
+	if !ok {
+		return models.StorageAccount{}, models.ErrNotFound
+	}
+	a.CreatedAt = existing.CreatedAt
+	a.UpdatedAt = time.Now().Unix()
+	f.storageAccounts[a.ID] = a
+	return a, nil
+}
+
+func (f *fakeStore) DeleteStorageAccount(_ context.Context, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.storageAccounts, id)
+	delete(f.storageSnapshots, id)
+	return nil
+}
+
+func (f *fakeStore) GetStorageAccountSnapshot(_ context.Context, accountID int64) (models.StorageAccountSnapshot, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	snap, ok := f.storageSnapshots[accountID]
+	if !ok {
+		return models.StorageAccountSnapshot{AccountID: accountID, Status: models.StorageAccountNotConfigured}, nil
+	}
+	return snap, nil
+}
+
+func (f *fakeStore) ListStorageAccountSnapshots(_ context.Context) ([]models.StorageAccountSnapshot, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]models.StorageAccountSnapshot, 0, len(f.storageSnapshots))
+	for _, snap := range f.storageSnapshots {
+		out = append(out, snap)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].AccountID < out[j].AccountID })
+	return out, nil
+}
+
+func (f *fakeStore) SetStorageAccountSnapshot(_ context.Context, snap models.StorageAccountSnapshot) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.storageSnapshots[snap.AccountID] = snap
 	return nil
 }
 

@@ -27,8 +27,17 @@ const maxLimitBytes = uint64(1) << 62
 const maxWebhookURLLen = 2048
 
 // installCommandTemplate is the install-agent.sh one-liner returned by
-// the agent-token reveal endpoint. hubURL and token are substituted.
+// the agent-token reveal endpoint for Linux/macOS (the script
+// auto-detects the platform via detect_platform — see
+// scripts/install-agent.sh). hubURL and token are substituted.
 const installCommandTemplate = "curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scripts/install-agent.sh | sudo bash -s -- --hub-url %s --token %s"
+
+// windowsInstallCommandTemplate is the install-agent.ps1 one-liner
+// (SPEC-v0.7 §1), run from an elevated PowerShell prompt. Unlike the
+// Linux/macOS script this never uses sudo — Windows service
+// installation requires the shell itself to already be elevated
+// (Run as Administrator). hubURL and token are substituted.
+const windowsInstallCommandTemplate = "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scripts/install-agent.ps1))) -Install -HubUrl %s -Token %s -Yes"
 
 // validHostHeader matches an http.Request.Host value safe to embed in a
 // generated shell command: hostnames/IPv6 literals plus an optional
@@ -131,9 +140,53 @@ func (s *Server) handleGetAgentToken(w http.ResponseWriter, r *http.Request) {
 	s.logger.Info("agent token revealed", "remote", r.RemoteAddr)
 
 	writeJSON(w, http.StatusOK, models.AgentTokenView{
-		AgentToken:     s.opts.AgentToken,
-		InstallCommand: installCommand(r, s.opts.AgentToken),
+		AgentToken:      s.opts.AgentToken,
+		InstallCommand:  installCommand(r, s.opts.AgentToken),
+		InstallCommands: installCommands(r, s.opts.AgentToken),
 	})
+}
+
+// installCommands builds the per-OS one-liners for the dashboard's
+// "Add agent" dialog OS tabs (SPEC-v0.7 §1): Linux and macOS both run
+// install-agent.sh (which auto-detects the platform via
+// detect_platform), Windows runs install-agent.ps1 from an elevated
+// PowerShell prompt.
+func installCommands(r *http.Request, token string) []models.AgentInstallCommand {
+	hubURL := hubURLFromRequest(r)
+	return []models.AgentInstallCommand{
+		{
+			OS:      models.AgentOSLinux,
+			Label:   "Linux (systemd)",
+			Command: fmt.Sprintf(installCommandTemplate, hubURL, token),
+		},
+		{
+			OS:      models.AgentOSDarwin,
+			Label:   "macOS (launchd)",
+			Command: fmt.Sprintf(installCommandTemplate, hubURL, token),
+		},
+		{
+			OS:      models.AgentOSWindows,
+			Label:   "Windows (service)",
+			Command: fmt.Sprintf(windowsInstallCommandTemplate, hubURL, token),
+		},
+	}
+}
+
+// hubURLFromRequest builds the "http(s)://host" prefix used by every
+// install one-liner, from the request's scheme (r.TLS, never
+// X-Forwarded-*) and Host header. An invalid/unsafe Host value (fails
+// isValidHostHeader) is replaced with the placeholder "<HUB_URL>"
+// rather than ever interpolating untrusted, unvalidated request data
+// into a generated shell/PowerShell command.
+func hubURLFromRequest(r *http.Request) string {
+	if !isValidHostHeader(r.Host) {
+		return "<HUB_URL>"
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
 }
 
 // installCommand builds the install-agent.sh one-liner using the
@@ -143,15 +196,7 @@ func (s *Server) handleGetAgentToken(w http.ResponseWriter, r *http.Request) {
 // ever interpolating untrusted, unvalidated request data into a
 // generated shell command.
 func installCommand(r *http.Request, token string) string {
-	hubURL := "<HUB_URL>"
-	if isValidHostHeader(r.Host) {
-		scheme := "http"
-		if r.TLS != nil {
-			scheme = "https"
-		}
-		hubURL = scheme + "://" + r.Host
-	}
-	return fmt.Sprintf(installCommandTemplate, hubURL, token)
+	return fmt.Sprintf(installCommandTemplate, hubURLFromRequest(r), token)
 }
 
 // isValidHostHeader reports whether host is safe to embed unescaped in

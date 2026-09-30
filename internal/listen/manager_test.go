@@ -244,11 +244,7 @@ func TestRun_RetriesWaitingAddressUntilBindable(t *testing.T) {
 		t.Fatalf("occupy: listen: %v", err)
 	}
 
-	origInterval := RetryInterval
-	RetryInterval = 30 * time.Millisecond
-	defer func() { RetryInterval = origInterval }()
-
-	m := NewManager(testServer(), testLogger())
+	m := NewManagerWithOptions(testServer(), testLogger(), ManagerOptions{RetryInterval: 30 * time.Millisecond})
 	statuses, err := m.Apply(context.Background(), []string{addr})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -370,23 +366,21 @@ func (l *stickyListener) Close() error {
 func TestShutdown_AlreadyClosedListenerIsNotAnError(t *testing.T) {
 	release := make(chan struct{})
 	var sticky *stickyListener
-	orig := listenTCP
-	listenTCP = func(addr string) (net.Listener, error) {
-		ln, err := net.Listen("tcp", addr)
-		if err != nil {
-			return nil, err
-		}
-		sticky = &stickyListener{Listener: ln, release: release}
-		return sticky, nil
-	}
+	m := NewManagerWithOptions(testServer(), testLogger(), ManagerOptions{
+		Listen: func(_ string, addr string) (net.Listener, error) {
+			ln, err := net.Listen("tcp", addr)
+			if err != nil {
+				return nil, err
+			}
+			sticky = &stickyListener{Listener: ln, release: release}
+			return sticky, nil
+		},
+	})
 	t.Cleanup(func() {
-		listenTCP = orig
 		if sticky != nil {
 			sticky.releaseOnce.Do(func() { close(release) })
 		}
 	})
-
-	m := NewManager(testServer(), testLogger())
 	statuses, err := m.Apply(context.Background(), []string{"127.0.0.1:0"})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)

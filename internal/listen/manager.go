@@ -26,20 +26,19 @@ import (
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
 )
 
-// RetryInterval is how often Run attempts to (re)bind addresses that are
-// not currently listening. Exposed as a var (not a parameter) so tests
-// can shorten it; production code never changes it.
-var RetryInterval = 5 * time.Second
+const (
+	defaultRetryInterval = 5 * time.Second
+	defaultCloseDelay    = 1 * time.Second
+)
 
-// closeDelay is how long Apply waits before closing a listener that is
-// no longer desired, giving any in-flight HTTP response on that
-// listener (notably the PUT /api/v1/settings/network response itself)
-// a chance to flush before the connection's listener disappears.
-var closeDelay = 1 * time.Second
-
-// listenTCP opens a TCP listener; tests replace it to inject listener
-// behaviour (e.g. to reproduce close races deterministically).
-var listenTCP = func(addr string) (net.Listener, error) { return net.Listen("tcp", addr) }
+// ManagerOptions configures one Manager's runtime seams. Zero values use the
+// production defaults. It exists so tests can inject timing and bind behavior
+// without mutating package state.
+type ManagerOptions struct {
+	RetryInterval time.Duration
+	CloseDelay    time.Duration
+	Listen        func(network, addr string) (net.Listener, error)
+}
 
 // entry tracks one desired address's listener (if bound) and status.
 type entry struct {
@@ -55,8 +54,11 @@ type entry struct {
 // real net.Listeners, serving srv.Handler on each. All exported methods
 // are safe for concurrent use.
 type Manager struct {
-	srv    *http.Server
-	logger *slog.Logger
+	srv           *http.Server
+	logger        *slog.Logger
+	retryInterval time.Duration
+	closeDelay    time.Duration
+	listen        func(network, addr string) (net.Listener, error)
 
 	mu      sync.Mutex
 	entries map[string]*entry // key: addr string as passed to Apply
@@ -67,10 +69,29 @@ type Manager struct {
 // caller; Manager calls srv.Serve(ln) once per listener it opens.
 // logger must not be nil.
 func NewManager(srv *http.Server, logger *slog.Logger) *Manager {
+	return NewManagerWithOptions(srv, logger, ManagerOptions{})
+}
+
+// NewManagerWithOptions constructs a Manager with per-instance runtime
+// seams. Production callers should use NewManager; tests use this constructor
+// to avoid shared mutable package hooks.
+func NewManagerWithOptions(srv *http.Server, logger *slog.Logger, opts ManagerOptions) *Manager {
+	if opts.RetryInterval <= 0 {
+		opts.RetryInterval = defaultRetryInterval
+	}
+	if opts.CloseDelay <= 0 {
+		opts.CloseDelay = defaultCloseDelay
+	}
+	if opts.Listen == nil {
+		opts.Listen = net.Listen
+	}
 	return &Manager{
-		srv:     srv,
-		logger:  logger,
-		entries: make(map[string]*entry),
+		srv:           srv,
+		logger:        logger,
+		retryInterval: opts.RetryInterval,
+		closeDelay:    opts.CloseDelay,
+		listen:        opts.Listen,
+		entries:       make(map[string]*entry),
 	}
 }
 
@@ -136,7 +157,7 @@ func (m *Manager) Apply(ctx context.Context, addrs []string) ([]models.ListenerS
 // Close racing with its listener cleanup.
 func (m *Manager) closeAfterDelay(addr string, e *entry) {
 	go func() {
-		time.Sleep(closeDelay)
+		time.Sleep(m.closeDelay)
 		if e.ln != nil {
 			if err := e.ln.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 				m.logger.Debug("listen: close removed listener failed", "addr", addr, "error", err)
@@ -150,7 +171,7 @@ func (m *Manager) closeAfterDelay(addr string, e *entry) {
 // e.status are updated to "listening", on failure e.status is updated
 // to "waiting" or "error" per classifyBindError.
 func (m *Manager) bindLocked(addr string, e *entry) {
-	ln, err := listenTCP(addr)
+	ln, err := m.listen("tcp", addr)
 	now := time.Now().Unix()
 	if err != nil {
 		status, msg := classifyBindError(err)
@@ -225,7 +246,7 @@ func (m *Manager) statusLocked(addrs []string) []models.ListenerStatus {
 // Run retries every currently non-listening address every RetryInterval
 // until ctx is done. It never returns until ctx.Done() fires.
 func (m *Manager) Run(ctx context.Context) {
-	ticker := time.NewTicker(RetryInterval)
+	ticker := time.NewTicker(m.retryInterval)
 	defer ticker.Stop()
 	for {
 		select {

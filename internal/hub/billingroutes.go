@@ -77,7 +77,7 @@ func (s *Server) handlePostBillingRefresh(w http.ResponseWriter, r *http.Request
 	ctx := r.Context()
 	interval := s.resolveBillingInterval(ctx)
 	snapshots, err := s.opts.Billing.run(ctx, interval)
-	s.opts.Billing.lastRefresh.Store(s.opts.Billing.now().UnixNano())
+	s.opts.Billing.refreshGate().Record()
 	if err != nil {
 		s.logger.Error("billing: manual refresh failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})

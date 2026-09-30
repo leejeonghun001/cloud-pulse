@@ -9,6 +9,22 @@ import (
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
 )
 
+// StorageAlertEvaluator is an optional capability an AlertEngine
+// implementation may additionally provide: evaluating SPEC-v0.7 §3's
+// account-scoped storage_usage_pct rules against connected storage
+// accounts. This is intentionally a separate interface, checked via a
+// type assertion in storagerun.go, rather than a new method on the
+// shared AlertEngine interface in server.go — AlertEngine is a
+// multi-stage-owned contract (alerting's own tests, cmd/hub's wiring,
+// and this storage stage all touch it), and adding a method there
+// would force every other AlertEngine implementation/fake in the
+// codebase (including test doubles this stage doesn't own) to grow a
+// matching method just to keep compiling, even on hub builds that never
+// configure any storage accounts at all.
+type StorageAlertEvaluator interface {
+	EvaluateStorage(ctx context.Context, now time.Time, accounts []alerting.StorageAccountUsage) error
+}
+
 // alertEngineAdapter adapts a *alerting.Engine to this package's
 // AlertEngine interface. The method sets are already identical
 // (Evaluate/Preview with the same signatures), so this is a type
@@ -41,6 +57,16 @@ func (a alertEngineAdapter) Evaluate(ctx context.Context, now time.Time, hosts [
 
 func (a alertEngineAdapter) Preview(ctx context.Context, now time.Time, rule models.AlertRule, hosts []models.HostSnapshot) (map[string]bool, error) {
 	return a.engine.Preview(ctx, now, rule, hosts)
+}
+
+// EvaluateStorage implements hub.StorageAlertEvaluator (an optional
+// interface checked via type assertion, not part of the shared
+// AlertEngine interface — see server.go's StorageAlertEvaluator doc
+// comment for why SPEC-v0.7 §3's storage stage avoids widening a
+// shared, multi-stage-owned interface), delegating to the underlying
+// engine's own EvaluateStorage.
+func (a alertEngineAdapter) EvaluateStorage(ctx context.Context, now time.Time, accounts []alerting.StorageAccountUsage) error {
+	return a.engine.EvaluateStorage(ctx, now, accounts)
 }
 
 // Wait implements alertEngineWaiter (see server.go's Wait), delegating

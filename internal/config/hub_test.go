@@ -81,6 +81,9 @@ func TestLoadHub_Defaults(t *testing.T) {
 	if h.BillingAWSResources {
 		t.Error("BillingAWSResources = true, want false (default)")
 	}
+	if h.StorageInterval != models.StorageInterval1h {
+		t.Errorf("StorageInterval = %q, want 1h", h.StorageInterval)
+	}
 	if h.OCIConfigFile != "" {
 		t.Errorf("OCIConfigFile = %q, want empty", h.OCIConfigFile)
 	}
@@ -638,6 +641,44 @@ func TestLoadHub_BillingInterval(t *testing.T) {
 			}
 			if !tc.wantErr && h.BillingInterval != tc.want {
 				t.Errorf("BillingInterval = %q, want %q", h.BillingInterval, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadHub_StorageInterval(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		value   string
+		want    models.StorageInterval
+		wantErr bool
+	}{
+		{"default_1h", "", models.StorageInterval1h, false},
+		{"15m", "15m", models.StorageInterval15m, false},
+		{"1h", "1h", models.StorageInterval1h, false},
+		{"6h", "6h", models.StorageInterval6h, false},
+		{"24h", "24h", models.StorageInterval24h, false},
+		{"upper_case", "1H", models.StorageInterval1h, false},
+		{"invalid_5m", "5m", "", true},
+		{"invalid_48h", "48h", "", true},
+		{"invalid_garbage", "not-a-duration", "", true},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			env := map[string]string{"CP_AGENT_TOKEN": "abcdefghijklmnop"}
+			if tc.value != "" {
+				env["CP_STORAGE_INTERVAL"] = tc.value
+			}
+			h, err := LoadHub(mapLookup(env))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("LoadHub() err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if !tc.wantErr && h.StorageInterval != tc.want {
+				t.Errorf("StorageInterval = %q, want %q", h.StorageInterval, tc.want)
 			}
 		})
 	}

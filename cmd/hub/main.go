@@ -64,6 +64,12 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "reset-network" {
 		os.Exit(runResetNetwork(os.Args[2:]))
 	}
+	if len(os.Args) > 2 && os.Args[1] == "notify" && os.Args[2] == "verify" {
+		os.Exit(runNotifyVerify(os.Args[3:]))
+	}
+	if len(os.Args) > 2 && os.Args[1] == "storage" && os.Args[2] == "verify" {
+		os.Exit(runStorageVerify(os.Args[3:]))
+	}
 	os.Exit(run())
 }
 
@@ -81,6 +87,8 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "       cloud-pulse-hub systemd-unit <print|apply> [flags]")
 		fmt.Fprintln(os.Stderr, "       cloud-pulse-hub reset-password [--data-dir DIR] [--password-stdin]")
 		fmt.Fprintln(os.Stderr, "       cloud-pulse-hub reset-network [--data-dir DIR]")
+		fmt.Fprintln(os.Stderr, "       cloud-pulse-hub notify verify --credentials-file FILE [--platform discord|telegram|whatsapp|all] [--cleanup] [--timeout 20s] [--json]")
+		fmt.Fprintln(os.Stderr, "       cloud-pulse-hub storage verify --provider googledrive|dropbox [--json]")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -159,6 +167,9 @@ func printConfigSummary(w *os.File, cfg config.Hub) {
 		fmt.Sprintf("  oci_config_file:   %s", displayOrUnset(cfg.OCIConfigFile)),
 		fmt.Sprintf("  oci_profile:       %s", displayOrUnset(cfg.OCIProfile)),
 		fmt.Sprintf("  oci_tenancy_id:    %s", displayOrUnset(cfg.OCITenancyID)),
+		fmt.Sprintf("  storage_interval:  %s", cfg.StorageInterval),
+		fmt.Sprintf("  storage_allow_custom_endpoints: %t (test/smoke only; never set on a production hub)", cfg.StorageAllowCustomEndpoints),
+		fmt.Sprintf("  storage_fake_base_url: %s", displayOrUnset(cfg.StorageFakeBaseURL)),
 	}
 	for _, line := range lines {
 		// Best-effort: -check-config writes to stdout for human
@@ -244,6 +255,7 @@ func runHub(cfg config.Hub) int {
 	defer alertEngine.Close()
 
 	billingRuntime := buildBillingRuntime(cfg, store)
+	storageRuntime := buildStorageRuntime(cfg)
 
 	srv := hub.New(hub.Options{
 		AgentToken:      cfg.AgentToken,
@@ -261,6 +273,7 @@ func runHub(cfg config.Hub) int {
 		Alerting:      wrappedAlertEngine,
 		NotifyFactory: notifyFactory,
 		Billing:       billingRuntime,
+		Storage:       storageRuntime,
 	}, store, collectors, nil, web.Assets(), logger)
 	httpSrv.Handler = srv.Handler()
 
@@ -333,6 +346,12 @@ func runHub(cfg config.Hub) int {
 		srv.RunBillingLoop(bgCtx)
 	}()
 
+	storageDone := make(chan struct{})
+	go func() {
+		defer close(storageDone)
+		srv.RunStorageLoop(bgCtx)
+	}()
+
 	<-ctx.Done()
 	logger.Info("shutdown signal received")
 
@@ -346,6 +365,7 @@ func runHub(cfg config.Hub) int {
 	<-bgDone
 	<-retryDone
 	<-billingDone
+	<-storageDone
 	srv.Wait()
 
 	logger.Info("shutdown complete")

@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -93,7 +94,7 @@ func TestSettingsDTOs_JSONRoundTrip(t *testing.T) {
 		if err := json.Unmarshal(b, &got); err != nil {
 			t.Fatalf("Unmarshal: %v", err)
 		}
-		if got != v {
+		if !reflect.DeepEqual(got, v) {
 			t.Errorf("round-trip = %+v, want %+v", got, v)
 		}
 	})

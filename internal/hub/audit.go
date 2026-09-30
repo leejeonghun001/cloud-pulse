@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -71,7 +72,7 @@ func (s *Server) recordAudit(ctx context.Context, r *http.Request, action models
 	// for a real create/delete call since one side always carries data;
 	// this only short-circuits the "update produced the same JSON"
 	// case.
-	if before != nil && after != nil && beforeJSON == afterJSON {
+	if before != nil && after != nil && auditValuesEquivalent(beforeJSON, afterJSON) {
 		return
 	}
 
@@ -112,4 +113,37 @@ func marshalAuditValue(v any) (string, error) {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// auditBookkeepingFields are top-level JSON keys that record *when* an
+// entity was written, not *what* it contains. The store refreshes them on
+// every save, so they must not turn an otherwise unchanged save into an
+// audit entry.
+var auditBookkeepingFields = []string{"created_at", "updated_at"}
+
+// auditValuesEquivalent reports whether two marshaled audit values are the
+// same once bookkeeping timestamps are ignored. Values that are not JSON
+// objects fall back to a byte comparison.
+func auditValuesEquivalent(beforeJSON, afterJSON string) bool {
+	if beforeJSON == afterJSON {
+		return true
+	}
+	var before, after map[string]json.RawMessage
+	if json.Unmarshal([]byte(beforeJSON), &before) != nil || json.Unmarshal([]byte(afterJSON), &after) != nil {
+		return false
+	}
+	for _, k := range auditBookkeepingFields {
+		delete(before, k)
+		delete(after, k)
+	}
+	if len(before) != len(after) {
+		return false
+	}
+	for k, bv := range before {
+		av, ok := after[k]
+		if !ok || !bytes.Equal(bv, av) {
+			return false
+		}
+	}
+	return true
 }

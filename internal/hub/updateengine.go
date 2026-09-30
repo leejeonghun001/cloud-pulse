@@ -20,11 +20,21 @@ const defaultMaxParallel = 3
 const updateJobTimeout = 15 * time.Minute
 
 // remoteUpdateMinAgentVersion is the minimum agent version eligible to
-// receive a remote update request: only a v0.6.0+ agent is guaranteed
-// to have the request-file/result-file handling this feature depends
-// on (an older agent would just ignore IngestResponse.UpdateRequest,
-// silently stranding the job in "queued" forever without this check).
+// receive a remote update request on Linux: only a v0.6.0+ agent is
+// guaranteed to have the request-file/result-file handling this
+// feature depends on (an older agent would just ignore
+// IngestResponse.UpdateRequest, silently stranding the job in "queued"
+// forever without this check).
 const remoteUpdateMinAgentVersion = "v0.6.0"
+
+// remoteUpdateMinAgentVersionOtherPlatforms is the minimum agent
+// version eligible to receive a remote update request on macOS or
+// Windows (SPEC-v0.7 §1/§6): those platforms' request-file/
+// result-file handling, launchd/Windows-service PostUpdate hooks, and
+// RemoteUpdateCapability.Platform reporting were all introduced
+// together in v0.7.0 — no macOS/Windows agent build before that tag
+// has any of this machinery at all.
+const remoteUpdateMinAgentVersionOtherPlatforms = "v0.7.0"
 
 // createUpdateBatch validates req and creates one queued models.UpdateJob
 // per host ID, returning the created jobs (in the same order as
@@ -55,17 +65,23 @@ func (s *Server) createUpdateBatch(ctx context.Context, req models.UpdateBatchCr
 	now := s.opts.now()
 	jobs := make([]models.UpdateJob, 0, len(req.HostIDs))
 	for _, hostID := range req.HostIDs {
-		if _, err := s.store.GetHost(ctx, hostID); err != nil {
+		host, err := s.store.GetHost(ctx, hostID)
+		if err != nil {
 			if isNotFound(err) {
 				continue
 			}
 			return models.UpdateBatch{}, fmt.Errorf("hub: create update batch: get host %s: %w", hostID, err)
 		}
+		platform := host.Info.RemoteUpdate.Platform
+		if platform == "" {
+			platform = host.Info.OS
+		}
 		job, err := s.store.CreateUpdateJob(ctx, models.UpdateJob{
-			BatchID: batchID,
-			HostID:  hostID,
-			Target:  target,
-			State:   models.UpdateJobQueued,
+			BatchID:  batchID,
+			HostID:   hostID,
+			Target:   target,
+			State:    models.UpdateJobQueued,
+			Platform: platform,
 		})
 		if err != nil {
 			return models.UpdateBatch{}, fmt.Errorf("hub: create update batch: create job for %s: %w", hostID, err)
@@ -208,19 +224,37 @@ func (s *Server) setBatchMaxParallel(batchID string, maxParallel int) {
 
 // remoteUpdateCapable reports whether host is eligible to receive a
 // remote update job at all: it must self-report RemoteUpdateCapability
-// as Supported (SPEC-v0.6 §2: Linux + systemd), and its own
-// AgentVersion must be a valid, parseable release tag at or above
-// remoteUpdateMinAgentVersion. This is hub-side defense-in-depth on top
-// of the agent's own (currently coarse, see notes/v06-prep.md) Linux
-// gate — an old agent's optimistic self-report is never trusted alone.
+// as Supported, and its own AgentVersion must be a valid, parseable
+// release tag at or above the per-OS minimum (SPEC-v0.7 §6: Linux >=
+// v0.6.0, macOS/Windows >= v0.7.0). This is hub-side defense-in-depth
+// on top of the agent's own (currently coarse, see notes/v06-prep.md)
+// platform gate — an old agent's optimistic self-report is never
+// trusted alone.
+//
+// host.RemoteUpdate.Platform is empty for a pre-v0.7.0 agent report
+// (that field didn't exist yet); such a report is only ever trusted as
+// linux-eligible, since every pre-v0.7.0 remote-update-capable agent
+// was Linux-only by construction — falling back to host.OS (populated
+// since v0.1.0) when Platform is unset, rather than treating an empty
+// Platform as "unknown, refuse everything," which would incorrectly
+// break existing v0.6.x Linux agents upgrading to a v0.7.0 hub before
+// they themselves upgrade past v0.6.x.
 func remoteUpdateCapable(host models.HostInfo) bool {
 	if !host.RemoteUpdate.Supported {
 		return false
 	}
-	if host.OS != "" && host.OS != "linux" {
+	platform := host.RemoteUpdate.Platform
+	if platform == "" {
+		platform = host.OS
+	}
+	switch platform {
+	case "", "linux":
+		return !version.IsNewer(remoteUpdateMinAgentVersion, host.AgentVersion) // AgentVersion >= min
+	case "darwin", "windows":
+		return !version.IsNewer(remoteUpdateMinAgentVersionOtherPlatforms, host.AgentVersion) // AgentVersion >= min
+	default:
 		return false
 	}
-	return !version.IsNewer(remoteUpdateMinAgentVersion, host.AgentVersion) // AgentVersion >= min
 }
 
 // handleAgentUpdateStatus applies an agent-reported models.AgentUpdateStatus
@@ -361,11 +395,12 @@ func (s *Server) retryUpdateJob(ctx context.Context, jobID int64) (models.Update
 	}
 
 	next, err := s.store.CreateUpdateJob(ctx, models.UpdateJob{
-		BatchID: old.BatchID,
-		HostID:  old.HostID,
-		Target:  old.Target,
-		State:   models.UpdateJobQueued,
-		Attempt: old.Attempt + 1,
+		BatchID:  old.BatchID,
+		HostID:   old.HostID,
+		Target:   old.Target,
+		State:    models.UpdateJobQueued,
+		Attempt:  old.Attempt + 1,
+		Platform: old.Platform,
 	})
 	if err != nil {
 		return models.UpdateJob{}, fmt.Errorf("hub: retry update job: create: %w", err)

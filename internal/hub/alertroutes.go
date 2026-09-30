@@ -358,13 +358,14 @@ type ruleRequest struct {
 }
 
 var validAlertMetrics = map[models.AlertMetric]bool{
-	models.AlertMetricCPU:          true,
-	models.AlertMetricMemory:       true,
-	models.AlertMetricDisk:         true,
-	models.AlertMetricLoad1:        true,
-	models.AlertMetricEgressOutPct: true,
-	models.AlertMetricEgressInPct:  true,
-	models.AlertMetricHostDown:     true,
+	models.AlertMetricCPU:             true,
+	models.AlertMetricMemory:          true,
+	models.AlertMetricDisk:            true,
+	models.AlertMetricLoad1:           true,
+	models.AlertMetricEgressOutPct:    true,
+	models.AlertMetricEgressInPct:     true,
+	models.AlertMetricHostDown:        true,
+	models.AlertMetricStorageUsagePct: true,
 }
 
 var validAlertOperators = map[models.AlertOperator]bool{
@@ -378,6 +379,12 @@ var validAlertOperators = map[models.AlertOperator]bool{
 // re-notify" per AlertRule.CooldownSec's doc comment).
 const alertingDefaultCooldownSec = 3600
 
+// alertingStorageDefaultCooldownSec is storage_usage_pct's own default
+// cooldown (SPEC-v0.7 §3: "하루 1회 재알림 기본" — once-per-day, not
+// the general 1-hour default every other metric gets), applied only
+// when a create/update request for that metric omits cooldown_sec.
+const alertingStorageDefaultCooldownSec = 86400
+
 // validateRuleRequest validates req, returning the constructed
 // models.AlertRule (with CreatedAt/UpdatedAt/ID left zero for the
 // caller to fill in) and any field-level validation errors.
@@ -388,7 +395,7 @@ func validateRuleRequest(req ruleRequest) (models.AlertRule, map[string]string) 
 	}
 	metric := models.AlertMetric(req.Metric)
 	if !validAlertMetrics[metric] {
-		details["metric"] = "must be one of cpu, memory, disk, load1, egress_out_pct, egress_in_pct, host_down"
+		details["metric"] = "must be one of cpu, memory, disk, load1, egress_out_pct, egress_in_pct, host_down, storage_usage_pct"
 	}
 	op := models.AlertOperator(req.Operator)
 	if !validAlertOperators[op] {
@@ -400,11 +407,25 @@ func validateRuleRequest(req ruleRequest) (models.AlertRule, map[string]string) 
 	if req.CooldownSec != nil && *req.CooldownSec < 0 {
 		details["cooldown_sec"] = "must not be negative"
 	}
-	if req.HostID != "" && !models.ValidHostID(req.HostID) {
-		details["host_id"] = "invalid host id"
+	// storage_usage_pct repurposes HostID to hold a storage account's
+	// decimal ID rather than a host ID (see
+	// models.AlertMetricStorageUsagePct's doc comment) — validate it as
+	// a plain non-negative integer instead of models.ValidHostID's
+	// hostname-shaped rule.
+	if req.HostID != "" {
+		if metric == models.AlertMetricStorageUsagePct {
+			if !isDecimalAccountID(req.HostID) {
+				details["host_id"] = "must be a storage account id (decimal integer)"
+			}
+		} else if !models.ValidHostID(req.HostID) {
+			details["host_id"] = "invalid host id"
+		}
 	}
 
 	cooldown := alertingDefaultCooldownSec
+	if metric == models.AlertMetricStorageUsagePct {
+		cooldown = alertingStorageDefaultCooldownSec
+	}
 	if req.CooldownSec != nil {
 		cooldown = *req.CooldownSec
 	}
@@ -425,6 +446,21 @@ func validateRuleRequest(req ruleRequest) (models.AlertRule, map[string]string) 
 		NotifyResolved: req.NotifyResolved,
 		ChannelIDs:     channelIDs,
 	}, details
+}
+
+// isDecimalAccountID reports whether s is a plain non-negative decimal
+// integer (a storage account ID), with no sign, whitespace, or other
+// characters.
+func isDecimalAccountID(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // handleCreateRule creates a new alert rule: POST /api/v1/alerts/rules

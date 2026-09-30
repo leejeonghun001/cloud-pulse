@@ -12,6 +12,17 @@ const (
 	AlertMetricEgressOutPct AlertMetric = "egress_out_pct"
 	AlertMetricEgressInPct  AlertMetric = "egress_in_pct"
 	AlertMetricHostDown     AlertMetric = "host_down"
+	// AlertMetricStorageUsagePct is SPEC-v0.7 §3's storage-usage alert
+	// metric: a connected Google Drive/Dropbox account's used-quota
+	// percentage. Unlike every other metric, this one is
+	// account-scoped, not host-scoped — a rule targeting this metric
+	// repurposes AlertRule.HostID to hold a storage account's ID
+	// (formatted as a decimal string) instead of a host ID; "" still
+	// means "every connected storage account," mirroring the
+	// all-hosts convention for every other metric. See
+	// internal/alerting/storageusage.go for the evaluation logic this
+	// repurposing enables without a schema/model change.
+	AlertMetricStorageUsagePct AlertMetric = "storage_usage_pct"
 )
 
 // AlertOperator is the comparison an alert rule's threshold is evaluated
@@ -66,6 +77,13 @@ type AlertRule struct {
 	Enabled bool        `json:"enabled"`
 	Metric  AlertMetric `json:"metric"`
 	// HostID scopes the rule to one host; "" applies it to all hosts.
+	// For Metric == AlertMetricStorageUsagePct specifically, this field
+	// is repurposed to hold a storage account's ID (formatted as a
+	// decimal string) instead of a host ID — "" still means "every
+	// connected storage account." See AlertMetricStorageUsagePct's doc
+	// comment for the rationale (SPEC-v0.7 §3's account-scoped metric
+	// reusing the existing host_id column rather than adding a new
+	// scoping concept/schema column).
 	HostID   string        `json:"host_id"`
 	Operator AlertOperator `json:"operator"`
 	// Threshold is compared against the metric's value in the metric's

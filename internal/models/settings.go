@@ -47,5 +47,14 @@ type AgentTokenView struct {
 	AgentToken string `json:"agent_token"`
 	// InstallCommand uses the hub URL the browser reached to
 	// reach the hub (request scheme + Host), not a configured value.
+	// Kept for backward compatibility (pre-v0.7.0 single-command
+	// shape); always identical to the "linux" entry in
+	// InstallCommands.
 	InstallCommand string `json:"install_command"`
+	// InstallCommands lists one ready-to-run one-liner per supported
+	// OS (SPEC-v0.7 §1's "Add agent" dialog OS tabs: Linux, macOS,
+	// Windows). Populated by the hub's installCommand helper (see
+	// internal/hub/admin.go); the agent-platforms stage owns the
+	// macOS/Windows one-liner templates.
+	InstallCommands []AgentInstallCommand `json:"install_commands,omitempty"`
 }
