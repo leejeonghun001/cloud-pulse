@@ -643,6 +643,264 @@ def _demo_value_for_metric(metric: str, threshold: float) -> float:
     return round(threshold + max(1.0, threshold * 0.05), 1)
 
 
+# ---------------------------------------------------------------------------
+# SPEC-v0.8 §3-1 rollout demo data (fleet versions + update batches).
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RolloutHostSpec:
+    """A demo host used only to populate the Rollout page's fleet-
+    version distribution: agent_version/os diversity, remote-update
+    capability, and (for the outdated ones) an update_jobs history."""
+
+    host_id: str
+    hostname: str
+    os: str
+    agent_version: str
+    remote_update_supported: bool
+    remote_update_opted_in: bool
+
+
+# A deliberately mixed fleet: up-to-date and outdated hosts across every
+# OS family, plus a mix of remote-update capability classes, so the
+# Rollout page's summary cards/distribution chart/outdated-host list
+# are all populated non-trivially. "v0.7.0" is treated as this demo's
+# "latest" release — the hub's own real update-check result (from
+# GitHub) always overrides this for LatestVersion, but every count
+# derived from OutdatedCount/CapableCount etc. only depends on each
+# host's own reported version relative to whatever the hub resolves as
+# latest, so this fleet reads sensibly either way.
+ROLLOUT_HOSTS: tuple[RolloutHostSpec, ...] = (
+    RolloutHostSpec("demo-rollout-linux-01", "rollout-linux-01", "linux", "v0.7.0", True, True),
+    RolloutHostSpec("demo-rollout-linux-02", "rollout-linux-02", "linux", "v0.6.0", True, True),
+    RolloutHostSpec("demo-rollout-linux-03", "rollout-linux-03", "linux", "v0.6.0", True, False),
+    RolloutHostSpec("demo-rollout-linux-04", "rollout-linux-04", "linux", "v0.5.0", False, False),
+    RolloutHostSpec("demo-rollout-darwin-01", "rollout-darwin-01", "darwin", "v0.7.0", True, True),
+    RolloutHostSpec("demo-rollout-darwin-02", "rollout-darwin-02", "darwin", "v0.6.0", False, False),
+    RolloutHostSpec("demo-rollout-windows-01", "rollout-windows-01", "windows", "v0.7.0", True, True),
+    RolloutHostSpec("demo-rollout-windows-02", "rollout-windows-02", "windows", "v0.6.0", False, False),
+)
+
+
+@dataclass(frozen=True)
+class RolloutJobSpec:
+    """One update_jobs row for RolloutBatchSpec."""
+
+    host_id: str
+    state: str  # models.UpdateJobState value
+    reason: str = ""  # models.UpdateJobReason value, only meaningful when state == "failed"
+
+
+@dataclass(frozen=True)
+class RolloutBatchSpec:
+    """A demo remote-update batch: a fixed set of jobs, all sharing a
+    batch_id, backdated by age_hours so the batch-history table shows a
+    plausible recency spread."""
+
+    batch_id: str
+    target: str
+    jobs: tuple[RolloutJobSpec, ...]
+    age_hours: float
+    duration_sec: int
+
+
+ROLLOUT_BATCHES: tuple[RolloutBatchSpec, ...] = (
+    RolloutBatchSpec(
+        batch_id="batch-demo-mixed-failure",
+        target="latest",
+        jobs=(
+            RolloutJobSpec("demo-rollout-linux-02", "succeeded"),
+            RolloutJobSpec("demo-rollout-linux-03", "failed", "not_enabled"),
+            RolloutJobSpec("demo-rollout-darwin-02", "failed", "timeout"),
+            RolloutJobSpec("demo-rollout-windows-02", "failed", "unsupported"),
+        ),
+        age_hours=2.0,
+        duration_sec=180,
+    ),
+    RolloutBatchSpec(
+        batch_id="batch-demo-all-succeeded",
+        target="v0.7.0",
+        jobs=(
+            RolloutJobSpec("demo-rollout-linux-01", "succeeded"),
+            RolloutJobSpec("demo-rollout-darwin-01", "succeeded"),
+            RolloutJobSpec("demo-rollout-windows-01", "succeeded"),
+        ),
+        age_hours=26.0,
+        duration_sec=95,
+    ),
+    RolloutBatchSpec(
+        batch_id="batch-demo-in-progress",
+        target="latest",
+        jobs=(
+            RolloutJobSpec("demo-rollout-linux-02", "in_progress"),
+            RolloutJobSpec("demo-rollout-linux-03", "queued"),
+        ),
+        age_hours=0.05,
+        duration_sec=0,
+    ),
+)
+
+
+class RolloutSeeder:
+    """Posts one agent report per ROLLOUT_HOSTS entry (so the hub's
+    fleet-versions aggregation has real hosts with real agent_version/
+    os/remote_update diversity to aggregate), then — since there is no
+    public API to backdate or directly create a terminal update_jobs
+    row outside the normal queued->in_progress->succeeded/failed
+    agent-report-driven lifecycle — inserts ROLLOUT_BATCHES' rows
+    directly into the update_jobs table, mirroring
+    FiringEventSeeder's own "direct DB write for demo-only history the
+    API can't inject" precedent."""
+
+    def __init__(self, hub_url: str, agent_token: str, db_path: Path | None, timeout: float = 10.0) -> None:
+        self._hub_url = hub_url.rstrip("/")
+        self._agent_token = agent_token
+        self._db_path = db_path
+        self._timeout = timeout
+
+    def seed_hosts(self) -> None:
+        now = int(time.time())
+        for host in ROLLOUT_HOSTS:
+            report = self._build_report(host, now)
+            self._post_report(report)
+            print(
+                f"    host     {host.host_id:24s} os={host.os:8s} agent_version={host.agent_version:8s} "
+                f"remote_update(supported={host.remote_update_supported}, opted_in={host.remote_update_opted_in})"
+            )
+
+    def seed_batches(self) -> None:
+        if self._db_path is None:
+            print("    skipped (no --db path given; update batches need direct DB access — see RolloutSeeder's docstring)")
+            return
+
+        conn = sqlite3.connect(self._db_path)
+        inserted = 0
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='update_jobs'")
+            if cur.fetchone() is None:
+                raise SystemExit(
+                    f"error: {self._db_path} has no update_jobs table — run the hub once first so migrations apply"
+                )
+
+            now = int(time.time())
+            for batch in ROLLOUT_BATCHES:
+                created_at = now - int(batch.age_hours * 3600)
+                updated_at = created_at + batch.duration_sec if batch.duration_sec > 0 else created_at
+                for job in batch.jobs:
+                    platform = next((h.os for h in ROLLOUT_HOSTS if h.host_id == job.host_id), "")
+                    cur.execute(
+                        """
+                        INSERT INTO update_jobs (
+                            batch_id, host_id, target, state, reason, error,
+                            created_at, updated_at, attempt, platform
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                        """,
+                        (
+                            batch.batch_id,
+                            job.host_id,
+                            batch.target,
+                            job.state,
+                            job.reason,
+                            _demo_error_for_reason(job.reason),
+                            created_at,
+                            updated_at,
+                            platform,
+                        ),
+                    )
+                    inserted += 1
+                print(f"    batch    {batch.batch_id:32s} target={batch.target:8s} jobs={len(batch.jobs)}")
+            conn.commit()
+        finally:
+            conn.close()
+        print(f"    inserted {inserted} update_jobs rows across {len(ROLLOUT_BATCHES)} batches")
+
+    @staticmethod
+    def _build_report(host: RolloutHostSpec, now: int) -> dict[str, Any]:
+        sample = {
+            "ts": now,
+            "cpu_percent": 18.0,
+            "load1": 0.5,
+            "load5": 0.6,
+            "load15": 0.65,
+            "mem_total": 8 << 30,
+            "mem_available": 6 << 30,
+            "mem_used": 2 << 30,
+            "mem_used_percent": 25.0,
+            "mem_cached": 1 << 30,
+            "swap_total": 0,
+            "swap_used": 0,
+            "disk_total": 100 << 30,
+            "disk_used": 30 << 30,
+            "disk_used_percent": 30.0,
+            "disk_read_bps": 500_000,
+            "disk_write_bps": 200_000,
+            "net_rx_bps": 1_000_000,
+            "net_tx_bps": 400_000,
+            "net_rx_bytes": 15_000_000,
+            "net_tx_bytes": 6_000_000,
+            "uptime_seconds": 5 * 86400,
+        }
+        return {
+            "host": {
+                "id": host.host_id,
+                "hostname": host.hostname,
+                "os": host.os,
+                "platform": _demo_platform_for_os(host.os),
+                "platform_version": "demo",
+                "kernel_version": "demo",
+                "arch": "amd64",
+                "cpu_model": "Demo CPU",
+                "cpu_cores": 4,
+                "boot_time": now - 5 * 86400,
+                "provider": "other",
+                "egress_limit_bytes": 0,
+                "agent_version": host.agent_version,
+                "remote_update": {
+                    "supported": host.remote_update_supported,
+                    "opted_in": host.remote_update_opted_in,
+                    "platform": host.os,
+                },
+            },
+            "samples": [sample],
+        }
+
+    def _post_report(self, report: dict[str, Any]) -> None:
+        req = urllib.request.Request(
+            url=self._hub_url + "/api/v1/agent/report",
+            data=json.dumps(report).encode("utf-8"),
+            method="POST",
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self._agent_token}"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                resp.read()
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")
+            raise SystemExit(f"error: POST report for {report['host']['id']} failed: HTTP {e.code}: {detail}")
+        except urllib.error.URLError as e:
+            raise SystemExit(f"error: POST report for {report['host']['id']} failed: {e}")
+
+
+def _demo_platform_for_os(os_name: str) -> str:
+    return {"linux": "ubuntu", "darwin": "macos", "windows": "windows"}.get(os_name, "unknown")
+
+
+def _demo_error_for_reason(reason: str) -> str:
+    """Returns a short, human-readable, never-secret error detail for a
+    demo failed job's reason, matching what a real agent would report
+    (see models.UpdateJobReason's doc comment) — empty for a non-failed
+    job (reason == "")."""
+    return {
+        "not_enabled": "agent not opted in (CP_REMOTE_UPDATE=off)",
+        "timeout": "no status report within 15 minutes",
+        "unsupported": "platform/agent version below the remote-update floor",
+        "download_failed": "failed to download the release asset",
+        "checksum_mismatch": "downloaded asset checksum mismatch",
+    }.get(reason, "")
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description="cloud-pulse v0.5.0 demo/dev seed data: alert channels, rules, firing events, and inventory (NOT for production hubs).",
@@ -671,6 +929,13 @@ def main(argv: list[str]) -> int:
     print("==> seeding inventory (Docker containers + listening ports)")
     inventory = InventorySeeder(args.hub, args.agent_token)
     inventory.seed()
+
+    print("==> seeding rollout demo hosts (SPEC-v0.8 §3-1 fleet versions)")
+    rollout = RolloutSeeder(args.hub, args.agent_token, args.db)
+    rollout.seed_hosts()
+
+    print("==> seeding rollout demo update batches (SPEC-v0.8 §3-1)")
+    rollout.seed_batches()
 
     if args.db:
         print("==> seeding firing alert events")
