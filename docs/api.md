@@ -32,6 +32,8 @@ require the same; there is no "admin_disabled" mode.
 | `POST /api/v1/settings/network/confirm` | Persist a pending network change | Admin |
 | `POST /api/v1/settings/network/revert` | Revert a pending network change immediately | Admin |
 | `DELETE /api/v1/settings/network` | Drop the hub-side network override | Admin |
+| `GET /api/v1/settings/notify-language` | Current hub-wide notification message language (`en`/`ko`, default `en`) | Admin |
+| `PUT /api/v1/settings/notify-language` | Set the hub-wide notification message language | Admin |
 | `GET /api/v1/alerts/channels` | List notify channels, secrets redacted | Admin |
 | `POST /api/v1/alerts/channels` | Create a notify channel | Admin |
 | `PUT /api/v1/alerts/channels/{id}` | Update a notify channel | Admin |

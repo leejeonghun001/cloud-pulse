@@ -678,6 +678,7 @@ func (s *Server) routes() *http.ServeMux {
 	s.registerAuditRoutes(mux)
 	s.registerPricingRoutes(mux)
 	s.registerStorageRoutes(mux)
+	s.registerI18nRoutes(mux)
 
 	// No catch-all is registered for the bare pattern "/api/" or "/":
 	// doing so with no method restriction would make it match every

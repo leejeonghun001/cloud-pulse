@@ -7,6 +7,13 @@ deliver to. Channels are managed via `GET/POST
 /api/v1/alerts/channels/{id}`, or from the dashboard's Settings →
 Notifications page.
 
+Notification message bodies (and chart titles, though not the chart
+image's own text — see [alerting.md](alerting.md#chart-images)) are
+rendered in the language set by the hub-wide `notify_language` setting
+(`en`/`ko`, default `en` — `GET/PUT /api/v1/settings/notify-language`,
+SPEC-v0.8 §3-3), independent of any signed-in admin's own dashboard
+language preference.
+
 ## Discord
 
 **Setup**: Server Settings → Integrations → Webhooks → New Webhook →

@@ -86,6 +86,12 @@ dashed red threshold line, a shaded band over the breach window, axis
 ticks, and a title like `HOSTNAME · CPU 93.4% > 90% for 5m`. Rendering
 is deterministic (covered by a golden-hash test).
 
+Chart text (axis labels, legends, titles) is always rendered in
+English, regardless of the hub's `notify_language` setting (SPEC-v0.8
+§3-3) — the renderer uses a fixed bitmap ASCII font with no Korean
+glyph coverage. Only the notification message body around the
+attached image is localized. See DECISIONS_LOG.md's chart-text entry.
+
 ## Default rules on upgrade
 
 Three enabled `egress_out_pct` rules are seeded on every hub (new or
