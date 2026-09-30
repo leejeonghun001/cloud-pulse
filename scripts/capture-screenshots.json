@@ -1,0 +1,191 @@
+[
+  {
+    "name": "overview",
+    "route": "#/",
+    "theme": "dark",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    }
+  },
+  {
+    "name": "overview-light",
+    "route": "#/",
+    "theme": "light",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    }
+  },
+  {
+    "name": "host-detail",
+    "route": "#/host/placeholder",
+    "resolveHostRoute": true,
+    "hostIdHint": "web",
+    "theme": "dark",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    }
+  },
+  {
+    "name": "alerts",
+    "route": "#/alerts",
+    "theme": "dark",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    }
+  },
+  {
+    "name": "notifications",
+    "route": "#/settings/notifications",
+    "theme": "dark",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    }
+  },
+  {
+    "name": "services",
+    "route": "#/host/placeholder",
+    "resolveHostRoute": true,
+    "hostIdHint": "web",
+    "theme": "dark",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "actions": [
+      {
+        "type": "eval",
+        "expression": "document.querySelector('.cp-services-card')?.scrollIntoView({block:'center'}) ?? true"
+      }
+    ]
+  },
+  {
+    "name": "costs",
+    "route": "#/costs",
+    "theme": "dark",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    }
+  },
+  {
+    "name": "updates",
+    "route": "#/updates",
+    "theme": "dark",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    }
+  },
+  {
+    "name": "diagnosis",
+    "route": "#/settings/notifications",
+    "theme": "dark",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "actions": [
+      {
+        "type": "eval",
+        "expression": "(() => { const b = Array.from(document.querySelectorAll('button')).find((x) => /edit/i.test(x.getAttribute('aria-label') || x.title || '')); b && b.click(); return !!b; })()",
+        "waitAfterMs": 1500
+      },
+      {
+        "type": "eval",
+        "expression": "(() => { const d = document.querySelector('dialog[open]'); const b = d && Array.from(d.querySelectorAll('button')).find((x) => x.textContent.includes('Send test')); b && b.click(); return !!b; })()",
+        "waitAfterMs": 4000
+      },
+      {
+        "type": "eval",
+        "expression": "(() => { const c = document.querySelector('dialog[open] .cp-diagnosis-card'); c && c.scrollIntoView({block: 'center'}); return !!c; })()",
+        "waitAfterMs": 600
+      }
+    ]
+  },
+  {
+    "name": "settings",
+    "route": "#/settings/network",
+    "theme": "dark",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    }
+  },
+  {
+    "name": "settings-storage",
+    "route": "#/settings/storage",
+    "theme": "dark",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    }
+  },
+  {
+    "name": "storage",
+    "route": "#/storage",
+    "theme": "dark",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    }
+  },
+  {
+    "name": "add-agent",
+    "route": "#/",
+    "theme": "dark",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "actions": [
+      {
+        "type": "click",
+        "selector": ".cp-navbar-primary-btn",
+        "waitAfterMs": 800
+      }
+    ]
+  },
+  {
+    "name": "login",
+    "route": "#/login",
+    "theme": "dark",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    }
+  },
+  {
+    "name": "mobile",
+    "route": "#/",
+    "theme": "dark",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    }
+  },
+  {
+    "name": "mobile-overview",
+    "route": "#/",
+    "theme": "dark",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    }
+  },
+  {
+    "name": "mobile-host",
+    "route": "#/host/placeholder",
+    "resolveHostRoute": true,
+    "hostIdHint": "web",
+    "theme": "dark",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    }
+  }
+]

@@ -355,6 +355,70 @@ def build_samples(host: DemoHost, now: int) -> list[dict]:
     return samples
 
 
+def build_single_sample(host: DemoHost, ts: int, t_offset: int, rng: random.Random) -> dict:
+    """Builds exactly one realistic sample for `host` at timestamp `ts`,
+    using the same sine+noise shaping as build_samples but for a single
+    point in time (t_offset is the elapsed seconds used to phase the
+    sine waves, so consecutive keepalive calls continue the same curve
+    rather than restarting it each time). Factored out of build_samples
+    so --live keepalive mode (run_live_keepalive below) can post one
+    fresh, realistic sample per host per tick without regenerating (and
+    re-posting) a full 2h history every tick."""
+    phase = t_offset / 900.0
+    cpu = host.cpu_base + host.cpu_amp * (0.5 + 0.5 * math.sin(phase)) + rng.uniform(-3, 3)
+    cpu = max(0.5, min(99.0, cpu))
+
+    mem_used_pct = 40 + 20 * (0.5 + 0.5 * math.sin(phase + 1.0)) + rng.uniform(-2, 2)
+    mem_used_pct = max(5.0, min(95.0, mem_used_pct))
+    mem_used = int(host.mem_total * mem_used_pct / 100)
+    mem_available = host.mem_total - mem_used
+
+    disk_used_pct = 30 + 10 * (0.5 + 0.5 * math.sin(phase * 0.3)) + rng.uniform(-1, 1)
+    disk_used_pct = max(1.0, min(97.0, disk_used_pct))
+    disk_used = int(host.disk_total * disk_used_pct / 100)
+
+    net_rx_bps = max(0.0, 20_000 + rng.uniform(-5000, 5000))
+    net_tx_bps = max(0.0, 15_000 + rng.uniform(-5000, 5000))
+    disk_read_bps = max(0.0, 50_000 + 40_000 * math.sin(phase * 0.7) + rng.uniform(-5000, 5000))
+    disk_write_bps = max(0.0, 30_000 + 25_000 * math.sin(phase * 0.5 + 1) + rng.uniform(-3000, 3000))
+    load1 = max(0.01, cpu / 100 * host.cpu_cores + rng.uniform(-0.2, 0.2))
+
+    return {
+        "ts": ts,
+        "cpu_percent": round(cpu, 2),
+        "load1": round(load1, 2),
+        "load5": round(load1 * 0.9, 2),
+        "load15": round(load1 * 0.8, 2),
+        "mem_total": host.mem_total,
+        "mem_available": mem_available,
+        "mem_used": mem_used,
+        "mem_used_percent": round(mem_used_pct, 2),
+        "mem_cached": int(host.mem_total * 0.1),
+        "swap_total": 0,
+        "swap_used": 0,
+        "disk_total": host.disk_total,
+        "disk_used": disk_used,
+        "disk_used_percent": round(disk_used_pct, 2),
+        "disks": [
+            {
+                "mountpoint": "/",
+                "device": "/dev/root",
+                "fstype": "ext4",
+                "total_bytes": host.disk_total,
+                "used_bytes": disk_used,
+                "used_percent": round(disk_used_pct, 2),
+            }
+        ],
+        "disk_read_bps": round(disk_read_bps, 2),
+        "disk_write_bps": round(disk_write_bps, 2),
+        "net_rx_bps": round(net_rx_bps, 2),
+        "net_tx_bps": round(net_tx_bps, 2),
+        "net_rx_bytes": int(net_rx_bps * SAMPLE_INTERVAL_SECONDS),
+        "net_tx_bytes": int(net_tx_bps * SAMPLE_INTERVAL_SECONDS),
+        "uptime_seconds": HISTORY_SECONDS + t_offset + 86400,
+    }
+
+
 def post_report(hub_url: str, token: str, host: DemoHost, samples: list[dict], timeout: float = 10.0) -> None:
     report_host = {
         "id": host.host_id,
@@ -484,6 +548,47 @@ def seed_hub(hub_url: str, token: str, db_path: Path | None = None, ui_token: st
                 "time, so a freshly seeded 'down' host will show as 'up' "
                 "until CP_OFFLINE_AFTER (default 60s) elapses."
             )
+
+
+def run_live_keepalive(hub_url: str, token: str, duration_seconds: float, interval_seconds: float = 5.0) -> None:
+    """Keeps every non-`down` demo host reporting as "up" for
+    `duration_seconds`, by posting one fresh, single-timestamp sample per
+    up host every `interval_seconds` (default 5s — comfortably under the
+    hub's CP_OFFLINE_AFTER default of 60s). Hosts with `down=True` in
+    DEMO_HOSTS (see the fleet definition above) are deliberately never
+    posted to here, so they stay/become offline for realism — matching
+    the same intentional-offline set used by seed_hub's down_host_ids.
+
+    Intended to run alongside (immediately after) a `seed_hub` call and
+    for the duration of a screenshot capture run: start this in the
+    background, run scripts/capture-screenshots.mjs, then let this
+    function's deadline expire (or stop the process) once captures are
+    done. Uses only stdlib (urllib), matching the rest of this script.
+    """
+    up_hosts = [h for h in DEMO_HOSTS if not h.down]
+    if not up_hosts:
+        print("==> run_live_keepalive: no non-down demo hosts to keep alive; nothing to do")
+        return
+
+    print(
+        f"==> live keepalive: posting fresh samples for {len(up_hosts)} up host(s) "
+        f"every {interval_seconds:.0f}s for {duration_seconds:.0f}s "
+        f"({len(DEMO_HOSTS) - len(up_hosts)} host(s) intentionally left offline)"
+    )
+    rng_by_host = {h.host_id: random.Random(h.seed) for h in up_hosts}
+    deadline = time.monotonic() + duration_seconds
+    tick = 0
+    while time.monotonic() < deadline:
+        now = int(time.time())
+        for host in up_hosts:
+            sample = build_single_sample(host, now, HISTORY_SECONDS + tick * int(interval_seconds), rng_by_host[host.host_id])
+            post_report(hub_url, token, host, [sample])
+        tick += 1
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(interval_seconds, remaining))
+    print(f"==> live keepalive: complete ({tick} tick(s) posted)")
 
 
 def backdate_last_seen(db_path: Path, host_ids: list[str], now: int) -> None:
@@ -633,6 +738,20 @@ def main(argv: list[str]) -> int:
             "have real data to show."
         ),
     )
+    parser.add_argument(
+        "--live",
+        metavar="SECONDS",
+        type=float,
+        default=None,
+        help=(
+            "After the initial seed (and optional --db backdating), block for "
+            "SECONDS posting a fresh sample for every non-down demo host every "
+            "5s (see run_live_keepalive) so the fleet stays reporting 'up' for "
+            "the duration — e.g. for the length of a screenshot capture run. "
+            "Hosts with down=True in DEMO_HOSTS are still left offline for "
+            "realism. Requires --hub and --token."
+        ),
+    )
     args = parser.parse_args(argv)
 
     print(DEMO_BANNER)
@@ -643,6 +762,9 @@ def main(argv: list[str]) -> int:
     if args.ui_token and not args.hub:
         parser.error("--ui-token requires --hub")
 
+    if args.live is not None and not args.hub:
+        parser.error("--live requires --hub (with --token)")
+
     if args.hub:
         if not args.token:
             parser.error("--token is required when --hub is given")
@@ -650,6 +772,9 @@ def main(argv: list[str]) -> int:
 
     if args.db:
         seed_db(args.db)
+
+    if args.live is not None:
+        run_live_keepalive(args.hub, args.token, args.live)
 
     return 0
 
