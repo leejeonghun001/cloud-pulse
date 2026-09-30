@@ -249,18 +249,21 @@ func (w *deliveryWorker) run() {
 func (w *deliveryWorker) deliver(job deliveryJob) {
 	sender, err := w.resolveSender(job.channel)
 	if err != nil {
-		w.recordDelivery(job, err)
+		w.recordDelivery(job, err, 0)
 		return
 	}
 
 	backoff := baseRetryBackoff
 	var lastErr error
+	var lastDuration time.Duration
 	for attempt := 1; attempt <= maxDeliveryAttempts; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), w.timeout)
+		start := w.clock()
 		err := sender.Send(ctx, job.message)
+		lastDuration = w.clock().Sub(start)
 		cancel()
 		if err == nil {
-			w.recordDelivery(job, nil)
+			w.recordDelivery(job, nil, lastDuration)
 			return
 		}
 		lastErr = err
@@ -279,13 +282,13 @@ func (w *deliveryWorker) deliver(job deliveryJob) {
 		case <-w.closed:
 			// Engine is shutting down; abandon remaining retries rather
 			// than blocking Close indefinitely.
-			w.recordDelivery(job, lastErr)
+			w.recordDelivery(job, lastErr, lastDuration)
 			return
 		}
 		backoff *= 2
 	}
 
-	w.recordDelivery(job, lastErr)
+	w.recordDelivery(job, lastErr, lastDuration)
 }
 
 // resolveSender constructs a Sender for ch via w.sender, mapping a nil
@@ -308,16 +311,20 @@ func (w *deliveryWorker) resolveSender(ch models.NotifyChannel) (Sender, error) 
 // persists the updated event. A nil sendErr records a successful
 // delivery; a non-nil sendErr's message is recorded on Delivery.Error
 // and, when w.diagnose is configured, classified into
-// Delivery.Diagnosis (see Options.Diagnose). Errors from the store are
-// logged (there is nothing further to do: this already ran on the
-// async delivery path, no request is waiting on it).
-func (w *deliveryWorker) recordDelivery(job deliveryJob, sendErr error) {
+// Delivery.Diagnosis (see Options.Diagnose). duration is the final send
+// attempt's wall-clock time, recorded as Delivery.DurationMS (SPEC-v0.8
+// §3-2's channel health latency figures) regardless of outcome. Errors
+// from the store are logged (there is nothing further to do: this
+// already ran on the async delivery path, no request is waiting on
+// it).
+func (w *deliveryWorker) recordDelivery(job deliveryJob, sendErr error, duration time.Duration) {
 	ok := sendErr == nil
 	d := models.Delivery{
 		ChannelID:   job.channel.ID,
 		ChannelName: job.channel.Name,
 		OK:          ok,
 		At:          w.clock().Unix(),
+		DurationMS:  duration.Milliseconds(),
 	}
 	if !ok {
 		d.Error = sendErr.Error()

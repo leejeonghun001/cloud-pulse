@@ -185,6 +185,13 @@ type Delivery struct {
 	// and returned via GET /api/v1/alerts/events.
 	Diagnosis *DiagnosisCode `json:"diagnosis,omitempty"`
 	At        int64          `json:"at"`
+	// DurationMS is how long the final send attempt (the one whose
+	// outcome this Delivery records) took, in milliseconds. Added in
+	// v0.8 (SPEC-v0.8 §3-2) for the channel health report's avg/max
+	// latency figures; 0 on a Delivery recorded by a pre-v0.8 build
+	// (never backfilled) — readers must treat 0 as "unknown", not "0ms
+	// latency observed."
+	DurationMS int64 `json:"duration_ms,omitempty"`
 }
 
 // AlertEvent is one firing/resolved occurrence of an AlertRule against a

@@ -101,6 +101,34 @@ CREATE INDEX idx_channel_synthetic_results_channel_started
 -- alerting needs one beyond the existing alert_rules state machine)
 -- below this line, inside this section.
 
+CREATE TABLE channel_failure_incidents (
+    channel_id     INTEGER PRIMARY KEY,
+    opened_at      INTEGER NOT NULL,
+    notified_at    INTEGER NOT NULL DEFAULT 0,
+    fallback_channel_id INTEGER,
+    recovered_at   INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (channel_id) REFERENCES notify_channels (id) ON DELETE CASCADE
+) WITHOUT ROWID;
+
+-- One row per channel currently in (or most recently in) a "failing"
+-- incident, used to de-duplicate the "channel X is failing" fallback
+-- notification (SPEC-v0.8 §3-2: "once per incident") — a channel
+-- entering ChannelFailing opens a row here (or reuses its existing
+-- open one) and the fallback notifier sends at most once per open
+-- incident, tracked by notified_at (0 = not yet sent, e.g. because no
+-- healthy fallback channel existed at the time — see
+-- ChannelHealthReport.BannerNeeded for that case). fallback_channel_id
+-- records which channel actually carried the notification (nullable:
+-- absent when the banner-only path was taken). recovered_at is set
+-- (and, per SPEC-v0.8 §3-2's optional recovery message, may trigger a
+-- second notification through the same fallback channel) once the
+-- channel's health state returns to healthy/degraded; a row with
+-- recovered_at != 0 is a closed incident kept for history rather than
+-- deleted, so re-entering ChannelFailing later is unambiguously a new
+-- incident rather than a resurrected old one — callers distinguish
+-- "still the same open incident" from "a new incident" by checking
+-- recovered_at == 0, not by row presence alone.
+
 -- ==== 3-3 i18n ====
 --
 --
