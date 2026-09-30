@@ -225,7 +225,7 @@ func buildMessage(rule models.AlertRule, ev models.AlertEvent, severity Severity
 func metricUnit(metric models.AlertMetric) string {
 	switch metric {
 	case models.AlertMetricCPU, models.AlertMetricMemory, models.AlertMetricDisk,
-		models.AlertMetricEgressOutPct, models.AlertMetricEgressInPct:
+		models.AlertMetricEgressOutPct, models.AlertMetricEgressInPct, models.AlertMetricStorageUsagePct:
 		return "%"
 	default:
 		return ""

@@ -165,9 +165,9 @@ func (db *DB) CreateUpdateJob(ctx context.Context, j models.UpdateJob) (models.U
 		attempt = 1
 	}
 	res, err := db.sql.ExecContext(ctx, `
-		INSERT INTO update_jobs (batch_id, host_id, target, state, reason, error, created_at, updated_at, attempt)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, j.BatchID, j.HostID, j.Target, string(j.State), string(j.Reason), j.Error, now, now, attempt)
+		INSERT INTO update_jobs (batch_id, host_id, target, state, reason, error, created_at, updated_at, attempt, platform)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, j.BatchID, j.HostID, j.Target, string(j.State), string(j.Reason), j.Error, now, now, attempt, j.Platform)
 	if err != nil {
 		return models.UpdateJob{}, fmt.Errorf("storage: create update job: %w", err)
 	}
@@ -184,7 +184,7 @@ func (db *DB) CreateUpdateJob(ctx context.Context, j models.UpdateJob) (models.U
 // GetUpdateJob returns one job by id, or models.ErrNotFound.
 func (db *DB) GetUpdateJob(ctx context.Context, id int64) (models.UpdateJob, error) {
 	row := db.sql.QueryRowContext(ctx, `
-		SELECT id, batch_id, host_id, target, state, reason, error, created_at, updated_at, attempt
+		SELECT id, batch_id, host_id, target, state, reason, error, created_at, updated_at, attempt, platform
 		FROM update_jobs WHERE id = ?
 	`, id)
 	j, err := scanUpdateJob(row.Scan)
@@ -204,9 +204,9 @@ func (db *DB) UpdateUpdateJob(ctx context.Context, j models.UpdateJob) error {
 	now := time.Now().Unix()
 	res, err := db.sql.ExecContext(ctx, `
 		UPDATE update_jobs SET
-			batch_id = ?, host_id = ?, target = ?, state = ?, reason = ?, error = ?, updated_at = ?, attempt = ?
+			batch_id = ?, host_id = ?, target = ?, state = ?, reason = ?, error = ?, updated_at = ?, attempt = ?, platform = ?
 		WHERE id = ?
-	`, j.BatchID, j.HostID, j.Target, string(j.State), string(j.Reason), j.Error, now, j.Attempt, j.ID)
+	`, j.BatchID, j.HostID, j.Target, string(j.State), string(j.Reason), j.Error, now, j.Attempt, j.Platform, j.ID)
 	if err != nil {
 		return fmt.Errorf("storage: update update job: %w", err)
 	}
@@ -224,7 +224,7 @@ func (db *DB) UpdateUpdateJob(ctx context.Context, j models.UpdateJob) error {
 // batchID == "" matches any batch; state == "" matches any state.
 func (db *DB) ListUpdateJobs(ctx context.Context, batchID string, state models.UpdateJobState) ([]models.UpdateJob, error) {
 	query := `
-		SELECT id, batch_id, host_id, target, state, reason, error, created_at, updated_at, attempt
+		SELECT id, batch_id, host_id, target, state, reason, error, created_at, updated_at, attempt, platform
 		FROM update_jobs WHERE 1=1
 	`
 	args := make([]any, 0, 2)
@@ -262,7 +262,7 @@ func (db *DB) ListUpdateJobs(ctx context.Context, batchID string, state models.U
 // hostID (any state), or models.ErrNotFound if none exists.
 func (db *DB) GetLatestUpdateJobForHost(ctx context.Context, hostID string) (models.UpdateJob, error) {
 	row := db.sql.QueryRowContext(ctx, `
-		SELECT id, batch_id, host_id, target, state, reason, error, created_at, updated_at, attempt
+		SELECT id, batch_id, host_id, target, state, reason, error, created_at, updated_at, attempt, platform
 		FROM update_jobs WHERE host_id = ?
 		ORDER BY created_at DESC, id DESC LIMIT 1
 	`, hostID)
@@ -280,7 +280,7 @@ func scanUpdateJob(scan func(dest ...any) error) (models.UpdateJob, error) {
 	var j models.UpdateJob
 	var state, reason string
 	if err := scan(&j.ID, &j.BatchID, &j.HostID, &j.Target, &state, &reason, &j.Error,
-		&j.CreatedAt, &j.UpdatedAt, &j.Attempt); err != nil {
+		&j.CreatedAt, &j.UpdatedAt, &j.Attempt, &j.Platform); err != nil {
 		return models.UpdateJob{}, err
 	}
 	j.State = models.UpdateJobState(state)
