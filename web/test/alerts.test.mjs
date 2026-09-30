@@ -2,6 +2,9 @@
 // display metadata, human summary sentence, presets, form validation).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { setCatalogs, setLang } from "../assets/js/core/i18n.js";
 import {
   METRICS,
   OPERATORS,
@@ -22,6 +25,22 @@ import {
   durationSecFromParts,
   bestDurationParts,
 } from "../assets/js/core/alerts.js";
+
+globalThis.localStorage = (() => {
+  const store = new Map();
+  return {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  };
+})();
+
+const assetsDir = fileURLToPath(new URL("../assets/i18n/", import.meta.url));
+setCatalogs({
+  en: JSON.parse(readFileSync(`${assetsDir}en.json`, "utf-8")),
+  ko: JSON.parse(readFileSync(`${assetsDir}ko.json`, "utf-8")),
+});
+setLang("en");
 
 test("METRICS/OPERATORS cover every models enum value", () => {
   const values = METRICS.map((m) => m.value);
@@ -246,5 +265,17 @@ test("durationSecFromParts and bestDurationParts round-trip for even values", ()
   for (const seconds of [0, 30, 60, 300, 600, 3600, 7200]) {
     const parts = bestDurationParts(seconds);
     assert.equal(durationSecFromParts(parts.value, parts.unit), seconds);
+  }
+});
+
+test("ruleSummarySentence renders Korean text when lang is ko", () => {
+  setLang("ko");
+  try {
+    const rule = { metric: "cpu", host_id: "", operator: ">", threshold: 90, duration_sec: 300, channel_ids: [1] };
+    const sentence = ruleSummarySentence(rule, { channelNameByID: () => "Discord #ops" });
+    assert.equal(sentence, "모든 호스트의 CPU 사용률이 5분 동안 90% 초과이면 Discord #ops로 알립니다");
+    assert.equal(metricLabel("cpu"), "CPU 사용률");
+  } finally {
+    setLang("en");
   }
 });

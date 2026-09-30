@@ -1,7 +1,6 @@
 {
   "_comment": "scripts/i18n-lint.pending.json — files under web/assets/js/** not yet converted to t() (SPEC-v0.8 §3-3 / Part B rules). scripts/check-i18n.mjs does NOT fail on a hard-coded-string finding in a pending file, but DOES fail if a pending file has zero findings (forces removal once a file is actually converted — see check-i18n-lib.mjs's evaluatePendingPolicy). This initial list is every existing web/assets/js/** file that had at least one finding at the time the i18n scaffolding landed, EXCEPT the files converted as the reference example: main.js, pages/login.js, ui/shell.js (plus the newly-added pages/rollout.js, core/i18n.js, ui/language-select.js, which have no findings and are intentionally absent from both this list and the allow-list). Remove a file from this list in the same commit that converts it.",
   "files": [
-    "web/assets/js/core/alerts.js",
     "web/assets/js/core/updates.js",
     "web/assets/js/pages/alerts.js",
     "web/assets/js/pages/buckets.js",
