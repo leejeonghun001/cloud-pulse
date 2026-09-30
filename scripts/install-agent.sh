@@ -1420,6 +1420,11 @@ install_update_plist() {
   chmod 0755 "$UPDATE_RESULT_DIR"
 
   local tmp_plist="${TMP_DIR}/${CP_LAUNCHD_UPDATE_LABEL}.plist"
+  if [ "${CP_INSTALL_FORCE_SCRIPT_UNIT:-0}" != "1" ] && render_update_plist_via_binary "$tmp_plist"; then
+    install -m 0644 "$tmp_plist" "$UPDATE_PLIST_PATH"
+    log "rendered ${UPDATE_PLIST_PATH} via '${BIN_PATH} plist update-print'"
+    return
+  fi
   local label bin_path env_file request_file result_dir update_log_path
   label="$(xml_escape "$CP_LAUNCHD_UPDATE_LABEL")"
   bin_path="$(xml_escape "$BIN_PATH")"
@@ -1462,6 +1467,19 @@ install_update_plist() {
 
 # install_update_units_fallback — bash heredoc fallback kept
 # byte-identical to internal/systemdunit.RenderUpdatePath/
+
+# render_update_plist_via_binary OUT_PATH renders the privileged launchd
+# helper from the Go source of truth. The caller retains the fallback heredoc
+# for older pinned binaries and for a deliberate script-only drift test.
+render_update_plist_via_binary() {
+  local out_path="$1"
+  if [ ! -x "$BIN_PATH" ]; then
+    return 1
+  fi
+  run_with_timeout 10 "$BIN_PATH" plist update-print --bin-path "$BIN_PATH" --env-file "$ENV_FILE" \
+    --request-path "$UPDATE_REQUEST_FILE" --result-dir "$UPDATE_RESULT_DIR" \
+    --log-path "$UPDATE_LOG_PATH" >"$out_path" 2>/dev/null
+}
 # RenderUpdateService's output (see the golden test in
 # internal/systemdunit/updateunit_test.go and the drift test in
 # test-install.sh).

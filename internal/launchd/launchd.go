@@ -30,6 +30,8 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"github.com/leejeonghun001/cloud-pulse/internal/updatepaths"
 )
 
 // Label is the fixed launchd job label cloud-pulse-agent installs
@@ -78,6 +80,78 @@ func (p Params) userNameOrDefault() string {
 	return p.UserName
 }
 
+// UpdateLabel and UpdatePlistPath identify the privileged launchd helper.
+const (
+	UpdateLabel     = "com.cloudpulse.agent-update"
+	UpdatePlistPath = "/Library/LaunchDaemons/" + UpdateLabel + ".plist"
+)
+
+// UpdateParams configures the launchd helper that watches a request file and
+// invokes the agent's request-mode updater as root.
+type UpdateParams struct {
+	BinPath     string
+	EnvFile     string
+	RequestPath string
+	ResultDir   string
+	LogPath     string
+}
+
+// RenderUpdate renders the macOS remote-update helper plist. RequestPath and
+// ResultDir default only through updatepaths; callers normally pass the
+// canonical Darwin values explicitly so sandbox paths remain possible.
+func RenderUpdate(p UpdateParams) (string, error) {
+	if p.RequestPath == "" || p.ResultDir == "" {
+		paths, _ := updatepaths.For("darwin")
+		if p.RequestPath == "" {
+			p.RequestPath = paths.RequestPath
+		}
+		if p.ResultDir == "" {
+			p.ResultDir = paths.ResultDir
+		}
+	}
+	if p.LogPath == "" {
+		p.LogPath = "/Library/Logs/cloud-pulse-agent-update.log"
+	}
+	for _, field := range []struct{ name, value string }{
+		{"bin-path", p.BinPath}, {"env-file", p.EnvFile}, {"log-path", p.LogPath},
+	} {
+		if err := validatePathValue(field.name, field.value); err != nil {
+			return "", fmt.Errorf("launchd: render update: %w", err)
+		}
+	}
+	for _, field := range []struct{ name, value string }{
+		{"request-path", p.RequestPath}, {"result-dir", p.ResultDir},
+	} {
+		if err := validateUpdatePathValue(field.name, field.value); err != nil {
+			return "", fmt.Errorf("launchd: render update: %w", err)
+		}
+	}
+
+	var b strings.Builder
+	writeLine(&b, `<?xml version="1.0" encoding="UTF-8"?>`)
+	writeLine(&b, `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">`)
+	writeLine(&b, `<plist version="1.0">`)
+	writeLine(&b, `<dict>`)
+	writeLine(&b, `    <key>Label</key>`)
+	writeLine(&b, `    <string>`+UpdateLabel+`</string>`)
+	writeLine(&b, `    <key>ProgramArguments</key>`)
+	writeLine(&b, `    <array>`)
+	for _, arg := range []string{p.BinPath, "update", "--env-file", p.EnvFile, "--from-request", p.RequestPath, "--result-dir", p.ResultDir} {
+		writeLine(&b, `        <string>`+xmlEscape(arg)+`</string>`)
+	}
+	writeLine(&b, `    </array>`)
+	writeLine(&b, `    <key>WatchPaths</key>`)
+	writeLine(&b, `    <array>`)
+	writeLine(&b, `        <string>`+xmlEscape(p.RequestPath)+`</string>`)
+	writeLine(&b, `    </array>`)
+	writeLine(&b, `    <key>StandardOutPath</key>`)
+	writeLine(&b, `    <string>`+xmlEscape(p.LogPath)+`</string>`)
+	writeLine(&b, `    <key>StandardErrorPath</key>`)
+	writeLine(&b, `    <string>`+xmlEscape(p.LogPath)+`</string>`)
+	writeLine(&b, `</dict>`)
+	writeLine(&b, `</plist>`)
+	return b.String(), nil
+}
 func (p Params) logPathOrDefault() string {
 	if p.LogPath == "" {
 		return DefaultLogPath
@@ -121,6 +195,24 @@ func validatePathValue(name, value string) error {
 			return fmt.Errorf("%s %q must not contain control characters", name, value)
 		case r == ' ' || r == '\t':
 			return fmt.Errorf("%s %q must not contain whitespace", name, value)
+		case r == '"' || r == '\'':
+			return fmt.Errorf("%s %q must not contain quote characters", name, value)
+		}
+	}
+	return nil
+}
+
+// validateUpdatePathValue accepts spaces required by macOS's documented
+// "/Library/Application Support" paths while retaining the control-character
+// and quote rejection that protects plist argument rendering.
+func validateUpdatePathValue(name, value string) error {
+	if !path.IsAbs(value) {
+		return fmt.Errorf("%s %q must be an absolute path", name, value)
+	}
+	for _, r := range value {
+		switch {
+		case r < 0x20 || r == 0x7f:
+			return fmt.Errorf("%s %q must not contain control characters", name, value)
 		case r == '"' || r == '\'':
 			return fmt.Errorf("%s %q must not contain quote characters", name, value)
 		}

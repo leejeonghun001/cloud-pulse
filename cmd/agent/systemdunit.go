@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/leejeonghun001/cloud-pulse/internal/systemdunit"
+	"github.com/leejeonghun001/cloud-pulse/internal/updatepaths"
 )
 
 // systemdUnitApplyTimeout bounds `systemd-unit apply`, including its
@@ -21,13 +22,15 @@ const systemdUnitApplyTimeout = 60 * time.Second
 // installs to on a real (non-sandboxed) install.
 const defaultAgentUnitPath = "/etc/systemd/system/cloud-pulse-agent.service"
 
-// defaultRequestPath and defaultResultDir are the fixed SPEC-v0.6 §2
-// paths the remote-update .path/.service units are always rendered
-// against on a real (non-sandboxed) install.
-const (
-	defaultRequestPath = "/var/lib/cloud-pulse-agent/update-request.json"
-	defaultResultDir   = "/var/lib/cloud-pulse-agent-update"
-)
+func defaultLinuxRequestPath() string {
+	paths, _ := updatepaths.For("linux")
+	return paths.RequestPath
+}
+
+func defaultLinuxResultDir() string {
+	paths, _ := updatepaths.For("linux")
+	return paths.ResultDir
+}
 
 // defaultUpdatePathUnitPath and defaultUpdateServiceUnitPath are the
 // systemd unit paths for the two additional remote-update units
@@ -120,8 +123,8 @@ func runSystemdUnitApply(args []string) int {
 	unitPath := fs.String("unit-path", defaultAgentUnitPath, "path to the installed systemd unit file")
 	updatePathUnitPath := fs.String("update-path-unit-path", defaultUpdatePathUnitPath, "path to the remote-update .path unit file")
 	updateServiceUnitPath := fs.String("update-service-unit-path", defaultUpdateServiceUnitPath, "path to the remote-update .service unit file")
-	requestPath := fs.String("request-path", defaultRequestPath, "request file path the remote-update .path unit watches")
-	resultDir := fs.String("result-dir", defaultResultDir, "root-owned result directory the remote-update .service unit writes into")
+	requestPath := fs.String("request-path", defaultLinuxRequestPath(), "request file path the remote-update .path unit watches")
+	resultDir := fs.String("result-dir", defaultLinuxResultDir(), "root-owned result directory the remote-update .service unit writes into")
 	noReload := fs.Bool("no-reload", false, "skip systemctl daemon-reload even if a unit changed")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: cloud-pulse-agent systemd-unit apply [--unit-path /etc/systemd/system/cloud-pulse-agent.service] [--no-reload]")

@@ -32,23 +32,15 @@ import (
 	"runtime"
 
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
+	"github.com/leejeonghun001/cloud-pulse/internal/updatepaths"
 )
 
-const defaultRequestStateDir = "/var/lib/cloud-pulse-agent"
-
-// RequestFileName is the file the agent atomically writes inside
-// RequestStateDir, watched by the cloud-pulse-agent-update.path systemd
-// unit.
-const RequestFileName = "update-request.json"
-
-// defaultResultDir is the root-owned directory `cloud-pulse-agent update
-// --from-request` writes its outcome to (SPEC-v0.6 §2 step 4: "root
-// 소유 디렉터리 ... 에이전트가 쓸 수 없는 위치라 symlink 공격을 차단").
-const defaultResultDir = "/var/lib/cloud-pulse-agent-update"
-
-// ResultFileName is the result file inside ResultDir that the agent
-// process reads back on a subsequent report cycle.
-const ResultFileName = "result.json"
+// RequestFileName and ResultFileName are retained as agent package aliases
+// for callers/tests; internal/updatepaths is their cross-platform source.
+const (
+	RequestFileName = updatepaths.RequestFileName
+	ResultFileName  = updatepaths.ResultFileName
+)
 
 // maxRequestFileBytes/maxResultFileBytes bound how much of a
 // request/result file this package will ever read, defense-in-depth
@@ -67,42 +59,108 @@ const (
 // documented here for reference by both sides.
 const requestFilePerm = 0o644
 
-// resolveRemoteUpdateCapability reports this agent's remote-update
-// support/opt-in for HostInfo.RemoteUpdate (SPEC-v0.6 §2). Support is
-// restricted to Linux with systemd actually present as the running init
-// system (probed via the presence of /run/systemd/system, the standard
-// detection method systemd itself documents — see systemd's own
-// sd_booted(3)); a Linux host running a different init system (e.g. a
-// minimal container, sysvinit, OpenRC) correctly reports Supported=false
-// with reason "unsupported" rather than optimistically claiming support
-// it cannot actually deliver on. optedIn mirrors the agent's own
-// CP_REMOTE_UPDATE setting (config.Agent.RemoteUpdate) — the hub can
-// never turn this on remotely, only reflect what the agent itself
-// reports.
-func resolveRemoteUpdateCapability(optedIn bool) models.RemoteUpdateCapability {
-	if !systemdPresent() {
-		return models.RemoteUpdateCapability{Supported: false, Reason: models.UpdateReasonUnsupported}
-	}
-	if !optedIn {
-		return models.RemoteUpdateCapability{Supported: true, OptedIn: false, Reason: models.UpdateReasonNotEnabled}
-	}
-	return models.RemoteUpdateCapability{Supported: true, OptedIn: true}
+// capabilityProbe isolates operating-system state so capability behavior is
+// deterministic in tests and never relies on an environment variable posing
+// as the running OS.
+type capabilityProbe struct {
+	goos             string
+	statDir          func(string) (os.FileInfo, error)
+	isWindowsService func() bool
+	writableDir      func(string) bool
 }
 
-// systemdPresent reports whether this host is Linux with systemd as its
-// running init system: runtime.GOOS is "linux" and /run/systemd/system
-// exists (a directory systemd itself creates and documents as the
-// standard "is systemd running" check — see systemd's sd_booted(3) and
-// systemd.exec(5)). A stat error (including "not found") is treated as
-// "systemd not present" rather than propagated, since this function
-// has no error return and a probe failure should degrade to
-// Supported=false, not panic or block agent startup.
+func defaultCapabilityProbe() capabilityProbe {
+	return capabilityProbe{
+		goos:             runtime.GOOS,
+		statDir:          os.Stat,
+		isWindowsService: IsWindowsService,
+		writableDir:      directoryWritable,
+	}
+}
+
+// resolveRemoteUpdateCapability reports whether this host has an installed
+// privileged update mechanism. Platform is always populated, including for
+// unsupported operating systems, so the hub never has to infer it from a
+// legacy host field.
+func resolveRemoteUpdateCapability(optedIn bool) models.RemoteUpdateCapability {
+	return resolveRemoteUpdateCapabilityWithProbe(optedIn, defaultCapabilityProbe())
+}
+
+func resolveRemoteUpdateCapabilityWithProbe(optedIn bool, probe capabilityProbe) models.RemoteUpdateCapability {
+	platform := probe.goos
+	if platform == "" {
+		platform = runtime.GOOS
+	}
+	if probe.statDir == nil {
+		probe.statDir = os.Stat
+	}
+	if probe.isWindowsService == nil {
+		probe.isWindowsService = IsWindowsService
+	}
+	if probe.writableDir == nil {
+		probe.writableDir = directoryWritable
+	}
+
+	paths, supportedPlatform := updatepaths.For(platform)
+	supported := supportedPlatform && remoteUpdateMechanismPresent(platform, paths, probe)
+	if !supported {
+		return models.RemoteUpdateCapability{Platform: platform, Supported: false, Reason: models.UpdateReasonUnsupported}
+	}
+	if !optedIn {
+		return models.RemoteUpdateCapability{Platform: platform, Supported: true, OptedIn: false, Reason: models.UpdateReasonNotEnabled}
+	}
+	return models.RemoteUpdateCapability{Platform: platform, Supported: true, OptedIn: true}
+}
+
+func remoteUpdateMechanismPresent(goos string, paths updatepaths.Paths, probe capabilityProbe) bool {
+	switch goos {
+	case "linux":
+		return probeDirectory(probe.statDir, "/run/systemd/system")
+	case "darwin":
+		return probeDirectory(probe.statDir, "/Library/LaunchDaemons/com.cloudpulse.agent-update.plist") &&
+			probeDirectory(probe.statDir, paths.RequestDir)
+	case "windows":
+		// The virtual service account can write the request directory but does
+		// not reliably have SCM permissions to query the LocalSystem updater.
+		// A running main service plus an existing writable request directory is
+		// therefore the least-privileged evidence that the installed updater
+		// mechanism can consume a request.
+		return probe.isWindowsService() && probeDirectory(probe.statDir, paths.RequestDir) && probe.writableDir(paths.RequestDir)
+	default:
+		return false
+	}
+}
+
+func probeDirectory(statDir func(string) (os.FileInfo, error), dir string) bool {
+	info, err := statDir(dir)
+	return err == nil && info.IsDir()
+}
+
+// directoryWritable verifies that the unprivileged agent can create the
+// request file on Windows. It creates and immediately removes an exclusive
+// zero-byte probe, which also respects ACLs unlike permission-bit inspection.
+func directoryWritable(dir string) bool {
+	probe := filepath.Join(dir, ".cloud-pulse-agent-write-probe")
+	f, err := os.OpenFile(probe, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return false
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(probe)
+		return false
+	}
+	if err := os.Remove(probe); err != nil {
+		return false
+	}
+	return true
+}
+
+// systemdPresent remains available for platform-specific callers and tests.
 func systemdPresent() bool {
 	if runtime.GOOS != "linux" {
 		return false
 	}
-	info, err := os.Stat("/run/systemd/system")
-	return err == nil && info.IsDir()
+	return remoteUpdateMechanismPresent("linux", updatepaths.Paths{}, defaultCapabilityProbe())
 }
 
 // requestFile is the strict on-disk schema for update-request.json,
@@ -130,7 +188,36 @@ type requestFile struct {
 // the next report will simply re-deliver the same UpdateRequest since
 // the hub has not yet seen an ack.
 func handleUpdateRequest(ctx context.Context, logger *slog.Logger, req *models.UpdateRequest) {
-	handleUpdateRequestAt(ctx, logger, req, defaultRequestStateDir)
+	paths, ok := updatepaths.For(runtime.GOOS)
+	if !ok {
+		loggerOrDiscard(logger).Warn("remote update request ignored on unsupported platform", "platform", runtime.GOOS)
+		return
+	}
+	handleUpdateRequestAt(ctx, logger, req, paths.RequestDir)
+}
+
+// WriteRemoteUpdateRequest writes req atomically to dir for a privileged
+// helper. It is used by platform integration tests and delegates to the same
+// production writer used after a hub response.
+func WriteRemoteUpdateRequest(dir string, req *models.UpdateRequest) error {
+	if req == nil {
+		return nil
+	}
+	return writeRequestFileAtomic(dir, requestFile{JobID: req.JobID, Target: req.Target})
+}
+
+// ReadRemoteUpdateStatus reads and consumes a result written by a privileged
+// helper in resultDir. It is the injected-directory counterpart of the
+// production report-loop reader.
+func ReadRemoteUpdateStatus(resultDir string) *models.AgentUpdateStatus {
+	return pendingUpdateStatusAt(context.Background(), nil, resultDir)
+}
+
+func loggerOrDiscard(logger *slog.Logger) *slog.Logger {
+	if logger == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return logger
 }
 
 func handleUpdateRequestAt(_ context.Context, logger *slog.Logger, req *models.UpdateRequest, stateDir string) {
@@ -213,7 +300,11 @@ func validResultState(s models.UpdateJobState) bool {
 // removal failure is logged but does not prevent the status from being
 // returned for this cycle.
 func pendingUpdateStatus(ctx context.Context, logger *slog.Logger) *models.AgentUpdateStatus {
-	return pendingUpdateStatusAt(ctx, logger, defaultResultDir)
+	paths, ok := updatepaths.For(runtime.GOOS)
+	if !ok {
+		return nil
+	}
+	return pendingUpdateStatusAt(ctx, logger, paths.ResultDir)
 }
 
 func pendingUpdateStatusAt(_ context.Context, logger *slog.Logger, resultDir string) *models.AgentUpdateStatus {

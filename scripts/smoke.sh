@@ -1134,7 +1134,10 @@ assert snaps['aws']['mtd_cost'] == 12.34, f\"aws mtd_cost {snaps['aws']['mtd_cos
 # assertion is date-aware rather than hardcoding the fake stub's
 # get-cost-forecast body, which is only actually invoked on any other
 # day of the month.
-is_last_day_of_month = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)).day == 1
+# CollectAWS receives the hub process's time.Now() value, whose calendar
+# fields use the process-local timezone. Mirror that rather than UTC: around
+# local midnight UTC can still be on the previous calendar day.
+is_last_day_of_month = (datetime.datetime.now().astimezone() + datetime.timedelta(days=1)).day == 1
 if is_last_day_of_month:
     assert snaps['aws']['forecast_cost'] == snaps['aws']['mtd_cost'], f\"aws forecast_cost {snaps['aws']['forecast_cost']!r} != mtd_cost {snaps['aws']['mtd_cost']!r} on the last day of the month\"
     assert snaps['aws']['forecast_method'] == 'linear', f\"aws forecast_method {snaps['aws']['forecast_method']!r} != 'linear' on the last day of the month\"

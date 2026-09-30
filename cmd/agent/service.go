@@ -17,16 +17,21 @@ import (
 	"github.com/leejeonghun001/cloud-pulse/internal/agent"
 	"github.com/leejeonghun001/cloud-pulse/internal/config"
 	"github.com/leejeonghun001/cloud-pulse/internal/selfupdate"
+	"github.com/leejeonghun001/cloud-pulse/internal/updatepaths"
 	"github.com/leejeonghun001/cloud-pulse/internal/version"
 )
 
-// defaultWindowsRequestDir/defaultWindowsResultDir are SPEC-v0.7 §1's
-// fixed Windows paths for the remote-update request/result files,
-// mirroring internal/agent.RequestStateDir/ResultDir's role on Linux.
-const (
-	defaultWindowsRequestDir = `C:\ProgramData\cloud-pulse-agent`
-	defaultWindowsResultDir  = `C:\ProgramData\cloud-pulse-agent-update`
-)
+// defaultWindowsRequestDir/defaultWindowsResultDir read the canonical
+// Windows remote-update paths from internal/updatepaths.
+func defaultWindowsRequestDir() string {
+	paths, _ := updatepaths.For("windows")
+	return paths.RequestDir
+}
+
+func defaultWindowsResultDir() string {
+	paths, _ := updatepaths.For("windows")
+	return paths.ResultDir
+}
 
 // runService is the entry point for `cloud-pulse-agent service ...`,
 // dispatched from main before any normal flag parsing or agent config
@@ -64,8 +69,8 @@ func runService(args []string) int {
 	fs.SetOutput(os.Stderr)
 	envFile := fs.String("env-file", "", "path to the KEY=VALUE env file the installed service should read (install, run-updater)")
 	binPath := fs.String("bin-path", "", "absolute path to the installed cloud-pulse-agent.exe (install only; default: this process's own path)")
-	requestDir := fs.String("request-dir", defaultWindowsRequestDir, "directory the run-updater service polls for update-request.json (run-updater only)")
-	resultDir := fs.String("result-dir", defaultWindowsResultDir, "root-owned-equivalent directory run-updater writes result.json into (run-updater only)")
+	requestDir := fs.String("request-dir", defaultWindowsRequestDir(), "directory the run-updater service polls for update-request.json (run-updater only)")
+	resultDir := fs.String("result-dir", defaultWindowsResultDir(), "root-owned-equivalent directory run-updater writes result.json into (run-updater only)")
 	logFile := fs.String("log-file", "", "append service diagnostics to this rotating log file (run-updater only)")
 	fs.Usage = func() { printServiceUsage(false) }
 	if err := fs.Parse(args[1:]); err != nil {
@@ -203,7 +208,7 @@ func runServiceRunUpdater(requestDir, resultDir, envFile, logFile string) int {
 		return 1
 	}
 
-	requestPath := filepath.Join(requestDir, "update-request.json")
+	requestPath := filepath.Join(requestDir, updatepaths.RequestFileName)
 	source, err := updateSourceFromEnvFile(envFile)
 	if err != nil {
 		logger.Error("load update source", "error", err)

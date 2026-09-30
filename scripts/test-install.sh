@@ -128,6 +128,15 @@ assert_perm() {
   fi
 }
 
+assert_eq() {
+  local desc="$1" want="$2" got="$3"
+  if [ "$got" = "$want" ]; then
+    pass "$desc"
+  else
+    fail "$desc (want '$want', got '$got')"
+  fi
+}
+
 assert_contains() {
   local desc="$1" haystack="$2" needle="$3"
   if [[ "$haystack" == *"$needle"* ]]; then
@@ -776,6 +785,10 @@ test_agent_darwin_sandbox_remote_update() {
 
   assert_file_exists "darwin update plist created" "$update_plist"
   assert_file_contains "darwin update plist has WatchPaths" "$update_plist" "WatchPaths"
+  local watch_value
+  watch_value="$(python3 -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],"rb"))["WatchPaths"][0])' "$update_plist" 2>/dev/null || true)"
+  assert_eq "darwin update plist WatchPaths is exactly the agent request file" \
+    "${sandbox}/Library/Application Support/cloud-pulse-agent/update-request.json" "$watch_value"
   assert_file_contains "darwin update plist passes its agent.env to update helper" "$update_plist" "--env-file"
   assert_file_contains "darwin update plist references --from-request" "$update_plist" "--from-request"
   assert_file_contains "darwin update plist records helper output" "$update_plist" "$updater_log"

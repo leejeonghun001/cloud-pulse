@@ -5,10 +5,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/leejeonghun001/cloud-pulse/internal/config"
 	"github.com/leejeonghun001/cloud-pulse/internal/selfupdate"
+	"github.com/leejeonghun001/cloud-pulse/internal/updatepaths"
 	"github.com/leejeonghun001/cloud-pulse/internal/version"
 )
 
@@ -21,10 +23,15 @@ const updateBinaryName = "cloud-pulse-agent"
 // resolution, download, checksum verification, replace, and restart.
 const updateTimeout = 10 * time.Minute
 
-// defaultRemoteUpdateResultDir is the root-owned result directory
-// `update --from-request` writes to when --result-dir is not given
-// (SPEC-v0.6 §2).
-const defaultRemoteUpdateResultDir = "/var/lib/cloud-pulse-agent-update"
+// defaultRemoteUpdateResultDir returns this host's privileged helper result
+// directory. Unsupported hosts retain the Linux legacy default only for a
+// clear CLI error path; request mode itself rejects unsupported hosts.
+func defaultRemoteUpdateResultDir() string {
+	if paths, ok := updatepaths.For(runtime.GOOS); ok {
+		return paths.ResultDir
+	}
+	return "/var/lib/cloud-pulse-agent-update"
+}
 
 // exitUpdateAvailable is returned by `update --check` when a newer
 // release exists, distinguishing "checked, found an update" from a
@@ -42,7 +49,7 @@ func runUpdate(args []string) int {
 	versionFlag := fs.String("version", "", "install this exact release tag instead of the latest (allows downgrade)")
 	noRestartFlag := fs.Bool("no-restart", false, "install the update but do not attempt to restart the service")
 	fromRequestFlag := fs.String("from-request", "", "read a hub-delivered update request file (SPEC-v0.6 §2) and apply it; incompatible with --check/--version/--no-restart")
-	resultDirFlag := fs.String("result-dir", defaultRemoteUpdateResultDir, "root-owned directory --from-request writes its result.json into")
+	resultDirFlag := fs.String("result-dir", defaultRemoteUpdateResultDir(), "root-owned directory --from-request writes its result.json into")
 	envFileFlag := fs.String("env-file", "", "read CP_UPDATE_LATEST_URL/CP_RELEASE_BASE_URL from this KEY=VALUE file")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: cloud-pulse-agent update [--check] [--version vX.Y.Z] [--no-restart]")

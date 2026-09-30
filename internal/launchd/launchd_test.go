@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/leejeonghun001/cloud-pulse/internal/updatepaths"
 )
 
 // goldenPlist is the exact expected output of Render for the default
@@ -54,6 +56,26 @@ func TestRender_Golden(t *testing.T) {
 	}
 	if got != goldenPlist {
 		t.Errorf("Render output mismatch.\n--- got ---\n%s\n--- want ---\n%s", got, goldenPlist)
+	}
+}
+
+func TestRenderUpdate_UsesCanonicalDarwinPaths(t *testing.T) {
+	t.Parallel()
+	paths, ok := updatepaths.For("darwin")
+	if !ok {
+		t.Fatal("darwin paths unexpectedly unsupported")
+	}
+	got, err := RenderUpdate(UpdateParams{
+		BinPath: "/usr/local/bin/cloud-pulse-agent", EnvFile: "/usr/local/etc/cloud-pulse/agent.env",
+		RequestPath: paths.RequestPath, ResultDir: paths.ResultDir, LogPath: "/Library/Logs/cloud-pulse-agent-update.log",
+	})
+	if err != nil {
+		t.Fatalf("RenderUpdate: %v", err)
+	}
+	for _, want := range []string{paths.RequestPath, paths.ResultDir, "<key>WatchPaths</key>", "--from-request", "--result-dir"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rendered helper plist missing %q:\n%s", want, got)
+		}
 	}
 }
 

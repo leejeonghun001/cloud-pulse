@@ -33,6 +33,8 @@ func runPlist(args []string) int {
 		return runPlistPrint(args[1:])
 	case "apply":
 		return runPlistApply(args[1:])
+	case "update-print":
+		return runPlistUpdatePrint(args[1:])
 	case "-h", "--help":
 		printPlistUsage(true)
 		return 0
@@ -71,6 +73,32 @@ func runPlistPrint(args []string) int {
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cloud-pulse-agent: plist print: %v\n", err)
+		return 1
+	}
+	fmt.Print(plist)
+	return 0
+}
+
+// runPlistUpdatePrint prints the privileged macOS remote-update helper plist.
+// install-agent.sh invokes it after downloading a current agent binary; its
+// fallback heredoc remains for legacy pinned installs.
+func runPlistUpdatePrint(args []string) int {
+	fs := flag.NewFlagSet("cloud-pulse-agent plist update-print", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	binPath := fs.String("bin-path", "", "absolute path to the installed cloud-pulse-agent binary (required)")
+	envFile := fs.String("env-file", "", "absolute path to the agent's KEY=VALUE env file (required)")
+	requestPath := fs.String("request-path", "", "absolute request file path (required)")
+	resultDir := fs.String("result-dir", "", "absolute privileged result directory (required)")
+	logPath := fs.String("log-path", "", "helper StandardOutPath/StandardErrorPath (required)")
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+	plist, err := launchd.RenderUpdate(launchd.UpdateParams{
+		BinPath: *binPath, EnvFile: *envFile, RequestPath: *requestPath,
+		ResultDir: *resultDir, LogPath: *logPath,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cloud-pulse-agent: plist update-print: %v\n", err)
 		return 1
 	}
 	fmt.Print(plist)

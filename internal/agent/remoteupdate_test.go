@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
 )
@@ -16,41 +17,59 @@ import (
 func TestResolveRemoteUpdateCapability(t *testing.T) {
 	t.Parallel()
 
-	optedIn := resolveRemoteUpdateCapability(true)
-	notOptedIn := resolveRemoteUpdateCapability(false)
+	dirInfo := fakeFileInfo{dir: true}
+	missing := func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
+	present := func(string) (os.FileInfo, error) { return dirInfo, nil }
 
-	if !systemdPresent() {
-		for _, rc := range []models.RemoteUpdateCapability{optedIn, notOptedIn} {
-			if rc.Supported {
-				t.Errorf("Supported = true without systemd, want false")
+	tests := []struct {
+		name, goos string
+		optedIn    bool
+		stat       func(string) (os.FileInfo, error)
+		service    bool
+		writable   bool
+		wantOK     bool
+		wantReason models.UpdateJobReason
+	}{
+		{"linux systemd", "linux", true, present, false, false, true, ""},
+		{"linux missing systemd", "linux", true, missing, false, false, false, models.UpdateReasonUnsupported},
+		{"darwin helper and directory", "darwin", true, present, false, false, true, ""},
+		{"darwin missing helper", "darwin", true, missing, false, false, false, models.UpdateReasonUnsupported},
+		{"windows service writable directory", "windows", true, present, true, true, true, ""},
+		{"windows interactive", "windows", true, present, false, true, false, models.UpdateReasonUnsupported},
+		{"windows unwritable directory", "windows", true, present, true, false, false, models.UpdateReasonUnsupported},
+		{"freebsd", "freebsd", true, present, false, false, false, models.UpdateReasonUnsupported},
+		{"enabled mechanism opted out", "darwin", false, present, false, false, true, models.UpdateReasonNotEnabled},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveRemoteUpdateCapabilityWithProbe(tc.optedIn, capabilityProbe{
+				goos: tc.goos, statDir: tc.stat,
+				isWindowsService: func() bool { return tc.service },
+				writableDir:      func(string) bool { return tc.writable },
+			})
+			if got.Platform != tc.goos || got.Supported != tc.wantOK || got.Reason != tc.wantReason {
+				t.Errorf("capability = %+v, want platform=%q supported=%v reason=%q", got, tc.goos, tc.wantOK, tc.wantReason)
 			}
-			if rc.Reason != models.UpdateReasonUnsupported {
-				t.Errorf("Reason = %q, want %q", rc.Reason, models.UpdateReasonUnsupported)
+			if got.OptedIn != (tc.wantOK && tc.optedIn) {
+				t.Errorf("OptedIn = %v, want %v", got.OptedIn, tc.wantOK && tc.optedIn)
 			}
-		}
-		return
-	}
-
-	if !optedIn.Supported {
-		t.Error("Supported = false with systemd present, want true")
-	}
-	if !optedIn.OptedIn {
-		t.Error("OptedIn = false for optedIn=true, want true")
-	}
-	if optedIn.Reason != "" {
-		t.Errorf("Reason = %q, want empty when supported and opted in", optedIn.Reason)
-	}
-
-	if !notOptedIn.Supported {
-		t.Error("Supported = false with systemd present, want true")
-	}
-	if notOptedIn.OptedIn {
-		t.Error("OptedIn = true for optedIn=false, want false")
-	}
-	if notOptedIn.Reason != models.UpdateReasonNotEnabled {
-		t.Errorf("Reason = %q, want %q", notOptedIn.Reason, models.UpdateReasonNotEnabled)
+		})
 	}
 }
+
+type fakeFileInfo struct{ dir bool }
+
+func (f fakeFileInfo) Name() string { return "fixture" }
+func (f fakeFileInfo) Size() int64  { return 0 }
+func (f fakeFileInfo) Mode() os.FileMode {
+	if f.dir {
+		return os.ModeDir | 0o755
+	}
+	return 0o644
+}
+func (f fakeFileInfo) ModTime() time.Time { return time.Time{} }
+func (f fakeFileInfo) IsDir() bool        { return f.dir }
+func (f fakeFileInfo) Sys() any           { return nil }
 
 func TestSystemdPresent_NonLinuxAlwaysFalse(t *testing.T) {
 	t.Parallel()
