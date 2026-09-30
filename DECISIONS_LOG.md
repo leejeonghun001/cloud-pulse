@@ -1435,3 +1435,54 @@ never rewrite history here, only add to it.
   session revisiting any of these six should treat this entry as the
   record of "why," not re-litigate the choice without new information
   changing the tradeoff.
+
+### D-083 — Hub upgrades are verified by a separate pre/post/rollback script, not by the updater itself (2026-10-01)
+
+- **Context**: operators upgrading a long-running hub (e.g. v0.3.2 →
+  v0.7.0) need evidence that data survived and the service really
+  restarted, plus a rehearsed way back. `cloud-pulse-hub update` already
+  verifies checksums and keeps a `.prev` binary, but it cannot judge
+  "the dashboard still shows my hosts".
+- **Decision**: `scripts/hub-upgrade-check.sh` with three modes.
+  `pre` takes a consistent SQLite backup (`sqlite3.backup()` +
+  `integrity_check`), copies the unit/env files and records row counts
+  and API smoke results in `pre.json`. `post --expect vX` compares
+  against `pre.json`, requires a changed MainPID/start timestamp, and
+  diffs the installed unit with `systemd-unit print`. `rollback` is a
+  dry run unless `--apply`; `--apply` without `--yes` asks on a TTY.
+  The script never prints token values, never runs the upgrade, and
+  takes `--root`/`--systemctl` so `scripts/test-hub-upgrade.sh` can run
+  the whole flow in a sandbox (CI job `hub-upgrade`).
+- **Rejected**: folding the checks into `update` (couples a dependency-
+  free Go binary to a Python-backed backup and to host-specific smoke
+  checks); snapshotting with `cp` of a live DB (not consistent under WAL).
+
+### D-084 — Pre-publish scanning: values never printed, personal markers never committed (2026-10-01)
+
+- **Context**: the repository is public. A scanner that embeds the
+  values it looks for (hostnames, addresses) publishes them itself, and
+  a report that echoes matches leaks them into CI logs.
+- **Decision**: `scripts/prepublish-check.py` scans the working tree
+  (tracked + untracked non-ignored files) and the full history. Output
+  shows only a rule id, location, a 4-character prefix, the length and
+  `sha256[:12]`. Machine-specific values come only from the gitignored
+  `.prepublish-markers.local` or `CP_PREPUBLISH_MARKERS`. Accepted
+  history findings live in `.prepublish-baseline.json`, keyed by
+  `sha256(rule_id\0commit\0path\0line)` so the baseline itself contains
+  nothing derived from a value. Regenerate it with markers set, or
+  marker-based history entries are dropped. Tree findings always fail;
+  history findings fail unless baselined (CI job `prepublish`).
+- **Rejected**: rewriting published history (clones already exist, so
+  a rewrite removes nothing from them and breaks every fork; left to the
+  repository owner).
+
+### D-085 — Screenshots are regenerated from demo data by a script, never captured from a real hub (2026-10-01)
+
+- **Context**: hand-captured screenshots leaked a hostname and
+  addresses. Re-capturing by hand also drifts from the current UI.
+- **Decision**: `scripts/capture-screenshots.mjs` drives Firefox
+  (WebDriver BiDi) against a throwaway hub seeded with `demo-seed.py
+  --live`, applies word-bounded marker substitution that never touches
+  protected identifiers (repository owner/name, Go module path), and
+  strips PNG metadata chunks. Shots are declared in
+  `scripts/capture-screenshots.json`.

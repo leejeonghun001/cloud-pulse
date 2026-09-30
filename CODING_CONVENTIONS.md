@@ -740,6 +740,22 @@ OS-specific by design.
   /dev/null ./pkg/` to confirm a test binary at least *compiles* for an
   OS you can't run tests on locally (e.g. windows/amd64 from Linux).
 
+## Public repository hygiene
+
+- The repository is public. Never commit a real hostname, IP address,
+  LAN prefix, absolute home path, or token — in code, fixtures,
+  comments, screenshots, or commit messages. Use documentation ranges
+  (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`, `2001:db8::/32`)
+  and placeholder names.
+- A synthetic literal that the scanner flags (for example a fixture
+  home path in a scanner test) carries `# allow-secret-scan: <reason>`
+  on the same line.
+- Run `python3 scripts/prepublish-check.py` before pushing; put this
+  machine's values in `.prepublish-markers.local` (gitignored, mode
+  0600) so they are checked without ever being committed.
+- Screenshots come only from `scripts/capture-screenshots.mjs` against
+  demo data (D-085).
+
 ## Git hooks setup
 
 Run `make hooks` once after cloning (equivalent to
