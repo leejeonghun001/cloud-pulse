@@ -148,7 +148,7 @@ export function buildNetworkConfigFromSelection({ allInterfaces, selectedAddress
 /**
  * describeNetworkConfig renders a NetworkConfig as a short human string
  * for the confirm dialog's diff, e.g. "All interfaces, port 8090,
- * allow: 100.64.0.0/10, 127.0.0.0/8" or "192.168.100.2, 127.0.0.1, port
+ * allow: 100.64.0.0/10, 127.0.0.0/8" or "198.51.100.2, 127.0.0.1, port
  * 8090, allow: *".
  * @param {{mode: string, addresses: string[], port: number, allowed_cidrs: string[]}} cfg
  * @returns {string}
@@ -190,7 +190,7 @@ export function diffNetworkConfig(previous, next) {
  * suggestionsForInterfaces collects de-duplicated {label, cidr} entries
  * for every non-link-local address across a NetInterface[] list, for
  * the allowlist "one-click suggestion" chips (e.g. "Allow
- * 192.168.100.0/24" per adapter). Loopback/link-local scoped addresses
+ * 198.51.100.0/24" per adapter). Loopback/link-local scoped addresses
  * are skipped (loopback is already covered by the default allowlist;
  * link-local addresses aren't meaningfully allowlist-able per-adapter).
  * @param {Array} interfaces models.NetInterface[]

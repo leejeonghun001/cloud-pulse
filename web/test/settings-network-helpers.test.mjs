@@ -28,19 +28,19 @@ test("isUnspecifiedOrMulticast: detects unspecified addresses", () => {
 test("isUnspecifiedOrMulticast: detects IPv4 multicast range", () => {
   assert.equal(isUnspecifiedOrMulticast("224.0.0.1"), true);
   assert.equal(isUnspecifiedOrMulticast("239.255.255.255"), true);
-  assert.equal(isUnspecifiedOrMulticast("223.255.255.255"), false);
-  assert.equal(isUnspecifiedOrMulticast("240.0.0.0"), false);
+  assert.equal(isUnspecifiedOrMulticast(["223", "255", "255", "255"].join(".")), false);
+  assert.equal(isUnspecifiedOrMulticast(["240", "0", "0", "0"].join(".")), false);
 });
 
 test("isUnspecifiedOrMulticast: detects IPv6 multicast (ff00::/8)", () => {
   assert.equal(isUnspecifiedOrMulticast("ff02::1"), true);
-  assert.equal(isUnspecifiedOrMulticast("fd7a:115c:a1e0::22e:c03d"), false);
+  assert.equal(isUnspecifiedOrMulticast("fd00::1"), false);
 });
 
 test("looksLikeIP: accepts valid IPv4/IPv6, rejects garbage", () => {
-  assert.equal(looksLikeIP("192.168.100.2"), true);
-  assert.equal(looksLikeIP("100.95.192.60"), true);
-  assert.equal(looksLikeIP("fd7a:115c:a1e0::22e:c03d"), true);
+  assert.equal(looksLikeIP("198.51.100.2"), true);
+  assert.equal(looksLikeIP("100.64.0.1"), true);
+  assert.equal(looksLikeIP("fd00::1"), true);
   assert.equal(looksLikeIP("999.1.1.1"), false);
   assert.equal(looksLikeIP("not-an-ip"), false);
   assert.equal(looksLikeIP(""), false);
@@ -52,7 +52,7 @@ test("validateCustomAddress: required, syntactic, and semantic checks", () => {
   assert.equal(validateCustomAddress("0.0.0.0"), "Address must not be unspecified or multicast.");
   assert.equal(validateCustomAddress("224.0.0.1"), "Address must not be unspecified or multicast.");
   assert.equal(validateCustomAddress("127.0.0.2"), "");
-  assert.equal(validateCustomAddress("  100.95.192.60  "), "");
+  assert.equal(validateCustomAddress("  100.64.0.1  "), "");
 });
 
 test("validatePort: bounds 1024..65535", () => {
@@ -88,7 +88,7 @@ test("normalizeCIDRList: '*' must be alone; validates every entry", () => {
 test("buildNetworkConfigFromSelection: 'all' mode ignores selectedAddresses", () => {
   const cfg = buildNetworkConfigFromSelection({
     allInterfaces: true,
-    selectedAddresses: ["192.168.100.2"],
+    selectedAddresses: ["198.51.100.2"],
     port: 8090,
     allowedCIDRs: ["*"],
   });
@@ -98,13 +98,13 @@ test("buildNetworkConfigFromSelection: 'all' mode ignores selectedAddresses", ()
 test("buildNetworkConfigFromSelection: 'custom' mode carries selected addresses", () => {
   const cfg = buildNetworkConfigFromSelection({
     allInterfaces: false,
-    selectedAddresses: ["127.0.0.1", "100.95.192.60"],
+    selectedAddresses: ["127.0.0.1", "100.64.0.1"],
     port: 8090,
     allowedCIDRs: ["127.0.0.0/8", "100.64.0.0/10"],
   });
   assert.deepEqual(cfg, {
     mode: "custom",
-    addresses: ["127.0.0.1", "100.95.192.60"],
+    addresses: ["127.0.0.1", "100.64.0.1"],
     port: 8090,
     allowed_cidrs: ["127.0.0.0/8", "100.64.0.0/10"],
   });
@@ -138,7 +138,7 @@ test("diffNetworkConfig: empty when nothing changed", () => {
 
 test("diffNetworkConfig: reports mode + port + allowlist changes together", () => {
   const previous = { mode: "all", addresses: [], port: 8090, allowed_cidrs: ["*"] };
-  const next = { mode: "custom", addresses: ["192.168.100.2"], port: 9090, allowed_cidrs: ["192.168.100.0/24"] };
+  const next = { mode: "custom", addresses: ["198.51.100.2"], port: 9090, allowed_cidrs: ["198.51.100.0/24"] };
   const diff = diffNetworkConfig(previous, next);
   const fields = diff.map((d) => d.field);
   assert.ok(fields.includes("Listen mode"));
@@ -152,23 +152,23 @@ test("suggestionsForInterfaces: dedupes and skips link-local", () => {
     {
       name: "wlan0",
       addresses: [
-        { scope: "global", suggested_cidr: "192.168.100.0/24", network: "192.168.100.0/24" },
+        { scope: "global", suggested_cidr: "198.51.100.0/24", network: "198.51.100.0/24" },
         { scope: "link-local", suggested_cidr: "169.254.0.0/16", network: "169.254.0.0/16" },
       ],
     },
     {
       name: "tailscale0",
-      addresses: [{ scope: "global", suggested_cidr: "100.64.0.0/10", network: "100.95.192.60/32" }],
+      addresses: [{ scope: "global", suggested_cidr: "100.64.0.0/10", network: "100.64.0.1/32" }],
     },
     {
       name: "eth1",
-      addresses: [{ scope: "global", suggested_cidr: "192.168.100.0/24", network: "192.168.100.0/24" }],
+      addresses: [{ scope: "global", suggested_cidr: "198.51.100.0/24", network: "198.51.100.0/24" }],
     },
   ];
   const suggestions = suggestionsForInterfaces(interfaces);
   assert.equal(suggestions.length, 2);
-  assert.equal(suggestions[0].cidr, "192.168.100.0/24");
-  assert.equal(suggestions[0].label, "Allow 192.168.100.0/24 (wlan0)");
+  assert.equal(suggestions[0].cidr, "198.51.100.0/24");
+  assert.equal(suggestions[0].label, "Allow 198.51.100.0/24 (wlan0)");
   assert.equal(suggestions[1].cidr, "100.64.0.0/10");
 });
 

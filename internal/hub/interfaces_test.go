@@ -31,9 +31,9 @@ func TestClassifyAddresses(t *testing.T) {
 	}{
 		{name: "ipv4_loopback", cidr: "127.0.0.1/8", ifaceLoopback: true, wantFamily: "ipv4", wantScope: "loopback", wantSuggested: "127.0.0.0/8"},
 		{name: "ipv6_loopback", cidr: "::1/128", ifaceLoopback: true, wantFamily: "ipv6", wantScope: "loopback", wantSuggested: "::1/128"},
-		{name: "tailscale_cgnat", cidr: "100.95.192.60/32", wantFamily: "ipv4", wantScope: "global", wantSuggested: "100.64.0.0/10"},
-		{name: "tailscale_ula", cidr: "fd7a:115c:a1e0::22e:c03d/128", wantFamily: "ipv6", wantScope: "global", wantSuggested: "fd7a:115c:a1e0::/48"},
-		{name: "lan_ipv4", cidr: "192.168.100.2/24", wantFamily: "ipv4", wantScope: "global", wantSuggested: "192.168.100.0/24"},
+		{name: "tailscale_cgnat", cidr: "100.64.0.1/32", wantFamily: "ipv4", wantScope: "global", wantSuggested: "100.64.0.0/10"},
+		{name: "tailscale_ula", cidr: "fd7a:115c:a1e0::1/128", wantFamily: "ipv6", wantScope: "global", wantSuggested: "fd7a:115c:a1e0::/48"},
+		{name: "lan_ipv4", cidr: "198.51.100.2/24", wantFamily: "ipv4", wantScope: "global", wantSuggested: "198.51.100.0/24"},
 		{name: "link_local_ipv4", cidr: "169.254.1.5/16", wantFamily: "ipv4", wantScope: "link-local", wantSuggested: "169.254.0.0/16"},
 	}
 

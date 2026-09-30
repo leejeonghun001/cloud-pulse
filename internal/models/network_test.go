@@ -10,7 +10,7 @@ func TestNetworkConfigJSON(t *testing.T) {
 
 	cfg := NetworkConfig{
 		Mode:         "custom",
-		Addresses:    []string{"192.168.100.2", "100.95.192.60"},
+		Addresses:    []string{"198.51.100.2", "100.64.0.1"},
 		Port:         8090,
 		AllowedCIDRs: []string{"100.64.0.0/10", "127.0.0.0/8"},
 	}
@@ -42,10 +42,10 @@ func TestNetworkStateJSON(t *testing.T) {
 		Pending: &PendingNetwork{
 			Previous: NetworkConfig{Mode: "all", Port: 8090},
 			Deadline: 200,
-			URLs:     []string{"http://192.168.100.2:8090"},
+			URLs:     []string{"http://198.51.100.2:8090"},
 		},
-		Client:          ClientInfo{IP: "192.168.100.5", LocalAddr: "192.168.100.2:8090"},
-		Agents:          []AgentConnection{{HostID: "h1", Hostname: "host1", LocalAddr: "192.168.100.2:8090"}},
+		Client:          ClientInfo{IP: "198.51.100.5", LocalAddr: "198.51.100.2:8090"},
+		Agents:          []AgentConnection{{HostID: "h1", Hostname: "host1", LocalAddr: "198.51.100.2:8090"}},
 		Interfaces:      []NetInterface{},
 		InterfacesError: "",
 	}
@@ -124,11 +124,11 @@ func TestNetInterfaceJSON(t *testing.T) {
 		Kind:     "tailscale",
 		Addresses: []NetAddress{
 			{
-				IP:            "100.95.192.60",
+				IP:            "100.64.0.1",
 				PrefixLen:     32,
 				Family:        "ipv4",
 				Scope:         "global",
-				Network:       "100.95.192.60/32",
+				Network:       "100.64.0.1/32",
 				SuggestedCIDR: "100.64.0.0/10",
 			},
 		},
@@ -152,7 +152,7 @@ func TestNetInterfaceJSON(t *testing.T) {
 func TestClientInfoAndAgentConnectionJSON(t *testing.T) {
 	t.Parallel()
 
-	c := ClientInfo{IP: "203.0.113.1", LocalAddr: "192.168.100.2:8090"}
+	c := ClientInfo{IP: "203.0.113.1", LocalAddr: "198.51.100.2:8090"}
 	b, err := json.Marshal(c)
 	if err != nil {
 		t.Fatalf("Marshal ClientInfo: %v", err)
@@ -165,7 +165,7 @@ func TestClientInfoAndAgentConnectionJSON(t *testing.T) {
 		t.Errorf("ClientInfo round-trip mismatch: got %+v, want %+v", decodedC, c)
 	}
 
-	ac := AgentConnection{HostID: "h1", Hostname: "host1", LocalAddr: "192.168.100.2:8090"}
+	ac := AgentConnection{HostID: "h1", Hostname: "host1", LocalAddr: "198.51.100.2:8090"}
 	b2, err := json.Marshal(ac)
 	if err != nil {
 		t.Fatalf("Marshal AgentConnection: %v", err)
@@ -185,7 +185,7 @@ func TestPendingNetworkJSON(t *testing.T) {
 	p := PendingNetwork{
 		Previous: NetworkConfig{Mode: "custom", Addresses: []string{"127.0.0.1"}, Port: 8090, AllowedCIDRs: []string{"127.0.0.0/8"}},
 		Deadline: 1234,
-		URLs:     []string{"http://127.0.0.1:8090", "http://[fd7a:115c:a1e0::22e:c03d]:8090"},
+		URLs:     []string{"http://127.0.0.1:8090", "http://[fd7a:115c:a1e0::1]:8090"},
 	}
 	b, err := json.Marshal(p)
 	if err != nil {
