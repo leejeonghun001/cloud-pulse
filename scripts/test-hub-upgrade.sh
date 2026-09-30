@@ -7,30 +7,43 @@
 # the sandboxed hub process on a high port; no root, no real network,
 # no port 8090, no /usr/local/bin or /etc/systemd/system.
 #
-# Flow:
-#   1. git worktree of tag v0.3.2 -> build cloud-pulse-hub -> sandbox
-#      install via v0.3.2's own install-hub.sh.
-#   2. seed data (3 hosts, egress, host_limits, webhook setting,
-#      alerts_sent) directly into the sandbox SQLite DB (the surface
-#      needed is either not exposed by any v0.3.2 API at all
-#      (alerts_sent) or would require reproducing the real egress
-#      accumulator's sampling logic for no test value, so this uses the
-#      same DB the v0.3.2 hub itself writes to).
+# Usage:
+#   scripts/test-hub-upgrade.sh [--from vX.Y.Z]
+#
+#   --from vX.Y.Z   The version to install first and upgrade away from.
+#                   Supported: v0.3.2 (default), v0.7.0. Selects which
+#                   seed data + version-specific post-upgrade
+#                   preservation checks run (see seed_data_for_from /
+#                   assert_from_specific_preservation below).
+#
+# Flow (identical regardless of --from):
+#   1. git worktree of tag $FROM_TAG -> build cloud-pulse-hub -> sandbox
+#      install via that tag's OWN install-hub.sh.
+#   2. seed data appropriate to that version's schema directly into the
+#      sandbox SQLite DB (the surface needed is either not exposed by
+#      any hub API at all (e.g. alerts_sent) or would require
+#      reproducing real accumulator/scheduler logic for no test value,
+#      so this uses the same DB the sandboxed hub itself writes to).
 #   3. hub-upgrade-check.sh pre --root
 #   4. build the *current* tree as "v0.7.99-test" release assets, serve
 #      them locally, run `update --version v0.7.99-test` against the
 #      sandbox binary, then `systemd-unit apply --unit-path`, then
 #      restart via the fake systemctl.
 #   5. hub-upgrade-check.sh post --root --expect v0.7.99-test
-#   6. negative cases: deleted host, no restart, stale unit -> each
+#   6. version-specific data-preservation assertions (seeded rows
+#      present, row counts non-decreasing).
+#   7. negative cases: deleted host, no restart, stale unit -> each
 #      must make post FAIL.
-#   7. hub-upgrade-check.sh rollback --root --apply --yes -> back to
-#      v0.3.2, data equal to step 3's pre snapshot.
-#   8. dry-run rollback leaves every backup/target file's hash
+#   8. hub-upgrade-check.sh rollback --root --apply --yes -> back to
+#      $FROM_TAG, data equal to step 3's pre snapshot.
+#   9. dry-run rollback leaves every backup/target file's hash
 #      unchanged.
 #
-# Usage:
-#   scripts/test-hub-upgrade.sh
+# Every listener in this script binds a free ephemeral port chosen at
+# run time (free_tcp_port, ultimately python3's bind-to-:0-then-read-
+# back idiom) — never a fixed port — so two invocations (e.g. this
+# script running for --from v0.3.2 and --from v0.7.0 concurrently, or
+# alongside any other sandboxed-hub test script) never collide.
 #
 # Exits non-zero if any assertion fails.
 
@@ -38,6 +51,43 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
+
+FROM_TAG="v0.3.2"
+
+usage() {
+  cat >&2 <<'USAGE'
+usage: test-hub-upgrade.sh [--from vX.Y.Z]
+
+  --from vX.Y.Z   Version to install first and upgrade away from.
+                  Supported: v0.3.2 (default), v0.7.0.
+USAGE
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --from)
+      FROM_TAG="${2:?--from requires a value}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "test-hub-upgrade.sh: unknown argument: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+case "$FROM_TAG" in
+  v0.3.2|v0.7.0) ;;
+  *)
+    echo "test-hub-upgrade.sh: unsupported --from ${FROM_TAG} (supported: v0.3.2, v0.7.0)" >&2
+    exit 1
+    ;;
+esac
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -112,6 +162,33 @@ s.bind(("127.0.0.1", 0))
 print(s.getsockname()[1])
 s.close()
 PY
+}
+
+# hub_api_auth_header base_url — prints an "Authorization: Bearer
+# <token>" header value for a v0.4+ hub (POST /api/v1/auth/login with
+# the default admin/changeme credentials, matching write_password_file
+# below) or an empty string for a pre-auth hub (v0.3.x, no such
+# route). Used only by this test script's own direct API assertions
+# (e.g. after rollback); hub-upgrade-check.sh's own api_auth_header
+# does the equivalent for its checks.
+hub_api_auth_header() {
+  local base_url="$1"
+  local me_probe_status
+  me_probe_status="$(curl -s -o /dev/null -w '%{http_code}' "${base_url}/api/v1/auth/me" 2>/dev/null || echo 000)"
+  if [ "$me_probe_status" = "000" ] || [ "$me_probe_status" = "404" ]; then
+    return 0
+  fi
+  local resp token
+  resp="$(curl -s -X POST -H 'Content-Type: application/json' \
+    --data-binary '{"username":"admin","password":"changeme"}' "${base_url}/api/v1/auth/login" 2>/dev/null || true)"
+  token="$(python3 -c 'import json,sys
+try:
+    print(json.loads(sys.stdin.read()).get("token",""))
+except (json.JSONDecodeError, ValueError, AttributeError):
+    print("")' <<<"$resp")"
+  if [ -n "$token" ]; then
+    printf 'Authorization: Bearer %s' "$token"
+  fi
 }
 
 # host_arch_target prints "goos/goarch" for scripts/build-release.sh's
@@ -314,57 +391,60 @@ with_systemctl_env() {
 
 
 # ---------------------------------------------------------------------------
-# 1. build v0.3.2 from a worktree, sandbox install
+# 1. build $FROM_TAG from a worktree, sandbox install via that tag's own
+#    install-hub.sh
 # ---------------------------------------------------------------------------
 
-build_and_install_v032() {
-  echo "==> git worktree for v0.3.2"
-  WORKTREE_DIR="${TMP_ROOT}/worktree-v0.3.2"
-  if git worktree add --detach "$WORKTREE_DIR" v0.3.2 >"${TMP_ROOT}/worktree.log" 2>&1; then
-    pass "git worktree add v0.3.2"
+build_and_install_from_tag() {
+  local from_tag="$1"
+
+  echo "==> git worktree for ${from_tag}"
+  WORKTREE_DIR="${TMP_ROOT}/worktree-${from_tag}"
+  if git worktree add --detach "$WORKTREE_DIR" "$from_tag" >"${TMP_ROOT}/worktree.log" 2>&1; then
+    pass "git worktree add ${from_tag}"
   else
     cat "${TMP_ROOT}/worktree.log" >&2
-    fail "git worktree add v0.3.2"
+    fail "git worktree add ${from_tag}"
     return 1
   fi
 
-  echo "==> building v0.3.2 cloud-pulse-hub"
+  echo "==> building ${from_tag} cloud-pulse-hub"
   local target
   target="$(host_arch_target)"
   if TARGETS="$target" GOFLAGS=-mod=mod \
-    go build -C "$WORKTREE_DIR" -o "${TMP_ROOT}/cloud-pulse-hub-v0.3.2" \
-    -ldflags "-X github.com/leejeonghun001/cloud-pulse/internal/version.Version=v0.3.2" \
-    ./cmd/hub >"${TMP_ROOT}/build-v032.log" 2>&1; then
-    pass "build v0.3.2 cloud-pulse-hub"
+    go build -C "$WORKTREE_DIR" -o "${TMP_ROOT}/cloud-pulse-hub-${from_tag}" \
+    -ldflags "-X github.com/leejeonghun001/cloud-pulse/internal/version.Version=${from_tag}" \
+    ./cmd/hub >"${TMP_ROOT}/build-from.log" 2>&1; then
+    pass "build ${from_tag} cloud-pulse-hub"
   else
-    cat "${TMP_ROOT}/build-v032.log" >&2
-    fail "build v0.3.2 cloud-pulse-hub"
+    cat "${TMP_ROOT}/build-from.log" >&2
+    fail "build ${from_tag} cloud-pulse-hub"
     return 1
   fi
 
-  echo "==> sandbox install via v0.3.2's own install-hub.sh"
+  echo "==> sandbox install via ${from_tag}'s own install-hub.sh"
   SANDBOX_ROOT="${TMP_ROOT}/sandbox"
   HUB_PORT="$(free_tcp_port)"
 
-  local assets_dir="${TMP_ROOT}/v032-assets"
+  local assets_dir="${TMP_ROOT}/from-assets"
   mkdir -p "$assets_dir"
-  cp "${TMP_ROOT}/cloud-pulse-hub-v0.3.2" "${assets_dir}/cloud-pulse-hub-linux-$(asset_arch_suffix)"
+  cp "${TMP_ROOT}/cloud-pulse-hub-${from_tag}" "${assets_dir}/cloud-pulse-hub-linux-$(asset_arch_suffix)"
   ( cd "$assets_dir" && sha256sum "cloud-pulse-hub-linux-$(asset_arch_suffix)" > checksums.txt )
 
   local fake_port
   fake_port="$(free_tcp_port)"
   local fake_base="http://127.0.0.1:${fake_port}"
-  local fake_assets_root="${TMP_ROOT}/v032-fake-assets"
-  mkdir -p "${fake_assets_root}/v0.3.2"
-  cp "${assets_dir}"/* "${fake_assets_root}/v0.3.2/"
+  local fake_assets_root="${TMP_ROOT}/from-fake-assets"
+  mkdir -p "${fake_assets_root}/${from_tag}"
+  cp "${assets_dir}"/* "${fake_assets_root}/${from_tag}/"
 
-  python3 "${REPO_ROOT}/scripts/fake_release_server.py" "$fake_port" "$fake_assets_root" "v0.3.2" \
-    >"${TMP_ROOT}/v032-fake-server.log" 2>&1 &
-  local v032_fake_pid=$!
+  python3 "${REPO_ROOT}/scripts/fake_release_server.py" "$fake_port" "$fake_assets_root" "$from_tag" \
+    >"${TMP_ROOT}/from-fake-server.log" 2>&1 &
+  local from_fake_pid=$!
 
   if ! wait_for_http "${fake_base}/releases/latest" 10; then
-    fail "v0.3.2 fake asset server did not start"
-    kill "$v032_fake_pid" 2>/dev/null || true
+    fail "${from_tag} fake asset server did not start"
+    kill "$from_fake_pid" 2>/dev/null || true
     return 1
   fi
 
@@ -372,34 +452,35 @@ build_and_install_v032() {
   reset_systemctl_state 0
 
   local install_out
-  if install_out="$(with_systemctl_env env CP_RELEASE_BASE_URL="${fake_base}/releases/download/v0.3.2" \
+  if install_out="$(with_systemctl_env env CP_RELEASE_BASE_URL="${fake_base}/releases/download/${from_tag}" \
     CP_INSTALL_ROOT="$SANDBOX_ROOT" CP_SYSTEMCTL="$SYSTEMCTL_SHIM" \
     timeout 60 bash "${WORKTREE_DIR}/scripts/install-hub.sh" --install --yes --listen "127.0.0.1:${HUB_PORT}" 2>&1)"; then
-    pass "v0.3.2 sandbox install"
+    pass "${from_tag} sandbox install"
   else
     echo "$install_out" >&2
-    fail "v0.3.2 sandbox install"
-    kill "$v032_fake_pid" 2>/dev/null || true
+    fail "${from_tag} sandbox install"
+    kill "$from_fake_pid" 2>/dev/null || true
     return 1
   fi
-  kill "$v032_fake_pid" 2>/dev/null || true
-  wait "$v032_fake_pid" 2>/dev/null || true
+  kill "$from_fake_pid" 2>/dev/null || true
+  wait "$from_fake_pid" 2>/dev/null || true
 
   # install-hub.sh's fresh install starts the service itself through
   # the shim (see assert_systemctl_called precedent in
   # scripts/test-install.sh); confirm the sandbox hub is actually
   # reachable before seeding data into it.
   if wait_for_http "http://127.0.0.1:${HUB_PORT}/healthz" 15; then
-    pass "sandbox v0.3.2 hub reachable on 127.0.0.1:${HUB_PORT}"
+    pass "sandbox ${from_tag} hub reachable on 127.0.0.1:${HUB_PORT}"
   else
-    fail "sandbox v0.3.2 hub did not become reachable"
+    fail "sandbox ${from_tag} hub did not become reachable"
     return 1
   fi
   return 0
 }
 
 # ---------------------------------------------------------------------------
-# 2. seed data directly into the sandbox DB
+# 2. seed data directly into the sandbox DB, appropriate to $FROM_TAG's
+#    own schema
 # ---------------------------------------------------------------------------
 
 sandbox_data_dir() {
@@ -410,15 +491,11 @@ sandbox_db_path() {
   echo "$(sandbox_data_dir)/cloud-pulse.db"
 }
 
-seed_data() {
-  echo "==> seeding 3 hosts, egress, host_limits, webhook setting, alerts_sent"
-  local db
-  db="$(sandbox_db_path)"
-
-  # Stop the sandbox hub first so this direct write doesn't race the
-  # live WAL-mode connection it holds open.
-  with_systemctl_env "$SYSTEMCTL_SHIM" stop >/dev/null
-
+# seed_data_common — the 3 hosts + egress + host_limits + webhook
+# setting + alerts_sent rows every --from version supports (v0.3.2's
+# schema already has all of these tables).
+seed_data_common() {
+  local db="$1"
   python3 - "$db" <<'PY'
 import sqlite3
 import sys
@@ -478,7 +555,93 @@ conn.execute(
 conn.commit()
 conn.close()
 PY
-  if [ "$?" -eq 0 ]; then
+}
+
+# seed_data_v070_extra — rows in the tables that exist starting at
+# v0.7.0's schema: one extra notify_channels + alert_rules row beyond
+# the 3 default egress_out_pct rules 0004_alerting.sql's migration
+# always seeds on a fresh install (regardless of whether a webhook URL
+# was configured at install time — this sandbox's install-hub.sh run
+# never passes one, so no "Default webhook" channel exists here),
+# plus update_jobs and storage_accounts/storage_snapshots rows, so
+# preservation checks have version-specific data to actually verify
+# beyond what a fresh v0.3.2 install could ever have had.
+seed_data_v070_extra() {
+  local db="$1"
+  python3 - "$db" <<'PY'
+import sqlite3
+import sys
+import time
+
+db_path = sys.argv[1]
+conn = sqlite3.connect(db_path)
+now = int(time.time())
+
+conn.execute(
+    "INSERT INTO notify_channels (name, type, enabled, config, created_at, updated_at) "
+    "VALUES (?, ?, ?, ?, ?, ?)",
+    ("test-seed-channel", "webhook", 1, '{"webhook_url":"https://203.0.113.10/hook"}', now, now),
+)
+channel_id = conn.execute(
+    "SELECT id FROM notify_channels WHERE name = 'test-seed-channel'"
+).fetchone()[0]
+
+conn.execute(
+    "INSERT INTO alert_rules (name, enabled, metric, host_id, operator, threshold, duration_sec, "
+    "cooldown_sec, notify_resolved, channel_ids, created_at, updated_at) "
+    "VALUES (?, 1, 'cpu_percent', '', '>=', 90, 60, 3600, 0, ?, ?, ?)",
+    ("test-seed-cpu-rule", "[%d]" % channel_id, now, now),
+)
+
+conn.execute(
+    "INSERT INTO update_jobs (batch_id, host_id, target, state, reason, created_at, updated_at, "
+    "attempt, platform) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ("test-seed-batch", "test-host-1", "v0.7.0", "succeeded", "", now, now, 1, "linux"),
+)
+
+conn.execute(
+    "INSERT INTO storage_accounts (provider, name, config_json, secret_json, created_at, updated_at) "
+    "VALUES (?, ?, ?, ?, ?, ?)",
+    ("google_drive", "test-seed-account", '{"client_id":"test-client-id"}', "{}", now, now),
+)
+account_id = conn.execute(
+    "SELECT id FROM storage_accounts WHERE name = 'test-seed-account'"
+).fetchone()[0]
+conn.execute(
+    "INSERT INTO storage_snapshots (account_id, status, account_email, used_bytes, limit_bytes, "
+    "collected_at, last_success_at, last_attempt_at) VALUES (?, 'ok', ?, ?, ?, ?, ?, ?)",
+    (account_id, "seed@example.test", 1024, 1024 * 1024, now, now, now),
+)
+
+conn.commit()
+conn.close()
+PY
+}
+
+# seed_data_for_from from_tag — seeds seed_data_common's rows always,
+# plus from_tag-specific extra rows for versions whose schema has more
+# to preserve than v0.3.2's.
+seed_data_for_from() {
+  local from_tag="$1" db="$2"
+  seed_data_common "$db"
+  case "$from_tag" in
+    v0.7.0)
+      seed_data_v070_extra "$db"
+      ;;
+  esac
+}
+
+seed_data() {
+  local from_tag="$1"
+  echo "==> seeding data appropriate to ${from_tag}'s schema"
+  local db
+  db="$(sandbox_db_path)"
+
+  # Stop the sandbox hub first so this direct write doesn't race the
+  # live WAL-mode connection it holds open.
+  with_systemctl_env "$SYSTEMCTL_SHIM" stop >/dev/null
+
+  if seed_data_for_from "$from_tag" "$db"; then
     pass "seed data written to sandbox DB"
   else
     fail "seed data write failed"
@@ -522,7 +685,8 @@ run_pre() {
     --root "$SANDBOX_ROOT" \
     --hub-url "http://127.0.0.1:${HUB_PORT}" \
     --systemctl "$SYSTEMCTL_SHIM" \
-    --out "$PRE_OUT_DIR" 2>&1)"; then
+    --out "$PRE_OUT_DIR" \
+    --password-file "$PASSWORD_FILE" 2>&1)"; then
     pass "pre check exits 0"
   else
     echo "$out" >&2
@@ -645,6 +809,155 @@ run_post_expect_pass() {
     echo "$out" | grep -i 'warn' >&2 || true
     fail "post did not mention the default-password warning (admin/changeme not yet rotated)"
   fi
+}
+
+# ---------------------------------------------------------------------------
+# 5b. version-specific data-preservation assertions
+# ---------------------------------------------------------------------------
+
+# assert_v032_preservation — the 24 checks' worth of data seeded by
+# seed_data_common must all still be present verbatim after the
+# upgrade (this is exercised generically by hub-upgrade-check.sh
+# post's own row-count/host/settings diff already asserted via
+# run_post_expect_pass above; this adds a direct DB-level check of the
+# exact seeded rows, independent of that script, as a belt-and-braces
+# cross-check).
+assert_v032_preservation() {
+  echo "==> asserting v0.3.2-seeded data survived the upgrade"
+  local db out
+  db="$(sandbox_db_path)"
+  out="$(python3 - "$db" <<'PY'
+import sqlite3
+import sys
+
+conn = sqlite3.connect(sys.argv[1])
+ok = True
+
+(host_count,) = conn.execute(
+    "SELECT COUNT(*) FROM hosts WHERE id IN ('test-host-1','test-host-2','test-host-3')"
+).fetchone()
+if host_count != 3:
+    print(f"FAIL:expected 3 seeded hosts, found {host_count}")
+    ok = False
+
+(egress_count,) = conn.execute("SELECT COUNT(*) FROM egress_monthly").fetchone()
+if egress_count < 3:
+    print(f"FAIL:expected >=3 egress_monthly rows, found {egress_count}")
+    ok = False
+
+(limit_count,) = conn.execute(
+    "SELECT COUNT(*) FROM host_limits WHERE host_id = 'test-host-1'"
+).fetchone()
+if limit_count != 1:
+    print(f"FAIL:expected the seeded host_limits row for test-host-1, found {limit_count}")
+    ok = False
+
+(setting_count,) = conn.execute(
+    "SELECT COUNT(*) FROM settings WHERE key = 'alert_webhook_url'"
+).fetchone()
+if setting_count != 1:
+    print(f"FAIL:expected the seeded alert_webhook_url setting, found {setting_count}")
+    ok = False
+
+(sent_count,) = conn.execute("SELECT COUNT(*) FROM alerts_sent").fetchone()
+if sent_count < 1:
+    print(f"FAIL:expected the seeded alerts_sent row, found {sent_count}")
+    ok = False
+
+conn.close()
+print("OK" if ok else "FAILED")
+PY
+)"
+  if printf '%s' "$out" | grep -q '^OK$'; then
+    pass "v0.3.2-seeded hosts/egress/host_limits/settings/alerts_sent all preserved"
+  else
+    printf '%s\n' "$out" | grep '^FAIL:' >&2 || true
+    fail "v0.3.2-seeded data missing/changed after upgrade"
+  fi
+}
+
+# assert_v070_preservation — the extra alert_rules/notify_channels/
+# update_jobs/storage_accounts/storage_snapshots rows seeded by
+# seed_data_v070_extra, plus v0.7.0's own default-seeded rows
+# (3 egress alert rules + the "Default webhook" channel, created by
+# 0004_alerting.sql's migration the first time v0.7.0 itself started
+# up against a fresh DB), must all still be present after the v0.8
+# upgrade — this is the check that actually exercises "v0.7.0-specific
+# data preservation" the way SPEC-v0.8's test plan calls for, since
+# v0.3.2 predates every one of these tables.
+assert_v070_preservation() {
+  echo "==> asserting v0.7.0-seeded alert rules/channels/update_jobs/storage rows survived the upgrade"
+  local db out
+  db="$(sandbox_db_path)"
+  out="$(python3 - "$db" <<'PY'
+import sqlite3
+import sys
+
+conn = sqlite3.connect(sys.argv[1])
+ok = True
+
+
+def check(label, count, minimum):
+    global ok
+    if count < minimum:
+        print(f"FAIL:{label}: expected >={minimum}, found {count}")
+        ok = False
+
+
+(channel_count,) = conn.execute(
+    "SELECT COUNT(*) FROM notify_channels WHERE name = 'test-seed-channel'"
+).fetchone()
+check("notify_channels (seeded channel)", channel_count, 1)
+
+(rule_count,) = conn.execute(
+    "SELECT COUNT(*) FROM alert_rules WHERE name = 'test-seed-cpu-rule'"
+).fetchone()
+check("alert_rules (seeded cpu rule)", rule_count, 1)
+
+(egress_rule_count,) = conn.execute(
+    "SELECT COUNT(*) FROM alert_rules WHERE metric = 'egress_out_pct'"
+).fetchone()
+check("alert_rules (default egress rules)", egress_rule_count, 3)
+
+(job_count,) = conn.execute(
+    "SELECT COUNT(*) FROM update_jobs WHERE batch_id = 'test-seed-batch'"
+).fetchone()
+check("update_jobs (seeded batch)", job_count, 1)
+
+(account_count,) = conn.execute(
+    "SELECT COUNT(*) FROM storage_accounts WHERE name = 'test-seed-account'"
+).fetchone()
+check("storage_accounts (seeded account)", account_count, 1)
+
+(snapshot_count,) = conn.execute(
+    "SELECT COUNT(*) FROM storage_snapshots s "
+    "JOIN storage_accounts a ON a.id = s.account_id "
+    "WHERE a.name = 'test-seed-account'"
+).fetchone()
+check("storage_snapshots (seeded snapshot)", snapshot_count, 1)
+
+conn.close()
+print("OK" if ok else "FAILED")
+PY
+)"
+  if printf '%s' "$out" | grep -q '^OK$'; then
+    pass "v0.7.0-seeded alert rules/channels/update_jobs/storage rows all preserved"
+  else
+    printf '%s\n' "$out" | grep '^FAIL:' >&2 || true
+    fail "v0.7.0-seeded data missing/changed after upgrade"
+  fi
+}
+
+# assert_from_specific_preservation from_tag — dispatches to the
+# from_tag-specific preservation assertion(s) above.
+assert_from_specific_preservation() {
+  local from_tag="$1"
+  assert_v032_preservation
+  case "$from_tag" in
+    v0.7.0)
+      assert_v070_preservation
+      ;;
+  esac
 }
 
 # ---------------------------------------------------------------------------
@@ -783,7 +1096,7 @@ run_rollback() {
   if out="$(with_systemctl_env \
     timeout 60 bash "${REPO_ROOT}/scripts/hub-upgrade-check.sh" rollback \
     --root "$SANDBOX_ROOT" --hub-url "http://127.0.0.1:${HUB_PORT}" \
-    --systemctl "$SYSTEMCTL_SHIM" --out "$PRE_OUT_DIR" --apply --yes 2>&1)"; then
+    --systemctl "$SYSTEMCTL_SHIM" --out "$PRE_OUT_DIR" --password-file "$PASSWORD_FILE" --apply --yes 2>&1)"; then
     pass "rollback --apply --yes exits 0"
   else
     echo "$out" >&2
@@ -798,20 +1111,41 @@ run_rollback() {
   local hub_bin restored_version
   hub_bin="${SANDBOX_ROOT}/usr/local/bin/cloud-pulse-hub"
   restored_version="$("$hub_bin" -version 2>/dev/null | awk '{print $1}')"
-  if [ "$restored_version" = "v0.3.2" ]; then
-    pass "rollback restored the v0.3.2 binary"
+  if [ "$restored_version" = "$FROM_TAG" ]; then
+    pass "rollback restored the ${FROM_TAG} binary"
   else
-    fail "rollback left binary at ${restored_version:-<unknown>}, expected v0.3.2"
+    fail "rollback left binary at ${restored_version:-<unknown>}, expected ${FROM_TAG}"
   fi
 
-  local hosts_body host_count
-  hosts_body="$(curl -s "http://127.0.0.1:${HUB_PORT}/api/v1/hosts" 2>/dev/null || true)"
+  local hosts_body host_count auth_header hosts_code
+  auth_header="$(hub_api_auth_header "http://127.0.0.1:${HUB_PORT}")"
+  hosts_body="$(curl -s -H "$auth_header" "http://127.0.0.1:${HUB_PORT}/api/v1/hosts" 2>/dev/null || true)"
+  hosts_code="$(python3 -c 'import json,sys
+try:
+    print(json.loads(sys.stdin.read()).get("code",""))
+except (json.JSONDecodeError, ValueError, AttributeError):
+    print("")' <<<"$hosts_body")"
   host_count="$(python3 -c 'import json,sys
 try:
     data = json.loads(sys.stdin.read())
     print(len(data) if isinstance(data, list) else len(data.get("hosts", [])))
 except (json.JSONDecodeError, ValueError, AttributeError):
     print(-1)' <<<"$hosts_body")"
+  if [ "$hosts_code" = "password_change_required" ]; then
+    # The restored (rolled-back) hub still has the seeded admin
+    # account's default password, so its must-change-password gate
+    # blocks GET /api/v1/hosts the same way it did right after the
+    # fresh install -- hub-upgrade-check.sh rollback's OWN host-count
+    # check (already asserted PASS above via "rollback --apply --yes
+    # exits 0") verifies this same fact through its own login flow;
+    # this script-level cross-check falls back to the DB directly
+    # instead of fighting the same auth gate a second time.
+    local db
+    db="$(sandbox_db_path)"
+    host_count="$(python3 -c 'import sqlite3,sys
+conn = sqlite3.connect(sys.argv[1])
+print(conn.execute("SELECT COUNT(*) FROM hosts").fetchone()[0])' "$db")"
+  fi
   if [ "$host_count" = "3" ]; then
     pass "rollback restored all 3 seeded hosts"
   else
@@ -867,11 +1201,14 @@ main() {
   mkdir -p "${TMP_ROOT}/backups"
   write_password_file
 
-  build_and_install_v032 || { finish; return; }
-  seed_data || { finish; return; }
+  echo "=== test-hub-upgrade.sh: --from ${FROM_TAG} ==="
+
+  build_and_install_from_tag "$FROM_TAG" || { finish; return; }
+  seed_data "$FROM_TAG" || { finish; return; }
   run_pre
   do_upgrade || { finish; return; }
   run_post_expect_pass
+  assert_from_specific_preservation "$FROM_TAG"
   run_negative_cases
   run_rollback
   run_dry_run_rollback_noop_check
@@ -881,7 +1218,7 @@ main() {
 
 finish() {
   echo ""
-  echo "=== test-hub-upgrade.sh summary: ${PASS_COUNT} passed, ${FAIL_COUNT} failed ==="
+  echo "=== test-hub-upgrade.sh summary (--from ${FROM_TAG}): ${PASS_COUNT} passed, ${FAIL_COUNT} failed ==="
   if [ "$FAIL_COUNT" -gt 0 ]; then
     exit 1
   fi

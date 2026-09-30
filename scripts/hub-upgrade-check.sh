@@ -403,12 +403,13 @@ PY
 }
 
 # py_sqlite_snapshot db out_json — writes a JSON snapshot of
-# schema_migrations versions, per-table row counts (existing tables
-# only), host IDs, and settings keys to out_json.
+# schema_migrations versions, per-table row counts, host IDs, and
+# settings keys to out_json.
 py_sqlite_snapshot() {
   local db="$1" out_json="$2"
   python3 - "$db" "$out_json" <<'PY'
 import json
+import re
 import sqlite3
 import sys
 
@@ -416,17 +417,23 @@ db_path, out_path = sys.argv[1], sys.argv[2]
 conn = sqlite3.connect(db_path)
 conn.row_factory = sqlite3.Row
 
-CANDIDATE_TABLES = [
-    "hosts", "metrics_raw", "metrics_5m", "metrics_1h", "egress_monthly",
-    "bucket_stats", "alerts_sent", "host_limits", "settings", "sessions",
-    "alert_rules", "notify_channels", "alert_state", "alert_events",
-    "host_inventory", "update_jobs", "pricing_plans", "host_pricing",
-    "cloud_cost_snapshots", "audit_log", "storage_accounts", "storage_snapshots",
-]
+# Tables never counted for row-count preservation: schema_migrations
+# itself tracks migration *versions* (handled separately below, as
+# "migrations"), and sqlite_sequence is an internal AUTOINCREMENT
+# bookkeeping table SQLite creates/drops on its own, not app schema.
+EXCLUDED_TABLES = {"schema_migrations", "sqlite_sequence"}
+
+# A table name straight out of sqlite_master (never user input) is
+# still validated against this pattern before ever being interpolated
+# into a COUNT(*) query below, so a future migration could not
+# introduce a table name that breaks the query even by accident.
+_VALID_TABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def existing_tables(conn: sqlite3.Connection) -> set[str]:
-    rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    ).fetchall()
     return {row[0] for row in rows}
 
 
@@ -440,11 +447,19 @@ def main() -> int:
             for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
         ]
 
+    # Row counts are derived from whatever tables this database's own
+    # schema actually has (via sqlite_master above), not a hard-coded
+    # per-release list -- a new table added by a future migration
+    # (e.g. 0007_v08.sql's channel_health_settings/
+    # channel_synthetic_results) is automatically included here and
+    # therefore automatically covered by post's row-count-non-
+    # decreasing preservation check, with no edit to this script
+    # needed on the next schema-adding release.
     counts: dict[str, int] = {}
-    for table in CANDIDATE_TABLES:
-        if table not in present:
-            continue
-        (count,) = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()  # noqa: S608 - table from static allowlist
+    for table in sorted(present - EXCLUDED_TABLES):
+        if not _VALID_TABLE_NAME.match(table):
+            continue  # pragma: no cover - defensive; sqlite_master names are always valid identifiers
+        (count,) = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()  # noqa: S608 - table verified above, sourced from sqlite_master only
         counts[table] = int(count)
 
     host_ids: list[str] = []
@@ -479,6 +494,93 @@ def main() -> int:
 
 
 sys.exit(main())
+PY
+}
+
+# py_sqlite_diff_snapshots pre_json pre_snapshot post_snapshot — compares
+# a pre-upgrade pre.json + db-snapshot.json against a post-upgrade
+# db-snapshot.json and prints one "FAIL:msg"/"WARN:msg"/"NOTE:msg" line
+# per finding (never both a prefix-free line and one of these, so a
+# caller can safely branch on the prefix alone): FAIL for a real
+# preservation regression (migrations regressed, a row count
+# decreased, a host/setting disappeared), WARN for a lesser concern
+# (a whole table disappeared, no/too few default egress rules), NOTE
+# for a purely informational observation (new migrations were applied,
+# and whether that came with new tables) that a caller should log but
+# never treat as a failure or warning by itself.
+py_sqlite_diff_snapshots() {
+  local pre_json="$1" pre_snapshot="$2" post_snapshot="$3"
+  python3 - "$pre_json" "$pre_snapshot" "$post_snapshot" <<'PY'
+import json
+import sys
+
+pre_snap_path, post_snap_path = sys.argv[2], sys.argv[3]
+
+with open(pre_snap_path, encoding="utf-8") as f:
+    pre = json.load(f)
+with open(post_snap_path, encoding="utf-8") as f:
+    post = json.load(f)
+
+failures: list[str] = []
+warnings: list[str] = []
+
+pre_migrations = set(pre.get("migrations", []))
+post_migrations = set(post.get("migrations", []))
+if not pre_migrations.issubset(post_migrations):
+    failures.append(f"migrations regressed: pre had {sorted(pre_migrations)}, post has {sorted(post_migrations)}")
+
+# "new tables/migrations applied" expectation, derived from this run's
+# own pre/post table lists rather than a hard-coded per-release table
+# name list: whenever post recorded MORE migration versions than pre,
+# report whether new tables came with them (SPEC-v0.8's 0007_v08.sql
+# adds channel_health_settings/channel_synthetic_results on top of
+# idx_update_jobs_batch_created, an index change with no new table) —
+# a migration that adds only indexes/columns to an existing table is
+# fine too, so this is purely informational, never a failure by
+# itself; the real regression signals are the row-count/host/settings
+# checks below, which cover a same-tables-but-lost-rows migration bug
+# just as well as a missing-table one.
+new_migrations = post_migrations - pre_migrations
+pre_tables = set(pre.get("tables_present", []))
+post_tables = set(post.get("tables_present", []))
+new_tables = post_tables - pre_tables
+if new_migrations:
+    if new_tables:
+        print(f"NOTE:new migrations applied {sorted(new_migrations)}, new tables created: {sorted(new_tables)}")
+    else:
+        print(f"NOTE:new migrations applied {sorted(new_migrations)}, no new tables (index/column-only changes)")
+
+pre_counts = pre.get("row_counts", {})
+post_counts = post.get("row_counts", {})
+for table, pre_count in pre_counts.items():
+    post_count = post_counts.get(table)
+    if post_count is None:
+        warnings.append(f"table {table!r} present pre-upgrade is absent post-upgrade")
+        continue
+    if post_count < pre_count:
+        failures.append(f"table {table!r} row count decreased: {pre_count} -> {post_count}")
+
+pre_hosts = set(pre.get("host_ids", []))
+post_hosts = set(post.get("host_ids", []))
+missing_hosts = pre_hosts - post_hosts
+if missing_hosts:
+    failures.append(f"hosts missing post-upgrade: {sorted(missing_hosts)}")
+
+pre_settings = set(pre.get("setting_keys", []))
+post_settings = set(post.get("setting_keys", []))
+missing_settings = pre_settings - post_settings
+if missing_settings:
+    failures.append(f"settings keys missing post-upgrade: {sorted(missing_settings)}")
+
+if not post.get("egress_rule_names"):
+    warnings.append("no default egress alert rules found post-upgrade (expected 3 egress_out_pct rules)")
+elif len(post.get("egress_rule_names", [])) < 3:
+    warnings.append(f"expected at least 3 default egress_out_pct rules post-upgrade, found {len(post['egress_rule_names'])}")
+
+for msg in failures:
+    print(f"FAIL:{msg}")
+for msg in warnings:
+    print(f"WARN:{msg}")
 PY
 }
 
@@ -697,6 +799,9 @@ except (json.JSONDecodeError, ValueError, AttributeError):
     print(-1)' <<<"$hosts_body")"
   if [ "$hosts_status" = "200" ] && [ "$host_count" -ge 0 ]; then
     pass "GET /api/v1/hosts = 200 (${host_count} hosts)"
+  elif [ "$hosts_status" = "403" ] && [ "$(json_field "$hosts_body" code)" = "password_change_required" ]; then
+    warn "GET /api/v1/hosts = 403 (admin must change the default password first; host_count omitted from pre.json)"
+    host_count=-1
   else
     fail "GET /api/v1/hosts = ${hosts_status}"
     host_count=-1
@@ -888,74 +993,24 @@ cmd_post() {
   local post_snapshot="${out_dir}/post-db-snapshot.json"
   py_sqlite_snapshot "$backup_db" "$post_snapshot"
 
-  # Compares pre vs. post DB snapshots and prints "FAIL:msg"/"WARN:msg"
-  # lines, translated below into this script's own pass/fail/warn
-  # counters (bash's `set -e` makes branching on "did this print any
-  # lines" awkward inline, so the comparison and the counting are two
-  # separate steps).
+  # Compares pre vs. post DB snapshots and prints "FAIL:msg"/
+  # "WARN:msg"/"NOTE:msg" lines, translated below into this script's
+  # own pass/fail/warn counters (bash's `set -e` makes branching on
+  # "did this print any lines" awkward inline, so the comparison and
+  # the counting are two separate steps).
   local diff_output
-  diff_output="$(python3 - "$pre_json" "${out_dir}/db-snapshot.json" "$post_snapshot" <<'PY'
-import json
-import sys
-
-pre_snap_path, post_snap_path = sys.argv[2], sys.argv[3]
-
-with open(pre_snap_path, encoding="utf-8") as f:
-    pre = json.load(f)
-with open(post_snap_path, encoding="utf-8") as f:
-    post = json.load(f)
-
-failures: list[str] = []
-warnings: list[str] = []
-
-pre_migrations = set(pre.get("migrations", []))
-post_migrations = set(post.get("migrations", []))
-if not pre_migrations.issubset(post_migrations):
-    failures.append(f"migrations regressed: pre had {sorted(pre_migrations)}, post has {sorted(post_migrations)}")
-
-pre_counts = pre.get("row_counts", {})
-post_counts = post.get("row_counts", {})
-for table, pre_count in pre_counts.items():
-    post_count = post_counts.get(table)
-    if post_count is None:
-        warnings.append(f"table {table!r} present pre-upgrade is absent post-upgrade")
-        continue
-    if post_count < pre_count:
-        failures.append(f"table {table!r} row count decreased: {pre_count} -> {post_count}")
-
-pre_hosts = set(pre.get("host_ids", []))
-post_hosts = set(post.get("host_ids", []))
-missing_hosts = pre_hosts - post_hosts
-if missing_hosts:
-    failures.append(f"hosts missing post-upgrade: {sorted(missing_hosts)}")
-
-pre_settings = set(pre.get("setting_keys", []))
-post_settings = set(post.get("setting_keys", []))
-missing_settings = pre_settings - post_settings
-if missing_settings:
-    failures.append(f"settings keys missing post-upgrade: {sorted(missing_settings)}")
-
-if not post.get("egress_rule_names"):
-    warnings.append("no default egress alert rules found post-upgrade (expected 3 egress_out_pct rules)")
-elif len(post.get("egress_rule_names", [])) < 3:
-    warnings.append(f"expected at least 3 default egress_out_pct rules post-upgrade, found {len(post['egress_rule_names'])}")
-
-for msg in failures:
-    print(f"FAIL:{msg}")
-for msg in warnings:
-    print(f"WARN:{msg}")
-PY
-)"
+  diff_output="$(py_sqlite_diff_snapshots "$pre_json" "${out_dir}/db-snapshot.json" "$post_snapshot")"
   if [ -n "$diff_output" ]; then
     while IFS= read -r line; do
       [ -n "$line" ] || continue
       case "$line" in
         FAIL:*) fail "${line#FAIL:}" ;;
         WARN:*) warn "${line#WARN:}" ;;
+        NOTE:*) log "NOTE: ${line#NOTE:}" ;;
       esac
     done <<<"$diff_output"
   fi
-  if [ -z "$diff_output" ]; then
+  if ! printf '%s' "$diff_output" | grep -q '^\(FAIL\|WARN\):'; then
     pass "no data-preservation regressions detected (migrations superset, row counts non-decreasing, hosts/settings preserved)"
   fi
 
@@ -1007,6 +1062,8 @@ except (json.JSONDecodeError, ValueError, AttributeError):
   post_hosts_code="$(json_field "$post_hosts_body" code)"
   if [ "$post_hosts_code" = "password_change_required" ]; then
     warn "host count comparison skipped (admin must change the default password before GET /api/v1/hosts works)"
+  elif [ "$pre_host_count" = "-1" ]; then
+    warn "host count comparison skipped (pre-upgrade host_count was unavailable, likely blocked by the same password gate)"
   elif [ "$post_host_count" = "$pre_host_count" ]; then
     pass "host count unchanged (${post_host_count})"
   else
@@ -1156,7 +1213,9 @@ try:
 except (json.JSONDecodeError, ValueError, AttributeError):
     print(-1)' <<<"$hosts_body")"
   pre_host_count="$(json_field "$(cat "${out_dir}/pre.json")" host_count)"
-  if [ "$host_count" = "$pre_host_count" ]; then
+  if [ "$pre_host_count" = "-1" ]; then
+    warn "host count comparison skipped (pre-upgrade host_count was unavailable, likely blocked by the password-change gate)"
+  elif [ "$host_count" = "$pre_host_count" ]; then
     pass "host count matches pre-upgrade snapshot (${host_count})"
   else
     fail "host count mismatch after rollback: expected ${pre_host_count}, got ${host_count}"
