@@ -126,17 +126,21 @@ type deliveryWorkerOptions struct {
 	Logger    *slog.Logger
 	QueueSize int
 	Timeout   time.Duration
+	// Diagnose optionally classifies a failed delivery's error into a
+	// models.DiagnosisCode; see Options.Diagnose's doc comment.
+	Diagnose func(error) *models.DiagnosisCode
 }
 
 // deliveryWorker asynchronously sends notifications queued by the
 // engine, retrying transient failures with backoff and recording every
 // attempt's outcome onto the originating AlertEvent.
 type deliveryWorker struct {
-	store   Store
-	sender  SenderFactory
-	clock   func() time.Time
-	logger  *slog.Logger
-	timeout time.Duration
+	store    Store
+	sender   SenderFactory
+	clock    func() time.Time
+	logger   *slog.Logger
+	timeout  time.Duration
+	diagnose func(error) *models.DiagnosisCode
 
 	queue chan deliveryJob
 	wg    sync.WaitGroup
@@ -168,13 +172,14 @@ func newDeliveryWorker(opts deliveryWorkerOptions) *deliveryWorker {
 	}
 
 	w := &deliveryWorker{
-		store:   opts.Store,
-		sender:  opts.Sender,
-		clock:   clock,
-		logger:  logger,
-		timeout: timeout,
-		queue:   make(chan deliveryJob, queueSize),
-		closed:  make(chan struct{}),
+		store:    opts.Store,
+		sender:   opts.Sender,
+		clock:    clock,
+		logger:   logger,
+		timeout:  timeout,
+		diagnose: opts.Diagnose,
+		queue:    make(chan deliveryJob, queueSize),
+		closed:   make(chan struct{}),
 		afterFunc: func(d time.Duration) <-chan time.Time {
 			return time.After(d)
 		},
@@ -244,7 +249,7 @@ func (w *deliveryWorker) run() {
 func (w *deliveryWorker) deliver(job deliveryJob) {
 	sender, err := w.resolveSender(job.channel)
 	if err != nil {
-		w.recordDelivery(job, false, err.Error())
+		w.recordDelivery(job, err)
 		return
 	}
 
@@ -255,7 +260,7 @@ func (w *deliveryWorker) deliver(job deliveryJob) {
 		err := sender.Send(ctx, job.message)
 		cancel()
 		if err == nil {
-			w.recordDelivery(job, true, "")
+			w.recordDelivery(job, nil)
 			return
 		}
 		lastErr = err
@@ -274,13 +279,13 @@ func (w *deliveryWorker) deliver(job deliveryJob) {
 		case <-w.closed:
 			// Engine is shutting down; abandon remaining retries rather
 			// than blocking Close indefinitely.
-			w.recordDelivery(job, false, lastErr.Error())
+			w.recordDelivery(job, lastErr)
 			return
 		}
 		backoff *= 2
 	}
 
-	w.recordDelivery(job, false, lastErr.Error())
+	w.recordDelivery(job, lastErr)
 }
 
 // resolveSender constructs a Sender for ch via w.sender, mapping a nil
@@ -300,20 +305,27 @@ func (w *deliveryWorker) resolveSender(ch models.NotifyChannel) (Sender, error) 
 }
 
 // recordDelivery appends job's outcome to job.event.Deliveries and
-// persists the updated event. Errors from the store are logged (there
-// is nothing further to do: this already ran on the async delivery
-// path, no request is waiting on it).
-func (w *deliveryWorker) recordDelivery(job deliveryJob, ok bool, errMsg string) {
+// persists the updated event. A nil sendErr records a successful
+// delivery; a non-nil sendErr's message is recorded on Delivery.Error
+// and, when w.diagnose is configured, classified into
+// Delivery.Diagnosis (see Options.Diagnose). Errors from the store are
+// logged (there is nothing further to do: this already ran on the
+// async delivery path, no request is waiting on it).
+func (w *deliveryWorker) recordDelivery(job deliveryJob, sendErr error) {
+	ok := sendErr == nil
 	d := models.Delivery{
 		ChannelID:   job.channel.ID,
 		ChannelName: job.channel.Name,
 		OK:          ok,
-		Error:       errMsg,
 		At:          w.clock().Unix(),
 	}
 	if !ok {
+		d.Error = sendErr.Error()
+		if w.diagnose != nil {
+			d.Diagnosis = w.diagnose(sendErr)
+		}
 		w.logger.Error("alerting: delivery failed",
-			"event_id", job.event.ID, "channel_id", job.channel.ID, "channel_name", job.channel.Name, "error", errMsg)
+			"event_id", job.event.ID, "channel_id", job.channel.ID, "channel_name", job.channel.Name, "error", d.Error)
 	} else {
 		w.logger.Info("alerting: delivery ok",
 			"event_id", job.event.ID, "channel_id", job.channel.ID, "channel_name", job.channel.Name)

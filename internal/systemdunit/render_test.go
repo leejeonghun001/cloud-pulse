@@ -307,6 +307,95 @@ func TestRender_RejectsInvalidSupplementaryGroupNames(t *testing.T) {
 	}
 }
 
+// TestRender_Agent_RemoteUpdate covers SPEC-v0.6 §2's
+// StateDirectory=cloud-pulse-agent line, rendered only when
+// Params.RemoteUpdate is true.
+func TestRender_Agent_RemoteUpdate(t *testing.T) {
+	got, err := Render(Params{
+		Binary:       AgentBinary,
+		BinPath:      "/usr/local/bin/cloud-pulse-agent",
+		EnvFile:      "/etc/cloud-pulse/agent.env",
+		RemoteUpdate: true,
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	const want = `[Unit]
+Description=cloud-pulse agent (host metrics collector)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/cloud-pulse/agent.env
+ExecStart=/usr/local/bin/cloud-pulse-agent
+User=cloud-pulse
+Group=cloud-pulse
+StateDirectory=cloud-pulse-agent
+Restart=on-failure
+RestartSec=5
+
+# --- sandboxing / hardening ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
+`
+	if got != want {
+		t.Fatalf("agent unit with RemoteUpdate=true mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+// TestRender_Agent_RemoteUpdateFalse_NoStateDirectory covers the
+// default (RemoteUpdate=false, e.g. CP_REMOTE_UPDATE=off) case: no
+// StateDirectory= line at all, matching the pre-v0.6.0 agent unit
+// exactly (see wantAgentUnit above).
+func TestRender_Agent_RemoteUpdateFalse_NoStateDirectory(t *testing.T) {
+	got, err := Render(Params{
+		Binary:       AgentBinary,
+		BinPath:      "/usr/local/bin/cloud-pulse-agent",
+		EnvFile:      "/etc/cloud-pulse/agent.env",
+		RemoteUpdate: false,
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if got != wantAgentUnit {
+		t.Fatalf("agent unit with RemoteUpdate=false should be unaffected:\n--- got ---\n%s\n--- want ---\n%s", got, wantAgentUnit)
+	}
+	if strings.Contains(got, "StateDirectory") {
+		t.Errorf("agent unit unexpectedly contains StateDirectory: %s", got)
+	}
+}
+
+// TestRender_Hub_RemoteUpdate_Ignored covers RemoteUpdate's doc comment
+// claim that it is meaningless (ignored) for the hub binary.
+func TestRender_Hub_RemoteUpdate_Ignored(t *testing.T) {
+	got, err := Render(Params{
+		Binary:       HubBinary,
+		BinPath:      "/usr/local/bin/cloud-pulse-hub",
+		EnvFile:      "/etc/cloud-pulse/hub.env",
+		RemoteUpdate: true,
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if got != wantHubRealUnit {
+		t.Fatalf("hub unit should ignore RemoteUpdate:\n--- got ---\n%s\n--- want ---\n%s", got, wantHubRealUnit)
+	}
+}
+
 func TestRender_ValidatesRequiredFields(t *testing.T) {
 	tests := []struct {
 		name string

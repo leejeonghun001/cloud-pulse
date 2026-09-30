@@ -194,8 +194,43 @@ func TestHubClock_SyncInitial_Success(t *testing.T) {
 	defer srv.Close()
 
 	var c HubClock
-	c.SyncInitial(t.Context(), srv.Client(), srv.URL, nil, nil)
+	c.SyncInitial(t.Context(), srv.Client(), srv.URL, "test-token", nil, nil)
 
+	if !c.Synced() {
+		t.Fatal("Synced() = false after successful SyncInitial")
+	}
+}
+
+// TestHubClock_SyncInitial_SendsBearerToken is a regression test: GET
+// /api/v1/agent/time is gated by the hub's requireAgentToken middleware
+// (same as the report endpoint), so SyncInitial/fetchServerTime must
+// send the agent's token as a bearer credential — a prior version of
+// this code built the request with only a User-Agent header and never
+// attached Authorization at all, causing every real deployment's
+// initial hub-clock sync to silently 401 and fall back to the agent's
+// unsynced local clock until its first successful report (whose own
+// round trip re-syncs the clock via Observe).
+func TestHubClock_SyncInitial_SendsBearerToken(t *testing.T) {
+	t.Parallel()
+
+	const wantToken = "super-secret-agent-token"
+	serverTime := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	var gotAuth atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth.Store(r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]int64{"server_time_ms": serverTime.UnixMilli()})
+	}))
+	defer srv.Close()
+
+	var c HubClock
+	c.SyncInitial(t.Context(), srv.Client(), srv.URL, wantToken, nil, nil)
+
+	got, _ := gotAuth.Load().(string)
+	want := "Bearer " + wantToken
+	if got != want {
+		t.Errorf("Authorization header = %q, want %q", got, want)
+	}
 	if !c.Synced() {
 		t.Fatal("Synced() = false after successful SyncInitial")
 	}
@@ -212,7 +247,7 @@ func TestHubClock_SyncInitial_404FallsBackWithoutRetry(t *testing.T) {
 	defer srv.Close()
 
 	var c HubClock
-	c.SyncInitial(t.Context(), srv.Client(), srv.URL, nil, nil)
+	c.SyncInitial(t.Context(), srv.Client(), srv.URL, "test-token", nil, nil)
 
 	if c.Synced() {
 		t.Error("Synced() = true after a 404 response, want false")
@@ -238,7 +273,7 @@ func TestHubClock_SyncInitial_RetriesOnTransientFailureThenSucceeds(t *testing.T
 	defer srv.Close()
 
 	var c HubClock
-	c.SyncInitial(t.Context(), srv.Client(), srv.URL, nil, nil)
+	c.SyncInitial(t.Context(), srv.Client(), srv.URL, "test-token", nil, nil)
 
 	if !c.Synced() {
 		t.Fatal("Synced() = false, want true after eventual success within timeSyncAttempts")
@@ -259,7 +294,7 @@ func TestHubClock_SyncInitial_AllAttemptsFail(t *testing.T) {
 	defer srv.Close()
 
 	var c HubClock
-	c.SyncInitial(t.Context(), srv.Client(), srv.URL, nil, nil)
+	c.SyncInitial(t.Context(), srv.Client(), srv.URL, "test-token", nil, nil)
 
 	if c.Synced() {
 		t.Error("Synced() = true, want false when every attempt fails")
@@ -283,7 +318,7 @@ func TestHubClock_SyncInitial_ContextCanceledStopsEarly(t *testing.T) {
 	cancel()
 
 	var c HubClock
-	c.SyncInitial(ctx, srv.Client(), srv.URL, nil, nil)
+	c.SyncInitial(ctx, srv.Client(), srv.URL, "test-token", nil, nil)
 
 	if requests.Load() != 0 {
 		t.Errorf("requests = %d, want 0 (canceled before any attempt)", requests.Load())

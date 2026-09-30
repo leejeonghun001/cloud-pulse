@@ -127,7 +127,7 @@ func (s *webhookSender) Send(ctx context.Context, msg Message) error {
 		if len(respBody) > maxLen {
 			respBody = respBody[:maxLen]
 		}
-		return fmt.Errorf("notify: webhook: %w: status %d: %s", errUnexpectedStatus, resp.StatusCode, string(respBody))
+		return newStatusError("webhook", "", resp.StatusCode, respBody, string(respBody))
 	}
 	return nil
 }

@@ -136,7 +136,7 @@ func runAgent() int {
 	if cfg.TimeSync == "hub" {
 		clock = &agent.HubClock{}
 		syncCtx, syncCancel := context.WithTimeout(ctx, 20*time.Second)
-		clock.SyncInitial(syncCtx, nil, cfg.HubURL, logger, logClockOffsetWarning(logger))
+		clock.SyncInitial(syncCtx, nil, cfg.HubURL, cfg.Token, logger, logClockOffsetWarning(logger))
 		syncCancel()
 	}
 
@@ -158,6 +158,8 @@ func runAgent() int {
 		"hub_url", cfg.HubURL,
 		"interval", cfg.Interval,
 		"time_sync", cfg.TimeSync,
+		"remote_update", cfg.RemoteUpdate,
+		"cloud_metadata", cfg.CloudMetadata,
 		"version", version.Version,
 	)
 

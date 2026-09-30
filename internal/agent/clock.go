@@ -157,15 +157,17 @@ func (c *HubClock) localNow() time.Time {
 
 // SyncInitial performs the initial hub time sync described in
 // SPEC-v0.2: it issues up to timeSyncAttempts GET requests against
-// {hubURL}/api/v1/agent/time (each bounded by timeSyncRequestTimeout) and
-// records the best result via Observe. It is non-fatal: any failure
+// {hubURL}/api/v1/agent/time (each bounded by timeSyncRequestTimeout,
+// authenticated with token as a bearer credential — GET
+// /api/v1/agent/time is agent-token-gated, same as the report endpoint)
+// and records the best result via Observe. It is non-fatal: any failure
 // (network error, non-2xx status) is logged at debug/info level and
 // SyncInitial returns without error, leaving the clock unsynced so Run
 // falls back to the local clock. A 404 response is logged once at info
 // level ("hub does not support time sync; using local clock") and no
 // further attempts are made for this call. logWarn is forwarded to
 // Observe (see its docs).
-func (c *HubClock) SyncInitial(ctx context.Context, client *http.Client, hubURL string, logger *slog.Logger, logWarn func(offset time.Duration)) {
+func (c *HubClock) SyncInitial(ctx context.Context, client *http.Client, hubURL, token string, logger *slog.Logger, logWarn func(offset time.Duration)) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
@@ -177,7 +179,7 @@ func (c *HubClock) SyncInitial(ctx context.Context, client *http.Client, hubURL 
 		if ctx.Err() != nil {
 			return
 		}
-		serverMs, t0, t1, status, err := c.fetchServerTime(ctx, client, hubURL)
+		serverMs, t0, t1, status, err := c.fetchServerTime(ctx, client, hubURL, token)
 		if err != nil {
 			logger.DebugContext(ctx, "time sync attempt failed", "attempt", attempt+1, "error", err)
 			continue
@@ -195,11 +197,14 @@ func (c *HubClock) SyncInitial(ctx context.Context, client *http.Client, hubURL 
 }
 
 // fetchServerTime issues a single GET against {hubURL}/api/v1/agent/time
-// and returns the parsed server_time_ms, the local send/receive
-// timestamps used for RTT estimation, and the HTTP status code. err is
-// non-nil only for transport-level failures or an unparsable 2xx body;
-// non-2xx/non-404 responses are reported via status with a nil error.
-func (c *HubClock) fetchServerTime(ctx context.Context, client *http.Client, hubURL string) (serverMs int64, t0, t1 time.Time, status int, err error) {
+// (authenticated with token, matching the report endpoint's own bearer
+// auth — GET /api/v1/agent/time is gated by the same requireAgentToken
+// middleware) and returns the parsed server_time_ms, the local send/
+// receive timestamps used for RTT estimation, and the HTTP status code.
+// err is non-nil only for transport-level failures or an unparsable 2xx
+// body; non-2xx/non-404 responses are reported via status with a nil
+// error.
+func (c *HubClock) fetchServerTime(ctx context.Context, client *http.Client, hubURL, token string) (serverMs int64, t0, t1 time.Time, status int, err error) {
 	reqCtx, cancel := context.WithTimeout(ctx, timeSyncRequestTimeout)
 	defer cancel()
 
@@ -208,6 +213,9 @@ func (c *HubClock) fetchServerTime(ctx context.Context, client *http.Client, hub
 		return 0, time.Time{}, time.Time{}, 0, fmt.Errorf("agent: build time sync request: %w", err)
 	}
 	req.Header.Set("User-Agent", "cloud-pulse-agent/"+version.Version)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	t0 = c.localNow()
 	resp, err := client.Do(req)

@@ -167,6 +167,7 @@ func (r *Reporter) Buffered() int {
 // error.
 func (r *Reporter) Flush(ctx context.Context, host models.HostInfo) error {
 	inv := r.inventory.next(ctx, r.logger)
+	updateStatus := pendingUpdateStatus(ctx, r.logger)
 	first := true
 	for {
 		batch := r.peekBatch()
@@ -175,10 +176,12 @@ func (r *Reporter) Flush(ctx context.Context, host models.HostInfo) error {
 		}
 
 		var reportInv *models.Inventory
+		var reportUpdateStatus *models.AgentUpdateStatus
 		if first {
 			reportInv = inv
+			reportUpdateStatus = updateStatus
 		}
-		status, serverTimeMs, latestVersion, t0, t1, err := r.postBatch(ctx, host, batch, reportInv)
+		status, serverTimeMs, latestVersion, updateRequest, t0, t1, err := r.postBatch(ctx, host, batch, reportInv, reportUpdateStatus)
 		if err != nil {
 			return fmt.Errorf("agent: flush: %w", err)
 		}
@@ -191,6 +194,9 @@ func (r *Reporter) Flush(ctx context.Context, host models.HostInfo) error {
 			r.updateNotice.Observe(r.logger, latestVersion)
 			if first && reportInv != nil {
 				r.inventory.markSent(*reportInv)
+			}
+			if first && updateRequest != nil {
+				handleUpdateRequest(ctx, r.logger, updateRequest)
 			}
 			first = false
 			r.dropBatch(len(batch))
@@ -243,11 +249,11 @@ func (r *Reporter) dropBatch(n int) {
 // timestamps bracketing the request, for clock offset estimation. A
 // non-nil error indicates the request could not be completed (network
 // error, non-HTTP failure); it does not indicate an HTTP error status.
-func (r *Reporter) postBatch(ctx context.Context, host models.HostInfo, batch []models.Sample, inv *models.Inventory) (status int, serverTimeMs int64, latestVersion string, t0, t1 time.Time, err error) {
-	report := models.AgentReport{Host: host, Samples: batch, Inventory: inv}
+func (r *Reporter) postBatch(ctx context.Context, host models.HostInfo, batch []models.Sample, inv *models.Inventory, updateStatus *models.AgentUpdateStatus) (status int, serverTimeMs int64, latestVersion string, updateRequest *models.UpdateRequest, t0, t1 time.Time, err error) {
+	report := models.AgentReport{Host: host, Samples: batch, Inventory: inv, UpdateStatus: updateStatus}
 	body, err := json.Marshal(report)
 	if err != nil {
-		return 0, 0, "", time.Time{}, time.Time{}, fmt.Errorf("agent: marshal report: %w", err)
+		return 0, 0, "", nil, time.Time{}, time.Time{}, fmt.Errorf("agent: marshal report: %w", err)
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, requestTimeout)
@@ -255,7 +261,7 @@ func (r *Reporter) postBatch(ctx context.Context, host models.HostInfo, batch []
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, r.hubURL+reportPath, bytes.NewReader(body))
 	if err != nil {
-		return 0, 0, "", time.Time{}, time.Time{}, fmt.Errorf("agent: build request: %w", err)
+		return 0, 0, "", nil, time.Time{}, time.Time{}, fmt.Errorf("agent: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+r.token)
@@ -265,7 +271,7 @@ func (r *Reporter) postBatch(ctx context.Context, host models.HostInfo, batch []
 	resp, err := r.client.Do(req)
 	t1 = time.Now()
 	if err != nil {
-		return 0, 0, "", t0, t1, fmt.Errorf("agent: post report: %w", err)
+		return 0, 0, "", nil, t0, t1, fmt.Errorf("agent: post report: %w", err)
 	}
 	defer func() {
 		_ = resp.Body.Close() // response fully drained below; close error is not actionable
@@ -276,11 +282,12 @@ func (r *Reporter) postBatch(ctx context.Context, host models.HostInfo, batch []
 		if decErr := json.NewDecoder(resp.Body).Decode(&ir); decErr == nil {
 			serverTimeMs = ir.ServerTimeMs
 			latestVersion = ir.LatestVersion
+			updateRequest = ir.UpdateRequest
 		}
 		_, _ = io.Copy(io.Discard, resp.Body) // drain any remainder so the connection can be reused
-		return resp.StatusCode, serverTimeMs, latestVersion, t0, t1, nil
+		return resp.StatusCode, serverTimeMs, latestVersion, updateRequest, t0, t1, nil
 	}
 
 	_, _ = io.Copy(io.Discard, resp.Body) // drain body so the connection can be reused
-	return resp.StatusCode, 0, "", t0, t1, nil
+	return resp.StatusCode, 0, "", nil, t0, t1, nil
 }

@@ -38,6 +38,23 @@
 #                         permission_denied against the default socket
 #                         (owned by root:docker) unless CP_DOCKER is set
 #                         to a Podman-style rootless socket path.
+#   --remote-update           Opt this agent into the hub's remote
+#                         batch-update feature (SPEC-v0.6 §2): sets
+#                         CP_REMOTE_UPDATE=on, adds
+#                         StateDirectory=cloud-pulse-agent to the unit,
+#                         and installs+enables
+#                         cloud-pulse-agent-update.path (which triggers a
+#                         root oneshot cloud-pulse-agent-update.service
+#                         running `cloud-pulse-agent update
+#                         --from-request` whenever the hub delivers a
+#                         request). The hub can still only ask this
+#                         agent to move to a tag from its own
+#                         already-trusted release feed — see
+#                         internal/agent/remoteupdate.go's security
+#                         model doc comment. Without this flag, remote
+#                         updates stay off (the default) and any
+#                         hub-side attempt to update this host reports
+#                         failed/not_enabled.
 #   --version vX.Y.Z        Install a specific release (default: latest).
 #   --prefix DIR            Binary install prefix (default: /usr/local).
 #   --uninstall              Stop/disable the service, remove the unit
@@ -127,6 +144,7 @@ OPT_INTERVAL=""
 OPT_PROVIDER=""
 OPT_EGRESS_LIMIT_GB=""
 OPT_DOCKER=0
+OPT_REMOTE_UPDATE=0
 OPT_PREFIX="/usr/local"
 OPT_ACTION=""
 OPT_UNINSTALL=0
@@ -150,6 +168,11 @@ SYSTEMD_DIR=""
 ENV_FILE=""
 UNIT_FILE=""
 BIN_PATH=""
+UPDATE_PATH_UNIT_FILE=""
+UPDATE_SERVICE_UNIT_FILE=""
+UPDATE_STATE_DIR=""
+UPDATE_REQUEST_FILE=""
+UPDATE_RESULT_DIR=""
 
 ARCH=""
 OS_NAME=""
@@ -453,6 +476,10 @@ parse_args() {
         OPT_DOCKER=1
         shift
         ;;
+      --remote-update)
+        OPT_REMOTE_UPDATE=1
+        shift
+        ;;
       --version)
         OPT_VERSION="${2:?--version requires an argument}"
         shift 2
@@ -554,6 +581,11 @@ setup_paths() {
   ENV_FILE="${ETC_DIR}/agent.env"
   UNIT_FILE="${SYSTEMD_DIR}/cloud-pulse-agent.service"
   BIN_PATH="${BIN_DIR}/cloud-pulse-agent"
+  UPDATE_PATH_UNIT_FILE="${SYSTEMD_DIR}/cloud-pulse-agent-update.path"
+  UPDATE_SERVICE_UNIT_FILE="${SYSTEMD_DIR}/cloud-pulse-agent-update.service"
+  UPDATE_STATE_DIR="${root}/var/lib/cloud-pulse-agent"
+  UPDATE_REQUEST_FILE="${UPDATE_STATE_DIR}/update-request.json"
+  UPDATE_RESULT_DIR="${root}/var/lib/cloud-pulse-agent-update"
 }
 
 # ---------------------------------------------------------------------------
@@ -711,11 +743,11 @@ rewrite_agent_env() {
   # resolved non-empty value needs activating. This never sources agent.env.
   local tmp_env="$1" hub_url="$2" token="$3" host_id="$4" interval="$5"
   local provider="$6" egress_limit="$7" net_exclude="$8" time_sync="$9"
-  local send_jitter="${10}" log_level="${11}" log_format="${12}" docker="${13}"
+  local send_jitter="${10}" log_level="${11}" log_format="${12}" docker="${13}" remote_update="${14}"
   local seen_hub=0 seen_token=0 seen_host=0 seen_interval=0 seen_provider=0
-  local seen_egress=0 seen_net=0 seen_time=0 seen_jitter=0 seen_log_level=0 seen_log_format=0 seen_docker=0
+  local seen_egress=0 seen_net=0 seen_time=0 seen_jitter=0 seen_log_level=0 seen_log_format=0 seen_docker=0 seen_remote_update=0
   local active_hub=0 active_token=0 active_host=0 active_interval=0 active_provider=0
-  local active_egress=0 active_net=0 active_time=0 active_jitter=0 active_log_level=0 active_log_format=0 active_docker=0
+  local active_egress=0 active_net=0 active_time=0 active_jitter=0 active_log_level=0 active_log_format=0 active_docker=0 active_remote_update=0
   local line normalized is_commented
 
   if [ -f "$ENV_FILE" ]; then
@@ -737,6 +769,7 @@ rewrite_agent_env() {
         CP_LOG_LEVEL=*) active_log_level=1 ;;
         CP_LOG_FORMAT=*) active_log_format=1 ;;
         CP_DOCKER=*) active_docker=1 ;;
+        CP_REMOTE_UPDATE=*) active_remote_update=1 ;;
       esac
     done < "$ENV_FILE"
 
@@ -837,6 +870,14 @@ rewrite_agent_env() {
             printf 'CP_DOCKER=%s\n' "$docker"
           fi
           ;;
+        CP_REMOTE_UPDATE=*)
+          seen_remote_update=1
+          if [ "$is_commented" -eq 1 ]; then
+            if [ "$active_remote_update" -eq 1 ] || [ -z "$remote_update" ]; then printf '%s\n' "$line"; else printf 'CP_REMOTE_UPDATE=%s\n' "$remote_update"; fi
+          else
+            printf 'CP_REMOTE_UPDATE=%s\n' "$remote_update"
+          fi
+          ;;
         *) printf '%s\n' "$line" ;;
       esac
     done < "$ENV_FILE" > "$tmp_env"
@@ -870,6 +911,9 @@ rewrite_agent_env() {
     if [ "$seen_docker" -eq 0 ]; then
       if [ -n "$docker" ]; then printf 'CP_DOCKER=%s\n' "$docker"; else echo "#CP_DOCKER=auto"; fi
     fi
+    if [ "$seen_remote_update" -eq 0 ]; then
+      if [ -n "$remote_update" ]; then printf 'CP_REMOTE_UPDATE=%s\n' "$remote_update"; else echo "#CP_REMOTE_UPDATE=off"; fi
+    fi
   } >> "$tmp_env"
 }
 # resolve_docker_value — --docker wins (always "auto"), else the
@@ -885,9 +929,23 @@ resolve_docker_value() {
   env_get_existing CP_DOCKER
 }
 
+# resolve_remote_update_value — --remote-update wins (always "on"),
+# else the existing active CP_REMOTE_UPDATE value from agent.env is
+# preserved on upgrade, else empty (meaning: let the binary default to
+# "off" via an inactive #CP_REMOTE_UPDATE= comment). Same shape as
+# resolve_docker_value, deliberately: SPEC-v0.6 §2 opts in exactly the
+# same way --docker does.
+resolve_remote_update_value() {
+  if [ "$OPT_REMOTE_UPDATE" -eq 1 ]; then
+    echo "on"
+    return
+  fi
+  env_get_existing CP_REMOTE_UPDATE
+}
+
 
 write_env_file() {
-  local hub_url token host_id interval provider egress_limit net_exclude time_sync send_jitter log_level log_format docker
+  local hub_url token host_id interval provider egress_limit net_exclude time_sync send_jitter log_level log_format docker remote_update
 
   if ! hub_url="$(resolve_required_value "$OPT_HUB_URL" CP_HUB_URL --hub-url)"; then exit 1; fi
   if ! token="$(resolve_required_value "$OPT_TOKEN" CP_AGENT_TOKEN --token)"; then exit 1; fi
@@ -903,10 +961,11 @@ write_env_file() {
   log_level="$(resolve_optional_value "" CP_LOG_LEVEL CP_LOG_LEVEL)"
   log_format="$(resolve_optional_value "" CP_LOG_FORMAT CP_LOG_FORMAT)"
   docker="$(resolve_docker_value)"
+  remote_update="$(resolve_remote_update_value)"
 
   mkdir -p "$ETC_DIR"
   local tmp_env="${TMP_DIR}/agent.env"
-  rewrite_agent_env "$tmp_env" "$hub_url" "$token" "$host_id" "$interval" "$provider" "$egress_limit" "$net_exclude" "$time_sync" "$send_jitter" "$log_level" "$log_format" "$docker"
+  rewrite_agent_env "$tmp_env" "$hub_url" "$token" "$host_id" "$interval" "$provider" "$egress_limit" "$net_exclude" "$time_sync" "$send_jitter" "$log_level" "$log_format" "$docker" "$remote_update"
 
   install -m 0640 "$tmp_env" "$ENV_FILE"
   if [ "$IS_SANDBOX" -eq 1 ]; then
@@ -938,6 +997,90 @@ render_unit() {
   log "wrote ${UNIT_FILE}"
 }
 
+# install_update_units — write cloud-pulse-agent-update.path/.service
+# (SPEC-v0.6 §2) when --remote-update is in effect. Prefers asking the
+# freshly installed binary to render both units via its own
+# `systemd-unit apply` (which also handles the create-if-missing case;
+# see cmd/agent/systemdunit.go's applyUpdateUnitsIfEnabled), falling
+# back to a built-in heredoc pair only if that invocation fails (e.g. an
+# explicit --version pin older than the tag that introduced
+# `systemd-unit apply`'s remote-update awareness) — same
+# binary-first-then-heredoc-fallback shape as render_unit/render_unit_via_binary
+# above. When --remote-update is not in effect, this is a no-op: any
+# previously installed update units are left exactly as they are
+# (turning the feature back off is a separate, explicit action this
+# script does not perform implicitly).
+install_update_units() {
+  if [ "$OPT_REMOTE_UPDATE" -ne 1 ]; then
+    return
+  fi
+
+  mkdir -p "$SYSTEMD_DIR" "$UPDATE_STATE_DIR" "$UPDATE_RESULT_DIR"
+
+  if [ -x "$BIN_PATH" ] && timeout 15 "$BIN_PATH" systemd-unit apply \
+      --unit-path "$UNIT_FILE" \
+      --update-path-unit-path "$UPDATE_PATH_UNIT_FILE" \
+      --update-service-unit-path "$UPDATE_SERVICE_UNIT_FILE" \
+      --request-path "$UPDATE_REQUEST_FILE" \
+      --result-dir "$UPDATE_RESULT_DIR" \
+      --no-reload >/dev/null 2>&1; then
+    log "rendered ${UPDATE_PATH_UNIT_FILE} / ${UPDATE_SERVICE_UNIT_FILE} via '${BIN_PATH} systemd-unit apply'"
+  else
+    install_update_units_fallback
+    log "rendered ${UPDATE_PATH_UNIT_FILE} / ${UPDATE_SERVICE_UNIT_FILE} via built-in fallback template"
+  fi
+}
+
+# install_update_units_fallback — bash heredoc fallback kept
+# byte-identical to internal/systemdunit.RenderUpdatePath/
+# RenderUpdateService's output (see the golden test in
+# internal/systemdunit/updateunit_test.go and the drift test in
+# test-install.sh).
+install_update_units_fallback() {
+  local tmp_path_unit="${TMP_DIR}/cloud-pulse-agent-update.path"
+  local tmp_service_unit="${TMP_DIR}/cloud-pulse-agent-update.service"
+  {
+    echo "[Unit]"
+    echo "Description=Watch for cloud-pulse-agent remote update requests"
+    echo
+    echo "[Path]"
+    echo "PathModified=${UPDATE_REQUEST_FILE}"
+    echo "PathExists=${UPDATE_REQUEST_FILE}"
+    echo "Unit=cloud-pulse-agent-update.service"
+    echo
+    echo "[Install]"
+    echo "WantedBy=multi-user.target"
+  } > "$tmp_path_unit"
+  {
+    echo "[Unit]"
+    echo "Description=Apply a hub-requested cloud-pulse-agent update"
+    echo
+    echo "[Service]"
+    echo "Type=oneshot"
+    echo "ExecStart=${BIN_PATH} update --from-request ${UPDATE_REQUEST_FILE} --result-dir ${UPDATE_RESULT_DIR}"
+  } > "$tmp_service_unit"
+  install -m 0644 "$tmp_path_unit" "$UPDATE_PATH_UNIT_FILE"
+  install -m 0644 "$tmp_service_unit" "$UPDATE_SERVICE_UNIT_FILE"
+}
+
+# enable_update_path_unit — enable (but never start; it only ever
+# triggers on demand) cloud-pulse-agent-update.path so it survives a
+# reboot, only when --remote-update is in effect. This is the "옵트인
+# 시에만 enable" half of SPEC-v0.6 §2 systemctl invocations start_service
+# doesn't already cover (start_service only knows about the main
+# cloud-pulse-agent.service).
+enable_update_path_unit() {
+  if [ "$OPT_REMOTE_UPDATE" -ne 1 ]; then
+    return
+  fi
+  if [ "$IS_SANDBOX" -eq 1 ] && [ -z "${CP_SYSTEMCTL:-}" ]; then
+    log "sandbox: would run ${SYSTEMCTL} enable cloud-pulse-agent-update.path"
+    return
+  fi
+  "$SYSTEMCTL" enable cloud-pulse-agent-update.path
+  log "enabled cloud-pulse-agent-update.path (SPEC-v0.6 §2 remote update)"
+}
+
 # detect_preserved_docker_flag — if this is a re-run (reinstall/upgrade)
 # that doesn't re-pass --docker, but the existing unit file already has
 # SupplementaryGroups=docker, treat this run as if --docker had been
@@ -957,6 +1100,20 @@ detect_preserved_docker_flag() {
   fi
 }
 
+# detect_preserved_remote_update_flag — same idea as
+# detect_preserved_docker_flag, for --remote-update (SPEC-v0.6 §2): a
+# re-run that doesn't re-pass --remote-update but whose existing unit
+# already has StateDirectory=cloud-pulse-agent preserves the opt-in.
+detect_preserved_remote_update_flag() {
+  if [ "$OPT_REMOTE_UPDATE" -eq 1 ]; then
+    return
+  fi
+  if [ -f "$UNIT_FILE" ] && grep -q '^StateDirectory=cloud-pulse-agent$' "$UNIT_FILE" 2>/dev/null; then
+    OPT_REMOTE_UPDATE=1
+    log "preserving existing --remote-update setting from ${UNIT_FILE} (StateDirectory=cloud-pulse-agent)"
+  fi
+}
+
 # render_unit_via_binary OUT_PATH — ask the freshly installed agent
 # binary to render its own systemd unit (SPEC-v0.3.1 B,
 # internal/systemdunit). See install-hub.sh's identical helper for the
@@ -967,20 +1124,25 @@ render_unit_via_binary() {
   if [ ! -x "$BIN_PATH" ]; then
     return 1
   fi
+  local extra_args=()
   if [ "$OPT_DOCKER" -eq 1 ]; then
-    timeout 10 "$BIN_PATH" systemd-unit print --bin-path "$BIN_PATH" --env-file "$ENV_FILE" \
-      --user "$CP_SERVICE_USER" --group "$CP_SERVICE_GROUP" --supplementary-groups docker >"$out_path" 2>/dev/null
-  else
-    timeout 10 "$BIN_PATH" systemd-unit print --bin-path "$BIN_PATH" --env-file "$ENV_FILE" \
-      --user "$CP_SERVICE_USER" --group "$CP_SERVICE_GROUP" >"$out_path" 2>/dev/null
+    extra_args+=(--supplementary-groups docker)
   fi
+  if [ "$OPT_REMOTE_UPDATE" -eq 1 ]; then
+    extra_args+=(--remote-update)
+  fi
+  timeout 10 "$BIN_PATH" systemd-unit print --bin-path "$BIN_PATH" --env-file "$ENV_FILE" \
+    --user "$CP_SERVICE_USER" --group "$CP_SERVICE_GROUP" "${extra_args[@]}" >"$out_path" 2>/dev/null
 }
 
 # render_unit_fallback OUT_PATH — bash heredoc fallback kept
 # byte-identical to internal/systemdunit.Render's agent template (see
 # SPEC-v0.3.1 B and the drift test in test-install.sh). A
 # SupplementaryGroups=docker line is added right after Group= when
-# --docker was given (SPEC-v0.5 §C), matching Render's own placement.
+# --docker was given (SPEC-v0.5 §C); a StateDirectory=cloud-pulse-agent
+# line is added right after that (or after Group= if --docker wasn't
+# given) when --remote-update was given (SPEC-v0.6 §2), matching
+# Render's own placement.
 render_unit_fallback() {
   local out_path="$1"
   {
@@ -997,6 +1159,9 @@ render_unit_fallback() {
     echo "Group=${CP_SERVICE_GROUP}"
     if [ "$OPT_DOCKER" -eq 1 ]; then
       echo "SupplementaryGroups=docker"
+    fi
+    if [ "$OPT_REMOTE_UPDATE" -eq 1 ]; then
+      echo "StateDirectory=cloud-pulse-agent"
     fi
     echo "Restart=on-failure"
     echo "RestartSec=5"
@@ -1185,9 +1350,15 @@ print_dry_run() {
   fi
   echo "  - write ${ENV_FILE} (mode 0640, owner root:${CP_SERVICE_GROUP})"
   echo "  - write ${UNIT_FILE}"
+  if [ "$OPT_REMOTE_UPDATE" -eq 1 ]; then
+    echo "  - write ${UPDATE_PATH_UNIT_FILE} / ${UPDATE_SERVICE_UNIT_FILE} (--remote-update, SPEC-v0.6 §2)"
+  fi
   echo "  - systemd-analyze verify the unit"
   echo "  - ${SYSTEMCTL} daemon-reload && ${SYSTEMCTL} enable cloud-pulse-agent.service"
   echo "  - start cloud-pulse-agent.service if inactive; restart it if already running"
+  if [ "$OPT_REMOTE_UPDATE" -eq 1 ]; then
+    echo "  - ${SYSTEMCTL} enable cloud-pulse-agent-update.path (--remote-update)"
+  fi
   echo "  - run -once sanity check and curl \$HUB_URL/healthz (both non-fatal)"
   if [ -x "$BIN_PATH" ]; then
     local existing_version
@@ -1281,6 +1452,16 @@ prompt_fresh_install_values() {
   fi
   case "$answer" in
     [Yy]|[Yy][Ee][Ss]) OPT_DOCKER=1 ;;
+    *) ;;
+  esac
+
+  prompt_tty "Allow the hub to trigger updates of this agent? [y/N]: "
+  if ! read_line_tty answer; then
+    err "unexpected EOF on /dev/tty"
+    exit 1
+  fi
+  case "$answer" in
+    [Yy]|[Yy][Ee][Ss]) OPT_REMOTE_UPDATE=1 ;;
     *) ;;
   esac
 }
@@ -1390,14 +1571,18 @@ do_uninstall() {
   if [ "$IS_SANDBOX" -eq 1 ] && [ -z "${CP_SYSTEMCTL:-}" ]; then
     log "sandbox: would run ${SYSTEMCTL} stop cloud-pulse-agent.service"
     log "sandbox: would run ${SYSTEMCTL} disable cloud-pulse-agent.service"
+    log "sandbox: would run ${SYSTEMCTL} stop cloud-pulse-agent-update.path"
+    log "sandbox: would run ${SYSTEMCTL} disable cloud-pulse-agent-update.path"
   elif command -v "$SYSTEMCTL" >/dev/null 2>&1; then
     "$SYSTEMCTL" stop cloud-pulse-agent.service 2>/dev/null || true
     "$SYSTEMCTL" disable cloud-pulse-agent.service 2>/dev/null || true
+    "$SYSTEMCTL" stop cloud-pulse-agent-update.path 2>/dev/null || true
+    "$SYSTEMCTL" disable cloud-pulse-agent-update.path 2>/dev/null || true
   fi
 
-  rm -f "$UNIT_FILE"
+  rm -f "$UNIT_FILE" "$UPDATE_PATH_UNIT_FILE" "$UPDATE_SERVICE_UNIT_FILE"
   rm -f "$BIN_PATH"
-  log "removed unit and binary"
+  log "removed unit(s) and binary"
 
   if { [ "$IS_SANDBOX" -ne 1 ] || [ -n "${CP_SYSTEMCTL:-}" ]; } && command -v "$SYSTEMCTL" >/dev/null 2>&1; then
     "$SYSTEMCTL" daemon-reload || true
@@ -1405,7 +1590,8 @@ do_uninstall() {
 
   if [ "$OPT_PURGE" -eq 1 ]; then
     rm -f "$ENV_FILE"
-    log "purged config (--purge)"
+    rm -rf "$UPDATE_STATE_DIR" "$UPDATE_RESULT_DIR"
+    log "purged config and remote-update state (--purge)"
   else
     log "kept ${ENV_FILE} (pass --purge to remove it)"
   fi
@@ -1425,13 +1611,16 @@ run_install_flow() {
   trap 'rm -rf "$TMP_DIR"' EXIT
 
   detect_preserved_docker_flag
+  detect_preserved_remote_update_flag
   download_and_verify
   ensure_system_user
   install_binary
   write_env_file
   render_unit
+  install_update_units
   verify_unit
   start_service
+  enable_update_path_unit
   run_sanity_checks
   print_summary
 }

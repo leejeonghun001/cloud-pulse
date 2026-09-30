@@ -104,6 +104,21 @@ func asRetryAfterError(err error) *notify.RetryAfterError {
 // alerting.Sender.
 var _ alerting.Sender = notifySenderBridge{}
 
+// diagnoseDelivery classifies a failed delivery's error into a
+// models.DiagnosisCode via internal/notify.DiagnoseError, satisfying
+// alerting.Options.Diagnose's func(error) *models.DiagnosisCode shape.
+// This lives in cmd/hub (not internal/alerting) because
+// internal/alerting deliberately has no import on internal/notify —
+// see internal/alerting/notify.go's doc comment — and cmd/hub is
+// already the one place that imports and bridges both packages.
+func diagnoseDelivery(err error) *models.DiagnosisCode {
+	if err == nil {
+		return nil
+	}
+	code := notify.DiagnoseError(err).Code
+	return &code
+}
+
 // buildAlerting constructs the real internal/alerting.Engine (backed by
 // store, which must already satisfy alerting.Store — *storage.DB does)
 // and adapts it plus an internal/notify-backed sender factory into
@@ -117,6 +132,7 @@ func buildAlerting(store alerting.Store, logger *slog.Logger) (*alerting.Engine,
 		Store:         store,
 		SenderFactory: senderFactory,
 		Logger:        logger,
+		Diagnose:      diagnoseDelivery,
 	})
 	return engine, hub.WrapAlertEngine(engine), hub.WrapNotifySenderFactory(senderFactory)
 }

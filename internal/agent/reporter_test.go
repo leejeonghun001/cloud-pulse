@@ -389,3 +389,52 @@ func TestReporter_NoUpdateNoticeWhenLatestVersionAbsent(t *testing.T) {
 		t.Errorf("expected no update notice when latest_version is absent, got: %q", buf.String())
 	}
 }
+
+func TestReporter_Flush_ReceivesUpdateRequestFromResponse(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(models.IngestResponse{
+			Accepted:      1,
+			UpdateRequest: &models.UpdateRequest{JobID: 7, Target: "latest"},
+		})
+	}))
+	defer srv.Close()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	r := NewReporter(ReporterOptions{HubURL: srv.URL, Token: "tok", Logger: logger})
+	r.Enqueue(models.Sample{Timestamp: 1})
+
+	if err := r.Flush(t.Context(), models.HostInfo{ID: "h1"}); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	// handleUpdateRequest is currently a stub that only logs receipt
+	// (see remoteupdate.go); this asserts Flush actually reaches that
+	// call site with the decoded UpdateRequest, so a future real
+	// implementation is wired correctly without further Reporter
+	// changes.
+	if !strings.Contains(logBuf.String(), "job_id=7") {
+		t.Errorf("expected log output to mention job_id=7, got %q", logBuf.String())
+	}
+}
+
+func TestReporter_Flush_NoUpdateRequestIsFine(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(models.IngestResponse{Accepted: 1})
+	}))
+	defer srv.Close()
+
+	r := NewReporter(ReporterOptions{HubURL: srv.URL, Token: "tok"})
+	r.Enqueue(models.Sample{Timestamp: 1})
+
+	if err := r.Flush(t.Context(), models.HostInfo{ID: "h1"}); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+}

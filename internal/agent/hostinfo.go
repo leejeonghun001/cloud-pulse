@@ -52,6 +52,11 @@ func BuildHostInfo(ctx context.Context, src Source, cfg config.Agent, logger *sl
 	info.Provider = resolveProvider(cfg.Provider)
 	info.EgressLimitBytes = resolveEgressLimit(cfg.EgressLimitBytes, info.Provider)
 
+	if cfg.CloudMetadata != "off" {
+		info.CloudInstanceID = cloudInstanceID(ctx, info.Provider)
+	}
+	info.RemoteUpdate = resolveRemoteUpdateCapability(cfg.RemoteUpdate)
+
 	return info
 }
 

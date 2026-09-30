@@ -36,6 +36,18 @@ type fakeStore struct {
 	nextEventID int64
 	inventories map[string]models.Inventory // key: hostID
 
+	cloudCostSnapshots map[models.CloudBillingProvider]models.CloudCostSnapshot
+
+	updateJobs map[int64]models.UpdateJob
+	nextJobID  int64
+
+	pricingPlans map[int64]models.PricingPlan
+	nextPlanID   int64
+	hostPricing  map[string]models.HostPricing // key: hostID
+
+	auditEntries []models.AuditEntry
+	nextAuditID  int64
+
 	rollupErr   error
 	pruneErr    error
 	rollupCalls int
@@ -44,20 +56,24 @@ type fakeStore struct {
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
-		hosts:       make(map[string]models.HostRecord),
-		samples:     make(map[string][]models.Sample),
-		egress:      make(map[string]models.EgressRecord),
-		alerts:      make(map[string]bool),
-		buckets:     make(map[string]models.BucketStats),
-		history:     make(map[string][]models.BucketPoint),
-		limits:      make(map[string]models.HostLimits),
-		settings:    make(map[string]string),
-		sessions:    make(map[string]models.Session),
-		alertRules:  make(map[int64]models.AlertRule),
-		channels:    make(map[int64]models.NotifyChannel),
-		alertStates: make(map[string]models.AlertState),
-		alertEvents: make(map[int64]models.AlertEvent),
-		inventories: make(map[string]models.Inventory),
+		hosts:              make(map[string]models.HostRecord),
+		samples:            make(map[string][]models.Sample),
+		egress:             make(map[string]models.EgressRecord),
+		alerts:             make(map[string]bool),
+		buckets:            make(map[string]models.BucketStats),
+		history:            make(map[string][]models.BucketPoint),
+		limits:             make(map[string]models.HostLimits),
+		settings:           make(map[string]string),
+		sessions:           make(map[string]models.Session),
+		alertRules:         make(map[int64]models.AlertRule),
+		channels:           make(map[int64]models.NotifyChannel),
+		alertStates:        make(map[string]models.AlertState),
+		alertEvents:        make(map[int64]models.AlertEvent),
+		inventories:        make(map[string]models.Inventory),
+		cloudCostSnapshots: make(map[models.CloudBillingProvider]models.CloudCostSnapshot),
+		updateJobs:         make(map[int64]models.UpdateJob),
+		pricingPlans:       make(map[int64]models.PricingPlan),
+		hostPricing:        make(map[string]models.HostPricing),
 	}
 }
 
@@ -685,6 +701,240 @@ func (f *fakeStore) SetHostInventory(_ context.Context, hostID string, inv model
 	return nil
 }
 
+// --- Cloud billing (SPEC-v0.6 §1) ---
+
+func (f *fakeStore) GetCloudCostSnapshot(_ context.Context, provider models.CloudBillingProvider) (models.CloudCostSnapshot, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	snap, ok := f.cloudCostSnapshots[provider]
+	if !ok {
+		return models.CloudCostSnapshot{Provider: provider, Status: models.CloudBillingNotConfigured}, nil
+	}
+	return snap, nil
+}
+
+func (f *fakeStore) ListCloudCostSnapshots(_ context.Context) ([]models.CloudCostSnapshot, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]models.CloudCostSnapshot, 0, len(f.cloudCostSnapshots))
+	for _, snap := range f.cloudCostSnapshots {
+		out = append(out, snap)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Provider < out[j].Provider })
+	return out, nil
+}
+
+func (f *fakeStore) SetCloudCostSnapshot(_ context.Context, snap models.CloudCostSnapshot) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cloudCostSnapshots[snap.Provider] = snap
+	return nil
+}
+
+// --- Remote agent updates (SPEC-v0.6 §2) ---
+
+func (f *fakeStore) CreateUpdateJob(_ context.Context, j models.UpdateJob) (models.UpdateJob, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextJobID++
+	j.ID = f.nextJobID
+	now := time.Now().Unix()
+	j.CreatedAt, j.UpdatedAt = now, now
+	if j.Attempt == 0 {
+		j.Attempt = 1
+	}
+	f.updateJobs[j.ID] = j
+	return j, nil
+}
+
+func (f *fakeStore) GetUpdateJob(_ context.Context, id int64) (models.UpdateJob, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	j, ok := f.updateJobs[id]
+	if !ok {
+		return models.UpdateJob{}, models.ErrNotFound
+	}
+	return j, nil
+}
+
+func (f *fakeStore) UpdateUpdateJob(_ context.Context, j models.UpdateJob) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	existing, ok := f.updateJobs[j.ID]
+	if !ok {
+		return models.ErrNotFound
+	}
+	j.CreatedAt = existing.CreatedAt
+	j.UpdatedAt = time.Now().Unix()
+	f.updateJobs[j.ID] = j
+	return nil
+}
+
+func (f *fakeStore) ListUpdateJobs(_ context.Context, batchID string, state models.UpdateJobState) ([]models.UpdateJob, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]models.UpdateJob, 0, len(f.updateJobs))
+	for _, j := range f.updateJobs {
+		if batchID != "" && j.BatchID != batchID {
+			continue
+		}
+		if state != "" && j.State != state {
+			continue
+		}
+		out = append(out, j)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt > out[j].CreatedAt })
+	return out, nil
+}
+
+func (f *fakeStore) GetLatestUpdateJobForHost(_ context.Context, hostID string) (models.UpdateJob, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var latest models.UpdateJob
+	found := false
+	for _, j := range f.updateJobs {
+		if j.HostID != hostID {
+			continue
+		}
+		if !found || j.CreatedAt > latest.CreatedAt {
+			latest = j
+			found = true
+		}
+	}
+	if !found {
+		return models.UpdateJob{}, models.ErrNotFound
+	}
+	return latest, nil
+}
+
+// --- Network cost estimation (SPEC-v0.6 §3) ---
+
+func (f *fakeStore) ListPricingPlans(_ context.Context) ([]models.PricingPlan, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]models.PricingPlan, 0, len(f.pricingPlans))
+	for _, p := range f.pricingPlans {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+func (f *fakeStore) GetPricingPlan(_ context.Context, id int64) (models.PricingPlan, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, ok := f.pricingPlans[id]
+	if !ok {
+		return models.PricingPlan{}, models.ErrNotFound
+	}
+	return p, nil
+}
+
+func (f *fakeStore) CreatePricingPlan(_ context.Context, p models.PricingPlan) (models.PricingPlan, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextPlanID++
+	p.ID = f.nextPlanID
+	p.Builtin = false
+	now := time.Now().Unix()
+	p.CreatedAt, p.UpdatedAt = now, now
+	f.pricingPlans[p.ID] = p
+	return p, nil
+}
+
+func (f *fakeStore) UpdatePricingPlan(_ context.Context, p models.PricingPlan) (models.PricingPlan, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	existing, ok := f.pricingPlans[p.ID]
+	if !ok {
+		return models.PricingPlan{}, models.ErrNotFound
+	}
+	p.CreatedAt = existing.CreatedAt
+	p.UpdatedAt = time.Now().Unix()
+	f.pricingPlans[p.ID] = p
+	return p, nil
+}
+
+func (f *fakeStore) DeletePricingPlan(_ context.Context, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.pricingPlans, id)
+	return nil
+}
+
+func (f *fakeStore) GetHostPricing(_ context.Context, hostID string) (models.HostPricing, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	hp, ok := f.hostPricing[hostID]
+	if !ok {
+		return models.HostPricing{HostID: hostID}, nil
+	}
+	return hp, nil
+}
+
+func (f *fakeStore) ListHostPricing(_ context.Context) ([]models.HostPricing, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]models.HostPricing, 0, len(f.hostPricing))
+	for _, hp := range f.hostPricing {
+		out = append(out, hp)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].HostID < out[j].HostID })
+	return out, nil
+}
+
+func (f *fakeStore) SetHostPricing(_ context.Context, hp models.HostPricing) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hostPricing[hp.HostID] = hp
+	return nil
+}
+
+// --- Audit log (SPEC-v0.6 §3 개선 c) ---
+
+func (f *fakeStore) CreateAuditEntry(_ context.Context, e models.AuditEntry) (models.AuditEntry, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextAuditID++
+	e.ID = f.nextAuditID
+	f.auditEntries = append(f.auditEntries, e)
+	return e, nil
+}
+
+func (f *fakeStore) ListAuditEntries(_ context.Context, entityType string, before int64, limit int) ([]models.AuditEntry, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]models.AuditEntry, 0, len(f.auditEntries))
+	for _, e := range f.auditEntries {
+		if entityType != "" && e.EntityType != entityType {
+			continue
+		}
+		if before != 0 && e.At >= before {
+			continue
+		}
+		out = append(out, e)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].At > out[j].At })
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (f *fakeStore) PruneAuditEntries(_ context.Context, now time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cutoff := now.AddDate(0, 0, -models.AuditRetentionDays).Unix()
+	kept := f.auditEntries[:0]
+	for _, e := range f.auditEntries {
+		if e.At >= cutoff {
+			kept = append(kept, e)
+		}
+	}
+	f.auditEntries = kept
+	return nil
+}
+
 // setAlertRule directly stores a rule under its own ID, bypassing
 // CreateAlertRule's auto-increment, for tests that need a specific ID
 // (e.g. matching a channel reference fixture).
@@ -707,6 +957,18 @@ func (f *fakeStore) setNotifyChannel(ch models.NotifyChannel) {
 	if ch.ID > f.nextChanID {
 		f.nextChanID = ch.ID
 	}
+}
+
+// forceSetUpdateJob directly overwrites the stored row for j.ID
+// (assumed to already exist), bypassing UpdateUpdateJob's
+// real-wall-clock UpdatedAt stamping — for tests (SPEC-v0.6 §2's job
+// timeout logic) that need full control over UpdatedAt to be
+// deterministic against an injected clock rather than actual test
+// execution speed.
+func (f *fakeStore) forceSetUpdateJob(j models.UpdateJob) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updateJobs[j.ID] = j
 }
 
 var errFakeStore = errors.New("fake store error")

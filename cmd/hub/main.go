@@ -155,6 +155,10 @@ func printConfigSummary(w *os.File, cfg config.Hub) {
 		fmt.Sprintf("  log_format:        %s", cfg.LogFormat),
 		fmt.Sprintf("  s3_enabled:        %t (%d bucket(s))", cfg.S3Enabled(), len(cfg.S3Buckets)),
 		fmt.Sprintf("  r2_enabled:        %t (%d bucket(s) configured, empty = all)", cfg.R2Enabled(), len(cfg.R2Buckets)),
+		fmt.Sprintf("  billing:           %s (interval %s, aws_resources=%t)", cfg.Billing, cfg.BillingInterval, cfg.BillingAWSResources),
+		fmt.Sprintf("  oci_config_file:   %s", displayOrUnset(cfg.OCIConfigFile)),
+		fmt.Sprintf("  oci_profile:       %s", displayOrUnset(cfg.OCIProfile)),
+		fmt.Sprintf("  oci_tenancy_id:    %s", displayOrUnset(cfg.OCITenancyID)),
 	}
 	for _, line := range lines {
 		// Best-effort: -check-config writes to stdout for human
@@ -171,6 +175,17 @@ func redactPresence(v string) string {
 		return "(not set)"
 	}
 	return "(set)"
+}
+
+// displayOrUnset prints v as-is when set, or "(not set)" when empty.
+// Used for non-secret string config fields (paths, profile/tenancy
+// identifiers) that are safe to show in full, unlike redactPresence's
+// fields.
+func displayOrUnset(v string) string {
+	if v == "" {
+		return "(not set)"
+	}
+	return v
 }
 
 // formatCIDRs renders the allowlist for display; a nil slice means allow
@@ -228,6 +243,8 @@ func runHub(cfg config.Hub) int {
 	alertEngine, wrappedAlertEngine, notifyFactory := buildAlerting(store, logger)
 	defer alertEngine.Close()
 
+	billingRuntime := buildBillingRuntime(cfg, store)
+
 	srv := hub.New(hub.Options{
 		AgentToken:      cfg.AgentToken,
 		UIToken:         cfg.UIToken,
@@ -243,8 +260,33 @@ func runHub(cfg config.Hub) int {
 		Listener:      listenMgr,
 		Alerting:      wrappedAlertEngine,
 		NotifyFactory: notifyFactory,
+		Billing:       billingRuntime,
 	}, store, collectors, nil, web.Assets(), logger)
 	httpSrv.Handler = srv.Handler()
+
+	// Wire the real per-host network-cost estimator into the billing
+	// runtime now that srv exists (billingRuntime is the same *hub.
+	// BillingRuntime pointer stored in srv's own opts.Billing, so this
+	// mutation is visible to every subsequent GET /api/v1/billing call
+	// — see internal/hub/pricingroutes.go's NetworkEstimatorFor doc
+	// comment). Left nil (billing.ZeroNetworkEstimator's default
+	// applies) when billing is disabled altogether.
+	//
+	// Note: billing.NetworkEstimator's func(hostID string) signature
+	// means BuildBillingView calls this once per host; each call below
+	// re-runs NetworkEstimatorFor's full per-plan computation rather
+	// than sharing one precomputed map across a single GET
+	// /api/v1/billing request. Acceptable for this project's target
+	// fleet sizes (a handful to a few dozen hosts, per README) — a
+	// request-scoped cache would need either changing
+	// billing.NetworkEstimator's signature (shared file, out of this
+	// stage's scope) or a sync.Once-per-request wrapper, neither of
+	// which is worth the complexity for the data volumes involved.
+	if billingRuntime != nil {
+		billingRuntime.NetworkEstimator = func(hostID string) models.EstimatedCost {
+			return srv.NetworkEstimatorFor(ctx)(hostID)
+		}
+	}
 
 	if err := srv.EnsureDefaultCredentials(ctx); err != nil {
 		logger.Error("ensure default credentials failed", "error", err)
@@ -285,6 +327,12 @@ func runHub(cfg config.Hub) int {
 		listenMgr.Run(bgCtx)
 	}()
 
+	billingDone := make(chan struct{})
+	go func() {
+		defer close(billingDone)
+		srv.RunBillingLoop(bgCtx)
+	}()
+
 	<-ctx.Done()
 	logger.Info("shutdown signal received")
 
@@ -297,6 +345,7 @@ func runHub(cfg config.Hub) int {
 	stopBg()
 	<-bgDone
 	<-retryDone
+	<-billingDone
 	srv.Wait()
 
 	logger.Info("shutdown complete")

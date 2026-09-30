@@ -124,6 +124,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		Rejected:      rejected,
 		ServerTimeMs:  s.opts.now().UnixMilli(),
 		LatestVersion: s.updateStatusSnapshot().latestVersion,
+		UpdateRequest: s.applyUpdateIngest(ctx, report),
 	}
 	writeJSON(w, http.StatusOK, resp)
 
@@ -171,10 +172,14 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	}
 	limitsByHost := indexLimitsByHost(limits)
 
+	costByProvider, networkEstimator := s.hostCostInputs(ctx)
+
 	summaries := make([]models.HostSummary, 0, len(records))
 	for _, rec := range records {
 		tx, rx := egressByHost[rec.Info.ID].TxBytes, egressByHost[rec.Info.ID].RxBytes
-		summaries = append(summaries, s.buildHostSummary(ctx, rec, limitsByHost[rec.Info.ID], tx, rx, now, s.opts.OfflineAfter))
+		summary := s.buildHostSummary(ctx, rec, limitsByHost[rec.Info.ID], tx, rx, now, s.opts.OfflineAfter)
+		s.attachHostCost(&summary, costByProvider, networkEstimator)
+		summaries = append(summaries, summary)
 	}
 
 	sort.Slice(summaries, func(i, j int) bool {
@@ -220,6 +225,8 @@ func (s *Server) handleGetHost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	summary := s.buildHostSummary(ctx, rec, limits, tx, rx, now, s.opts.OfflineAfter)
+	costByProvider, networkEstimator := s.hostCostInputs(ctx)
+	s.attachHostCost(&summary, costByProvider, networkEstimator)
 	writeJSON(w, http.StatusOK, summary)
 }
 

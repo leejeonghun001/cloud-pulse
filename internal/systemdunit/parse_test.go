@@ -60,6 +60,36 @@ func TestParseExisting_ValidAgentUnit(t *testing.T) {
 	}
 }
 
+// TestParseExisting_ValidAgentUnitWithRemoteUpdate covers SPEC-v0.6 §2's
+// StateDirectory=cloud-pulse-agent line round-tripping into
+// Params.RemoteUpdate.
+func TestParseExisting_ValidAgentUnitWithRemoteUpdate(t *testing.T) {
+	rendered, err := Render(Params{
+		Binary:       AgentBinary,
+		BinPath:      "/usr/local/bin/cloud-pulse-agent",
+		EnvFile:      "/etc/cloud-pulse/agent.env",
+		RemoteUpdate: true,
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	got, err := ParseExisting(rendered)
+	if err != nil {
+		t.Fatalf("ParseExisting: %v", err)
+	}
+	want := Params{
+		Binary:       AgentBinary,
+		BinPath:      "/usr/local/bin/cloud-pulse-agent",
+		EnvFile:      "/etc/cloud-pulse/agent.env",
+		User:         "cloud-pulse",
+		Group:        "cloud-pulse",
+		RemoteUpdate: true,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ParseExisting mismatch:\ngot:  %+v\nwant: %+v", got, want)
+	}
+}
+
 // TestParseExisting_RoundTripsThroughRender asserts Apply's core
 // invariant: parsing a unit Render produced and re-rendering it returns
 // byte-identical output, for all three golden shapes.

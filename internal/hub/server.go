@@ -200,6 +200,86 @@ type Store interface {
 	// hostID with inv (one row per host; upsert on host_id).
 	SetHostInventory(ctx context.Context, hostID string, inv models.Inventory) error
 
+	// --- Cloud billing (SPEC-v0.6 §1) ---
+
+	// GetCloudCostSnapshot returns the persisted snapshot for provider,
+	// or a zero-value models.CloudCostSnapshot{Provider: provider,
+	// Status: models.CloudBillingNotConfigured} with a nil error if no
+	// row exists yet.
+	GetCloudCostSnapshot(ctx context.Context, provider models.CloudBillingProvider) (models.CloudCostSnapshot, error)
+	// ListCloudCostSnapshots returns every persisted provider snapshot.
+	ListCloudCostSnapshots(ctx context.Context) ([]models.CloudCostSnapshot, error)
+	// SetCloudCostSnapshot upserts the snapshot for snap.Provider,
+	// keyed on provider (one row per provider).
+	SetCloudCostSnapshot(ctx context.Context, snap models.CloudCostSnapshot) error
+
+	// --- Remote agent updates (SPEC-v0.6 §2) ---
+
+	// CreateUpdateJob inserts j, ignoring j.ID, and returns the row with
+	// its assigned ID and CreatedAt/UpdatedAt populated.
+	CreateUpdateJob(ctx context.Context, j models.UpdateJob) (models.UpdateJob, error)
+	// GetUpdateJob returns one job by id, or models.ErrNotFound.
+	GetUpdateJob(ctx context.Context, id int64) (models.UpdateJob, error)
+	// UpdateUpdateJob replaces the stored job matching j.ID with j
+	// (UpdatedAt refreshed to now), or returns models.ErrNotFound if no
+	// job with that ID exists.
+	UpdateUpdateJob(ctx context.Context, j models.UpdateJob) error
+	// ListUpdateJobs returns jobs matching the given filters, newest
+	// first. batchID == "" matches any batch; state == "" matches any
+	// state.
+	ListUpdateJobs(ctx context.Context, batchID string, state models.UpdateJobState) ([]models.UpdateJob, error)
+	// GetLatestUpdateJobForHost returns the most recently created job
+	// for hostID (any state), or models.ErrNotFound if none exists —
+	// used to find the queued/in_progress job (if any) to hand back on
+	// that host's next report.
+	GetLatestUpdateJobForHost(ctx context.Context, hostID string) (models.UpdateJob, error)
+
+	// --- Network cost estimation (SPEC-v0.6 §3) ---
+
+	// ListPricingPlans returns every configured pricing plan, sorted by
+	// ID.
+	ListPricingPlans(ctx context.Context) ([]models.PricingPlan, error)
+	// GetPricingPlan returns one plan by id, or models.ErrNotFound.
+	GetPricingPlan(ctx context.Context, id int64) (models.PricingPlan, error)
+	// CreatePricingPlan inserts p, ignoring p.ID and p.Builtin (always
+	// stored false for a newly created plan), and returns the row with
+	// its assigned ID and CreatedAt/UpdatedAt populated.
+	CreatePricingPlan(ctx context.Context, p models.PricingPlan) (models.PricingPlan, error)
+	// UpdatePricingPlan replaces the stored plan matching p.ID with p
+	// (UpdatedAt refreshed to now), or returns models.ErrNotFound if no
+	// plan with that ID exists. Callers must reject an attempt to
+	// update a Builtin plan before calling this method (the store
+	// itself does not enforce that rule).
+	UpdatePricingPlan(ctx context.Context, p models.PricingPlan) (models.PricingPlan, error)
+	// DeletePricingPlan removes the plan with id. Deleting a
+	// non-existent plan is not an error. Callers must reject an attempt
+	// to delete a Builtin plan before calling this method.
+	DeletePricingPlan(ctx context.Context, id int64) error
+
+	// GetHostPricing returns the pricing plan assignment for hostID, or
+	// a zero-value models.HostPricing{HostID: hostID, PlanID: 0} with a
+	// nil error if no row exists (caller applies the provider-based
+	// default mapping in that case).
+	GetHostPricing(ctx context.Context, hostID string) (models.HostPricing, error)
+	// ListHostPricing returns every host's stored plan assignment.
+	ListHostPricing(ctx context.Context) ([]models.HostPricing, error)
+	// SetHostPricing upserts hp's assignment for hp.HostID.
+	SetHostPricing(ctx context.Context, hp models.HostPricing) error
+
+	// --- Audit log (SPEC-v0.6 §3 개선 c) ---
+
+	// CreateAuditEntry inserts e, ignoring e.ID, and returns the row
+	// with its assigned ID populated.
+	CreateAuditEntry(ctx context.Context, e models.AuditEntry) (models.AuditEntry, error)
+	// ListAuditEntries returns entries matching the given filters,
+	// newest first, at most limit rows. entityType == "" matches any
+	// entity type; before == 0 means no upper bound on At (otherwise At
+	// < before), for cursor-style pagination.
+	ListAuditEntries(ctx context.Context, entityType string, before int64, limit int) ([]models.AuditEntry, error)
+	// PruneAuditEntries deletes entries older than
+	// models.AuditRetentionDays as of now.
+	PruneAuditEntries(ctx context.Context, now time.Time) error
+
 	// Close releases any resources held by the store.
 	Close() error
 }
@@ -338,6 +418,14 @@ type Options struct {
 	Listener ListenController
 	// Now returns the current time; nil defaults to time.Now.
 	Now func() time.Time
+	// Billing wires SPEC-v0.6 §1's cloud billing collection/API and its
+	// background scheduler — nil disables billing entirely (GET
+	// /api/v1/billing responds with empty snapshots, POST
+	// /api/v1/billing/refresh responds 501, and no background CLI
+	// polling ever runs). See billingroutes.go/billingscheduler.go
+	// (owned by the "billing" v0.6.0 stage) for BillingRuntime's
+	// definition; cmd/hub/billing.go constructs the real one.
+	Billing *BillingRuntime
 }
 
 func (o Options) now() time.Time {
@@ -419,6 +507,12 @@ type Server struct {
 	// PBKDF2 concurrency semaphore for POST /api/v1/auth/login and
 	// /api/v1/auth/password (see SPEC-v0.4 §1, internal/hub/ratelimit.go).
 	limiter *rateLimiter
+
+	// batchLimitsMu guards batchLimits (SPEC-v0.6 §2's remote-update
+	// batch max_parallel values, kept in-memory only — see
+	// updateengine.go's batchMaxParallel doc comment).
+	batchLimitsMu sync.Mutex
+	batchLimits   map[string]int
 }
 
 // New constructs a Server. collectors and notifier may be empty/nil.
@@ -533,6 +627,10 @@ func (s *Server) routes() *http.ServeMux {
 	s.registerNetworkRoutes(mux)
 	s.registerAlertRoutes(mux)
 	s.registerInventoryRoutes(mux)
+	s.registerBillingRoutes(mux)
+	s.registerUpdateRoutes(mux)
+	s.registerAuditRoutes(mux)
+	s.registerPricingRoutes(mux)
 
 	// No catch-all is registered for the bare pattern "/api/" or "/":
 	// doing so with no method restriction would make it match every

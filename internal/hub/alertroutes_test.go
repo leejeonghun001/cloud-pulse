@@ -2,12 +2,15 @@ package hub
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"strconv"
 	"testing"
 	"time"
 
+	"github.com/leejeonghun001/cloud-pulse/internal/alerting"
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
 )
 
@@ -251,9 +254,12 @@ func TestAlertChannels_TestDraft_SendsAndReportsResult(t *testing.T) {
 	if httpRec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", httpRec.Code, httpRec.Body.String())
 	}
-	got := decodeJSON[map[string]any](t, httpRec.Body)
-	if ok, _ := got["ok"].(bool); !ok {
-		t.Errorf("ok = %v, want true", got["ok"])
+	got := decodeJSON[models.TestResult](t, httpRec.Body)
+	if !got.OK {
+		t.Errorf("ok = %v, want true", got.OK)
+	}
+	if got.Diagnosis != nil {
+		t.Errorf("diagnosis = %+v, want nil on success", got.Diagnosis)
 	}
 	if rec.callCount() != 1 {
 		t.Errorf("sender calls = %d, want 1", rec.callCount())
@@ -261,6 +267,42 @@ func TestAlertChannels_TestDraft_SendsAndReportsResult(t *testing.T) {
 	messages := rec.messages()
 	if len(messages) != 1 || !messages[0].message.HasImage() {
 		t.Errorf("channel test message = %+v, want one message with a chart image", messages)
+	}
+}
+
+// failingSenderFactory builds an alerting.SenderFactory whose Sender
+// always fails Send with err — used to exercise sendTestMessage's
+// failure path (TestResult.OK=false, Diagnosis populated).
+func failingSenderFactory(err error) alerting.SenderFactory {
+	return func(ch models.NotifyChannel) (alerting.Sender, error) {
+		return failingSender{err: err}, nil
+	}
+}
+
+type failingSender struct{ err error }
+
+func (s failingSender) Send(context.Context, alerting.Message) error { return s.err }
+
+func TestAlertChannels_TestDraft_FailureReturnsDiagnosis(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	opts := testOptions()
+	s, _ := newTestServerWithEngine(t, opts, store, failingSenderFactory(&net.DNSError{Err: "no such host", Name: "hooks.example.invalid", IsNotFound: true}))
+
+	body := `{"name":"draft","type":"webhook","enabled":true,"config":{"url":"https://hooks.example.invalid/x"}}`
+	httpRec := doRequest(t, s.Handler(), http.MethodPost, "/api/v1/alerts/channels/test", "203.0.113.1:1234", testUIToken, []byte(body))
+	if httpRec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", httpRec.Code, httpRec.Body.String())
+	}
+	got := decodeJSON[models.TestResult](t, httpRec.Body)
+	if got.OK {
+		t.Errorf("ok = %v, want false", got.OK)
+	}
+	if got.Diagnosis == nil {
+		t.Fatal("diagnosis = nil, want non-nil on failure")
+	}
+	if got.Diagnosis.Code != models.DiagnosisDNSFailure {
+		t.Errorf("diagnosis.code = %q, want %q", got.Diagnosis.Code, models.DiagnosisDNSFailure)
 	}
 }
 

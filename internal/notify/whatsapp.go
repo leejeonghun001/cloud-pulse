@@ -177,7 +177,7 @@ func (s *whatsappSender) uploadMedia(ctx context.Context, image []byte, imageNam
 		return "", newRetryAfterError(resp, fmt.Errorf("notify: whatsapp: media upload rate limited: %s", graphErrorMessage(body)))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("notify: whatsapp: media upload %w: status %d: %s", errUnexpectedStatus, resp.StatusCode, graphErrorMessage(body))
+		return "", newStatusError("whatsapp", "media_upload", resp.StatusCode, body, graphErrorMessage(body))
 	}
 
 	var parsed struct {
@@ -305,7 +305,7 @@ func (s *whatsappSender) postMessage(ctx context.Context, body map[string]any) e
 		return newRetryAfterError(resp, fmt.Errorf("notify: whatsapp: rate limited: %s", graphErrorMessage(respBody)))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("notify: whatsapp: %w: status %d: %s", errUnexpectedStatus, resp.StatusCode, graphErrorMessage(respBody))
+		return newStatusError("whatsapp", "message", resp.StatusCode, respBody, graphErrorMessage(respBody))
 	}
 	return nil
 }

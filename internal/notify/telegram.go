@@ -239,7 +239,7 @@ func (s *telegramSender) do(ctx context.Context, req *http.Request) error {
 			}
 			msg = string(body)
 		}
-		return fmt.Errorf("notify: telegram: %w: status %d: %s", errUnexpectedStatus, resp.StatusCode, msg)
+		return newStatusError("telegram", "", resp.StatusCode, body, msg)
 	}
 	return nil
 }

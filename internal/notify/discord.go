@@ -141,7 +141,7 @@ func (s *discordSender) Send(ctx context.Context, msg Message) error {
 		return newRetryAfterError(resp, fmt.Errorf("notify: discord: rate limited: %s", string(respBody)))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("notify: discord: %w: status %d: %s", errUnexpectedStatus, resp.StatusCode, discordErrorMessage(respBody))
+		return newStatusError("discord", "", resp.StatusCode, respBody, discordErrorMessage(respBody))
 	}
 	return nil
 }

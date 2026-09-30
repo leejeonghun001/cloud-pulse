@@ -16,6 +16,8 @@ package alerting
 import (
 	"log/slog"
 	"time"
+
+	"github.com/leejeonghun001/cloud-pulse/internal/models"
 )
 
 // defaultCooldownSec is applied by the hub API layer when creating a
@@ -68,6 +70,16 @@ type Options struct {
 	// its retries combined is NOT what this bounds -- see
 	// perAttemptTimeout in notify.go); <=0 defaults to 20s.
 	DeliveryTimeout time.Duration
+	// Diagnose classifies a failed delivery's error into a
+	// models.DiagnosisCode (SPEC-v0.6 §4), recorded on the Delivery.
+	// Optional and nil by default: this package deliberately has no
+	// import on internal/notify (see notify.go's Message/Sender doc
+	// comments) so it cannot classify notify-specific error types
+	// itself — cmd/hub wires this to internal/notify.DiagnoseError's
+	// Code field. A nil Diagnose (e.g. in tests, or an older wiring)
+	// simply leaves Delivery.Diagnosis unset; delivery/error recording
+	// otherwise behaves identically.
+	Diagnose func(error) *models.DiagnosisCode
 }
 
 // New constructs an Engine and starts its background delivery worker.
@@ -96,6 +108,7 @@ func New(opts Options) *Engine {
 		Logger:    logger,
 		QueueSize: opts.QueueSize,
 		Timeout:   opts.DeliveryTimeout,
+		Diagnose:  opts.Diagnose,
 	})
 	return e
 }

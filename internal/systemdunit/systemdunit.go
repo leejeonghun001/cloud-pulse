@@ -87,6 +87,14 @@ type Params struct {
 	// of their own. Ignored for Binary == HubBinary (the hub has no
 	// equivalent use case).
 	SupplementaryGroups []string
+	// RemoteUpdate is meaningful only for Binary == AgentBinary
+	// (SPEC-v0.6 §2): when true, renders "StateDirectory=cloud-pulse-agent"
+	// in the agent's [Service] section, granting write access to
+	// /var/lib/cloud-pulse-agent for the atomic update-request.json
+	// write described in internal/agent/remoteupdate.go. Ignored for
+	// Binary == HubBinary (the hub already has its own unconditional
+	// StateDirectory/ReadWritePaths handling via ReadWritePath).
+	RemoteUpdate bool
 }
 
 // userOrDefault and groupOrDefault apply Params' defaulting rule.
@@ -216,6 +224,9 @@ func renderAgent(p Params) string {
 	if len(p.SupplementaryGroups) > 0 {
 		writeLine(&b, "SupplementaryGroups="+strings.Join(p.SupplementaryGroups, " "))
 	}
+	if p.RemoteUpdate {
+		writeLine(&b, "StateDirectory=cloud-pulse-agent")
+	}
 	writeLine(&b, "Restart=on-failure")
 	writeLine(&b, "RestartSec=5")
 	writeLine(&b, "")
@@ -328,6 +339,17 @@ func ParseExisting(unit string) (Params, error) {
 			}
 		case strings.HasPrefix(line, "ReadWritePaths="):
 			p.ReadWritePath = strings.TrimSpace(strings.TrimPrefix(line, "ReadWritePaths="))
+		case strings.HasPrefix(line, "StateDirectory="):
+			value := strings.TrimSpace(strings.TrimPrefix(line, "StateDirectory="))
+			// The hub's own StateDirectory=cloud-pulse (no
+			// RemoteUpdate field involved — see ReadWritePath's
+			// handling) is parsed by Render's own hub branch, which
+			// never reads Params.RemoteUpdate; only the agent's
+			// distinct StateDirectory=cloud-pulse-agent value is this
+			// field's concern.
+			if value == "cloud-pulse-agent" {
+				p.RemoteUpdate = true
+			}
 		}
 	}
 
@@ -449,6 +471,17 @@ func Apply(ctx context.Context, unitPath string, reload bool, out interface{ Wri
 	}
 
 	return true, nil
+}
+
+// Reload runs `systemctl daemon-reload` bounded by a 30s timeout,
+// writing progress to out if non-nil. Exported so callers that apply
+// more than one unit file in a single invocation (e.g. cmd/agent's
+// `systemd-unit apply`, which may update both the main agent unit and
+// the SPEC-v0.6 §2 remote-update .path/.service units) can call Apply
+// with reload=false for each and run a single combined reload
+// afterward, rather than reloading once per unit.
+func Reload(ctx context.Context, out interface{ Write([]byte) (int, error) }) error {
+	return daemonReload(ctx, out)
 }
 
 // daemonReload runs `systemctl daemon-reload` bounded by reloadTimeout.

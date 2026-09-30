@@ -630,6 +630,61 @@ test_agent_no_docker_flag_omits_supplementary_groups() {
   assert_file_contains "agent.env has CP_DOCKER commented out without --docker" "$env_file" "#CP_DOCKER=auto"
 }
 
+# test_agent_remote_update_flag — SPEC-v0.6 §2: --remote-update adds
+# StateDirectory=cloud-pulse-agent to the rendered unit, sets
+# CP_REMOTE_UPDATE=on in agent.env, and installs
+# cloud-pulse-agent-update.path/.service; a reinstall without
+# re-passing --remote-update preserves all three
+# (detect_preserved_remote_update_flag).
+test_agent_remote_update_flag() {
+  echo "==> testing install-agent.sh --remote-update flag (StateDirectory + CP_REMOTE_UPDATE + update units + preservation on reinstall)"
+  local sandbox="${TMP_ROOT}/sandbox-agent-remote-update"
+  mkdir -p "$sandbox"
+  local unit_file="${sandbox}/etc/systemd/system/cloud-pulse-agent.service"
+  local env_file="${sandbox}/etc/cloud-pulse/agent.env"
+  local update_path_unit="${sandbox}/etc/systemd/system/cloud-pulse-agent-update.path"
+  local update_service_unit="${sandbox}/etc/systemd/system/cloud-pulse-agent-update.service"
+
+  local out
+  out="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$sandbox" \
+    timeout 60 bash scripts/install-agent.sh --hub-url "http://127.0.0.1:${SERVER_PORT}" --token "$HUB_TOKEN" --remote-update 2>&1)" || {
+    fail "install-agent.sh --remote-update sandbox install exited 0"
+    echo "$out" >&2
+    return
+  }
+  pass "install-agent.sh --remote-update sandbox install exited 0"
+
+  assert_file_contains "agent unit has StateDirectory=cloud-pulse-agent after --remote-update" "$unit_file" "StateDirectory=cloud-pulse-agent"
+  assert_file_contains "agent.env has CP_REMOTE_UPDATE=on after --remote-update" "$env_file" "CP_REMOTE_UPDATE=on"
+  assert_file_exists "cloud-pulse-agent-update.path installed after --remote-update" "$update_path_unit"
+  assert_file_exists "cloud-pulse-agent-update.service installed after --remote-update" "$update_service_unit"
+  assert_file_contains "update .path unit watches the request file" "$update_path_unit" "update-request.json"
+  assert_file_contains "update .service unit invokes update --from-request" "$update_service_unit" "update --from-request"
+
+  # Reinstall without --remote-update must preserve everything.
+  local out2
+  out2="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$sandbox" \
+    timeout 60 bash scripts/install-agent.sh 2>&1)" || {
+    fail "install-agent.sh reinstall (no --remote-update) after --remote-update exited 0"
+    echo "$out2" >&2
+    return
+  }
+  pass "install-agent.sh reinstall (no --remote-update) after --remote-update exited 0"
+  assert_file_contains "agent unit still has StateDirectory=cloud-pulse-agent after reinstall without --remote-update" "$unit_file" "StateDirectory=cloud-pulse-agent"
+  assert_file_contains "agent.env still has CP_REMOTE_UPDATE=on after reinstall without --remote-update" "$env_file" "CP_REMOTE_UPDATE=on"
+  assert_contains "reinstall logs preserving the --remote-update setting" "$out2" "preserving existing --remote-update setting"
+}
+
+test_agent_no_remote_update_flag_omits_state_directory() {
+  echo "==> testing install-agent.sh without --remote-update omits StateDirectory and CP_REMOTE_UPDATE stays commented, no update units installed"
+  local unit_file="${SANDBOX_AGENT}/etc/systemd/system/cloud-pulse-agent.service"
+  local env_file="${SANDBOX_AGENT}/etc/cloud-pulse/agent.env"
+  local update_path_unit="${SANDBOX_AGENT}/etc/systemd/system/cloud-pulse-agent-update.path"
+  assert_not_contains "agent unit has no StateDirectory= without --remote-update" "$(cat "$unit_file")" "StateDirectory"
+  assert_file_contains "agent.env has CP_REMOTE_UPDATE commented out without --remote-update" "$env_file" "#CP_REMOTE_UPDATE=off"
+  assert_file_absent "no cloud-pulse-agent-update.path installed without --remote-update" "$update_path_unit"
+}
+
 test_agent_uninstall_and_purge() {
   echo "==> testing install-agent.sh --uninstall (keeps env) and --purge (removes env)"
   local bin="${SANDBOX_AGENT}/usr/local/bin/cloud-pulse-agent"
@@ -943,6 +998,69 @@ test_systemd_unit_render_drift() {
     > "${TMP_ROOT}/agent-docker-heredoc.unit"
   assert_exit0 "agent unit (--docker): systemd-unit print == heredoc fallback (diff)" \
     diff "${TMP_ROOT}/agent-docker-bin.unit" "${TMP_ROOT}/agent-docker-heredoc.unit"
+
+  # --remote-update (SPEC-v0.6 §2): StateDirectory=cloud-pulse-agent line.
+  timeout 10 "$agent_bin" systemd-unit print --bin-path /usr/local/bin/cloud-pulse-agent \
+    --env-file /etc/cloud-pulse/agent.env --user cloud-pulse --group cloud-pulse \
+    --remote-update \
+    > "${TMP_ROOT}/agent-remote-update-bin.unit"
+  render_agent_fallback_standalone /usr/local/bin/cloud-pulse-agent /etc/cloud-pulse/agent.env "" 1 \
+    > "${TMP_ROOT}/agent-remote-update-heredoc.unit"
+  assert_exit0 "agent unit (--remote-update): systemd-unit print == heredoc fallback (diff)" \
+    diff "${TMP_ROOT}/agent-remote-update-bin.unit" "${TMP_ROOT}/agent-remote-update-heredoc.unit"
+
+  # cloud-pulse-agent-update.path/.service (SPEC-v0.6 §2): rendered via
+  # `systemd-unit apply` against a throwaway sandboxed unit tree, and
+  # compared against install-agent.sh's own install_update_units_fallback
+  # heredoc. applyUpdateUnitsIfEnabled reads CP_REMOTE_UPDATE=on from the
+  # main unit's own EnvironmentFile=, so both must exist for this to
+  # actually create the two units (a missing/CP_REMOTE_UPDATE=off env
+  # file makes it a no-op, per its own doc comment).
+  local update_apply_root="${TMP_ROOT}/update-units-drift"
+  mkdir -p "${update_apply_root}/etc/systemd/system" "${update_apply_root}/etc/cloud-pulse"
+  local update_apply_env_file="${update_apply_root}/etc/cloud-pulse/agent.env"
+  {
+    echo "CP_HUB_URL=http://127.0.0.1:${SERVER_PORT}"
+    echo "CP_AGENT_TOKEN=${HUB_TOKEN}"
+    echo "CP_REMOTE_UPDATE=on"
+  } > "$update_apply_env_file"
+  render_agent_fallback_standalone /usr/local/bin/cloud-pulse-agent "$update_apply_env_file" "" 1 \
+    > "${update_apply_root}/etc/systemd/system/cloud-pulse-agent.service"
+  if timeout 10 "$agent_bin" systemd-unit apply \
+      --unit-path "${update_apply_root}/etc/systemd/system/cloud-pulse-agent.service" \
+      --update-path-unit-path "${update_apply_root}/etc/systemd/system/cloud-pulse-agent-update.path" \
+      --update-service-unit-path "${update_apply_root}/etc/systemd/system/cloud-pulse-agent-update.service" \
+      --request-path /var/lib/cloud-pulse-agent/update-request.json \
+      --result-dir /var/lib/cloud-pulse-agent-update \
+      --no-reload >/dev/null 2>&1; then
+    pass "agent binary supports 'systemd-unit apply' with remote-update unit flags"
+    {
+      echo "[Unit]"
+      echo "Description=Watch for cloud-pulse-agent remote update requests"
+      echo
+      echo "[Path]"
+      echo "PathModified=/var/lib/cloud-pulse-agent/update-request.json"
+      echo "PathExists=/var/lib/cloud-pulse-agent/update-request.json"
+      echo "Unit=cloud-pulse-agent-update.service"
+      echo
+      echo "[Install]"
+      echo "WantedBy=multi-user.target"
+    } > "${TMP_ROOT}/update-path-heredoc.unit"
+    assert_exit0 "cloud-pulse-agent-update.path: systemd-unit apply == install-agent.sh heredoc (diff)" \
+      diff "${update_apply_root}/etc/systemd/system/cloud-pulse-agent-update.path" "${TMP_ROOT}/update-path-heredoc.unit"
+    {
+      echo "[Unit]"
+      echo "Description=Apply a hub-requested cloud-pulse-agent update"
+      echo
+      echo "[Service]"
+      echo "Type=oneshot"
+      echo "ExecStart=/usr/local/bin/cloud-pulse-agent update --from-request /var/lib/cloud-pulse-agent/update-request.json --result-dir /var/lib/cloud-pulse-agent-update"
+    } > "${TMP_ROOT}/update-service-heredoc.unit"
+    assert_exit0 "cloud-pulse-agent-update.service: systemd-unit apply == install-agent.sh heredoc (diff)" \
+      diff "${update_apply_root}/etc/systemd/system/cloud-pulse-agent-update.service" "${TMP_ROOT}/update-service-heredoc.unit"
+  else
+    echo "SKIP: ${agent_bin} does not support 'systemd-unit apply' with remote-update unit flags yet"
+  fi
 }
 
 # render_hub_fallback_standalone BIN_PATH ENV_FILE DATA_DIR — reproduce
@@ -1004,12 +1122,15 @@ render_hub_fallback_standalone() {
 }
 
 # render_agent_fallback_standalone BIN_PATH ENV_FILE — reproduce
+# render_agent_fallback_standalone BIN_PATH ENV_FILE [DOCKER_GROUP] [REMOTE_UPDATE] —
 # install-agent.sh's render_unit_fallback() in an isolated subshell.
 # DOCKER_GROUP (optional 3rd arg, e.g. "docker") renders a
 # SupplementaryGroups= line right after Group=, matching Render's own
-# placement (SPEC-v0.5 §C).
+# placement (SPEC-v0.5 §C). REMOTE_UPDATE (optional 4th arg, "1")
+# renders a StateDirectory=cloud-pulse-agent line right after that
+# (SPEC-v0.6 §2), matching Render's own placement.
 render_agent_fallback_standalone() {
-  local bin_path="$1" env_file="$2" docker_group="${3:-}"
+  local bin_path="$1" env_file="$2" docker_group="${3:-}" remote_update="${4:-}"
   echo "[Unit]"
   echo "Description=cloud-pulse agent (host metrics collector)"
   echo "After=network-online.target"
@@ -1023,6 +1144,9 @@ render_agent_fallback_standalone() {
   echo "Group=cloud-pulse"
   if [ -n "$docker_group" ]; then
     echo "SupplementaryGroups=${docker_group}"
+  fi
+  if [ "$remote_update" = "1" ]; then
+    echo "StateDirectory=cloud-pulse-agent"
   fi
   echo "Restart=on-failure"
   echo "RestartSec=5"
@@ -1214,11 +1338,13 @@ test_agent_menu_fresh_install() {
   local log="${TMP_ROOT}/menu-agent-fresh.log"
   local fake_token="abcdefabcdefabcdefabcdefabcdefab"
   # 1=Install, hub URL, hidden token, Enter (default host-id), Enter
-  # (default N to the "Monitor Docker containers?" prompt).
+  # (default N to the "Monitor Docker containers?" prompt), Enter
+  # (default N to the "Allow the hub to trigger updates..." prompt).
   local status=0
   run_in_pty 60 "1
 http://127.0.0.1:${SERVER_PORT}
 ${fake_token}
+
 
 
 " "$log" \
@@ -1254,6 +1380,10 @@ ${fake_token}
     "Monitor Docker containers? (adds the agent to the docker group; docker group access is root-equivalent)"
   assert_not_contains "agent.env has no active CP_DOCKER after declining the Docker prompt (default N)" \
     "$(grep '^CP_DOCKER=' "${sandbox}/etc/cloud-pulse/agent.env" || true)" "CP_DOCKER="
+  assert_contains "menu prompts to allow hub-triggered remote updates" "$(cat "$log")" \
+    "Allow the hub to trigger updates of this agent?"
+  assert_not_contains "agent.env has no active CP_REMOTE_UPDATE after declining the remote-update prompt (default N)" \
+    "$(grep '^CP_REMOTE_UPDATE=' "${sandbox}/etc/cloud-pulse/agent.env" || true)" "CP_REMOTE_UPDATE="
 }
 
 test_agent_menu_uninstall_keeps_env() {
@@ -1756,12 +1886,14 @@ main() {
   test_agent_missing_required_flags
   test_agent_install
   test_agent_no_docker_flag_omits_supplementary_groups
+  test_agent_no_remote_update_flag_omits_state_directory
   test_agent_upgrade_keeps_values
   test_agent_upgrade_from_legacy_stub
   test_agent_unknown_arch
   test_agent_checksum_mismatch
   test_agent_dry_run
   test_agent_docker_flag
+  test_agent_remote_update_flag
 
   test_hub_rejects_malicious_values
   test_agent_rejects_malicious_values

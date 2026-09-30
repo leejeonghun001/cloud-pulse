@@ -2,6 +2,7 @@ package alerting
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -721,6 +722,93 @@ func TestDelivery_AllAttemptsFailRecordsFailure(t *testing.T) {
 	}
 	if events[0].Deliveries[0].Error == "" {
 		t.Error("delivery Error is empty, want a message")
+	}
+}
+
+func TestDelivery_DiagnoseClassifiesFailure(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	clock := newFakeClock(time.Now())
+	sentinelErr := errors.New("boom")
+	sender := &fakeSender{failTimes: 99, err: sentinelErr}
+	senderFactory := func(models.NotifyChannel) (Sender, error) { return sender, nil }
+
+	// Diagnose is configured directly (bypassing newTestEngine's
+	// shared helper, which doesn't plumb Options.Diagnose) — mirrors
+	// how cmd/hub/alerting.go wires internal/notify.DiagnoseError in
+	// the real binary, without this package importing internal/notify
+	// itself (see notify.go's doc comment on why it can't).
+	wantCode := models.DiagnosisPlatformError
+	e := New(Options{
+		Store:         store,
+		SenderFactory: senderFactory,
+		Clock:         clock.Now,
+		Logger:        testLogger(),
+		Diagnose: func(err error) *models.DiagnosisCode {
+			if !errors.Is(err, sentinelErr) {
+				t.Errorf("Diagnose called with unexpected error: %v", err)
+			}
+			code := wantCode
+			return &code
+		},
+	})
+	e.delivery.afterFunc = instantAfter
+	t.Cleanup(e.Close)
+
+	store.setChannel(models.NotifyChannel{ID: 1, Name: "c1", Type: models.NotifyChannelWebhook, Enabled: true})
+	store.setRule(models.AlertRule{
+		ID: 1, Name: "r", Enabled: true, Metric: models.AlertMetricCPU,
+		Operator: models.AlertOperatorGT, Threshold: 50, ChannelIDs: []int64{1},
+	})
+
+	host := hostSnapshot("h1", &models.Sample{CPUPercent: 90})
+	if err := e.Evaluate(context.Background(), clock.Now(), []models.HostSnapshot{host}); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	e.Close()
+
+	events := store.listEvents()
+	if len(events) != 1 || len(events[0].Deliveries) != 1 {
+		t.Fatalf("event deliveries = %+v, want exactly one delivery", events)
+	}
+	d := events[0].Deliveries[0]
+	if d.OK {
+		t.Fatal("delivery OK = true, want false")
+	}
+	if d.Diagnosis == nil || *d.Diagnosis != wantCode {
+		t.Errorf("delivery Diagnosis = %v, want %q", d.Diagnosis, wantCode)
+	}
+}
+
+func TestDelivery_NilDiagnoseLeavesDiagnosisUnset(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	clock := newFakeClock(time.Now())
+	sender := &fakeSender{failTimes: 99}
+	senderFactory := func(models.NotifyChannel) (Sender, error) { return sender, nil }
+	// newTestEngine leaves Options.Diagnose nil — the default/older-
+	// wiring case — confirming Delivery.Diagnosis stays unset rather
+	// than panicking on a nil function value.
+	e := newTestEngine(t, store, clock, senderFactory)
+
+	store.setChannel(models.NotifyChannel{ID: 1, Name: "c1", Type: models.NotifyChannelWebhook, Enabled: true})
+	store.setRule(models.AlertRule{
+		ID: 1, Name: "r", Enabled: true, Metric: models.AlertMetricCPU,
+		Operator: models.AlertOperatorGT, Threshold: 50, ChannelIDs: []int64{1},
+	})
+
+	host := hostSnapshot("h1", &models.Sample{CPUPercent: 90})
+	if err := e.Evaluate(context.Background(), clock.Now(), []models.HostSnapshot{host}); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	e.Close()
+
+	events := store.listEvents()
+	if len(events) != 1 || len(events[0].Deliveries) != 1 {
+		t.Fatalf("event deliveries = %+v, want exactly one delivery", events)
+	}
+	if d := events[0].Deliveries[0]; d.Diagnosis != nil {
+		t.Errorf("delivery Diagnosis = %v, want nil when Options.Diagnose is unset", *d.Diagnosis)
 	}
 }
 

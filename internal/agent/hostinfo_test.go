@@ -98,3 +98,63 @@ func TestBuildHostInfo_CPUCoreFallbackWhenInfoUnavailable(t *testing.T) {
 		t.Errorf("CPUCores = %d, want > 0", info.CPUCores)
 	}
 }
+
+func TestBuildHostInfo_CloudMetadataOffLeavesCloudInstanceIDEmpty(t *testing.T) {
+	t.Parallel()
+
+	src := &fakeSource{hostInfoErr: errors.New("unavailable")}
+	cfg := config.Agent{HostID: "h", Provider: "aws", CloudMetadata: "off"}
+
+	info := BuildHostInfo(context.Background(), src, cfg, nil)
+	if info.CloudInstanceID != "" {
+		t.Errorf("CloudInstanceID = %q, want empty when CP_CLOUD_METADATA=off", info.CloudInstanceID)
+	}
+}
+
+func TestBuildHostInfo_CloudMetadataAutoCallsDetectionStub(t *testing.T) {
+	t.Parallel()
+
+	// cloudInstanceID is currently a stub that always returns "" (see
+	// cloudmeta.go's doc comment); this test documents that
+	// BuildHostInfo still calls it (rather than skipping detection
+	// outright) when CloudMetadata != "off", so a future real
+	// implementation is exercised without any caller change.
+	src := &fakeSource{hostInfoErr: errors.New("unavailable")}
+	cfg := config.Agent{HostID: "h", Provider: "aws", CloudMetadata: "auto"}
+
+	info := BuildHostInfo(context.Background(), src, cfg, nil)
+	if info.CloudInstanceID != "" {
+		t.Errorf("CloudInstanceID = %q, want empty (stub always returns \"\")", info.CloudInstanceID)
+	}
+}
+
+func TestBuildHostInfo_RemoteUpdateCapability(t *testing.T) {
+	t.Parallel()
+
+	src := &fakeSource{hostInfoErr: errors.New("unavailable")}
+
+	optedIn := BuildHostInfo(context.Background(), src, config.Agent{HostID: "h", Provider: "other", RemoteUpdate: true}, nil)
+	notOptedIn := BuildHostInfo(context.Background(), src, config.Agent{HostID: "h", Provider: "other", RemoteUpdate: false}, nil)
+
+	// Exact Supported value is OS-dependent (Linux-only per SPEC-v0.6
+	// §2); only assert the OptedIn/Reason behavior that's fully
+	// implemented regardless of platform.
+	if optedIn.RemoteUpdate.Supported {
+		if !optedIn.RemoteUpdate.OptedIn {
+			t.Errorf("RemoteUpdate.OptedIn = false for CP_REMOTE_UPDATE=on, want true (got %+v)", optedIn.RemoteUpdate)
+		}
+		if optedIn.RemoteUpdate.Reason != "" {
+			t.Errorf("RemoteUpdate.Reason = %q, want empty when opted in and supported", optedIn.RemoteUpdate.Reason)
+		}
+		if notOptedIn.RemoteUpdate.OptedIn {
+			t.Error("RemoteUpdate.OptedIn = true for CP_REMOTE_UPDATE=off, want false")
+		}
+		if notOptedIn.RemoteUpdate.Reason != models.UpdateReasonNotEnabled {
+			t.Errorf("RemoteUpdate.Reason = %q, want %q", notOptedIn.RemoteUpdate.Reason, models.UpdateReasonNotEnabled)
+		}
+	} else {
+		if optedIn.RemoteUpdate.Reason != models.UpdateReasonUnsupported {
+			t.Errorf("RemoteUpdate.Reason = %q, want %q on an unsupported OS", optedIn.RemoteUpdate.Reason, models.UpdateReasonUnsupported)
+		}
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"github.com/leejeonghun001/cloud-pulse/internal/alerting"
 	"github.com/leejeonghun001/cloud-pulse/internal/alerting/chart"
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
+	"github.com/leejeonghun001/cloud-pulse/internal/notify"
 )
 
 // maxAlertBodyBytes bounds the size of alert rule/channel request
@@ -319,11 +320,12 @@ func (s *Server) sendTestMessage(w http.ResponseWriter, r *http.Request, ch mode
 	defer cancel()
 	sendErr := sender.Send(ctx, message)
 
-	resp := map[string]any{"ok": sendErr == nil}
 	if sendErr != nil {
-		resp["error"] = sendErr.Error()
+		diagnosis := notify.DiagnoseError(sendErr)
+		writeJSON(w, http.StatusOK, models.TestResult{OK: false, Diagnosis: &diagnosis})
+		return
 	}
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, models.TestResult{OK: true, Delivery: fmt.Sprintf("sent a test %s notification to %q", ch.Type, ch.Name)})
 }
 
 // --- Rules ---

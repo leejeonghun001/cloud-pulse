@@ -40,6 +40,8 @@ FAKE_PID=""
 FAKE_PORT=""
 TAMPERED_FAKE_PID=""
 TAMPERED_FAKE_PORT=""
+REQ_FAKE_PID=""
+REQ_TAMPERED_FAKE_PID=""
 
 pass() {
   echo "PASS: $*"
@@ -60,6 +62,14 @@ cleanup() {
   if [ -n "$TAMPERED_FAKE_PID" ] && kill -0 "$TAMPERED_FAKE_PID" 2>/dev/null; then
     kill "$TAMPERED_FAKE_PID" 2>/dev/null || true
     wait "$TAMPERED_FAKE_PID" 2>/dev/null || true
+  fi
+  if [ -n "$REQ_FAKE_PID" ] && kill -0 "$REQ_FAKE_PID" 2>/dev/null; then
+    kill "$REQ_FAKE_PID" 2>/dev/null || true
+    wait "$REQ_FAKE_PID" 2>/dev/null || true
+  fi
+  if [ -n "$REQ_TAMPERED_FAKE_PID" ] && kill -0 "$REQ_TAMPERED_FAKE_PID" 2>/dev/null; then
+    kill "$REQ_TAMPERED_FAKE_PID" 2>/dev/null || true
+    wait "$REQ_TAMPERED_FAKE_PID" 2>/dev/null || true
   fi
   if [ -n "$TMP_ROOT" ]; then
     rm -rf "$TMP_ROOT"
@@ -481,7 +491,310 @@ UNITEOF
     *) fail "sandbox agent binary does not report v0.3.1 after update: ${agent_post_version_out}" ;;
   esac
 
+  test_from_request_mode "$target" "$arch"
+
   finish
+}
+
+# test_from_request_mode — SPEC-v0.6 §2's `update --from-request FILE`
+# path: builds a v0.6.0 agent + a fake v0.6.1 release, then exercises
+# success, checksum mismatch, downgrade refused, and malicious request
+# files, all against a dedicated fake release server on its own port
+# (never the v0.3.x server/ports used above).
+test_from_request_mode() {
+  local target="$1" arch="$2"
+  local v060_dir v061_dir req_tampered_dir req_sandbox_dir
+  v060_dir="${TMP_ROOT}/v0.6.0"
+  v061_dir="${TMP_ROOT}/v0.6.1"
+  req_tampered_dir="${TMP_ROOT}/v0.6.1-tampered"
+  req_sandbox_dir="${TMP_ROOT}/from-request-sandbox"
+  mkdir -p "$v060_dir" "$v061_dir" "$req_tampered_dir" "$req_sandbox_dir"
+
+  echo "==> building v0.6.0 agent binary (${target})"
+  if TARGETS="$target" ALLOW_ANY_VERSION=1 \
+    bash scripts/build-release.sh "v0.6.0" "$v060_dir" >"${TMP_ROOT}/build-v060.log" 2>&1; then
+    pass "build v0.6.0 agent binary for ${target}"
+  else
+    cat "${TMP_ROOT}/build-v060.log" >&2
+    fail "build v0.6.0 agent binary for ${target}"
+    return
+  fi
+
+  echo "==> building v0.6.1 release assets (${target})"
+  if TARGETS="$target" ALLOW_ANY_VERSION=1 \
+    bash scripts/build-release.sh "v0.6.1" "$v061_dir" >"${TMP_ROOT}/build-v061.log" 2>&1; then
+    pass "build v0.6.1 release assets for ${target}"
+  else
+    cat "${TMP_ROOT}/build-v061.log" >&2
+    fail "build v0.6.1 release assets for ${target}"
+    return
+  fi
+
+  cp -r "${v061_dir}/." "$req_tampered_dir"
+  if [ -f "${req_tampered_dir}/checksums.txt" ]; then
+    python3 - "$req_tampered_dir/checksums.txt" <<'PYEOF'
+import re
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    lines = f.readlines()
+
+out = [re.sub(r"^[0-9a-f]{64}", "0" * 64, line) for line in lines]
+
+with open(path, "w", encoding="utf-8") as f:
+    f.writelines(out)
+PYEOF
+    pass "prepared tampered v0.6.1 checksums.txt (all-zero hashes) for --from-request"
+  else
+    fail "v0.6.1 checksums.txt not found at ${req_tampered_dir}/checksums.txt"
+  fi
+
+  local req_fake_port="${REQ_FAKE_PORT:-18197}"
+  local req_fake_base="http://127.0.0.1:${req_fake_port}"
+  local req_fake_assets_root="${TMP_ROOT}/from-request-fake-assets"
+  mkdir -p "${req_fake_assets_root}/v0.6.1"
+  cp "${v061_dir}"/* "${req_fake_assets_root}/v0.6.1/" 2>/dev/null || true
+
+  local req_tampered_assets_root="${TMP_ROOT}/from-request-fake-assets-tampered"
+  mkdir -p "${req_tampered_assets_root}/v0.6.1"
+  cp "${req_tampered_dir}"/* "${req_tampered_assets_root}/v0.6.1/" 2>/dev/null || true
+
+  python3 "${REPO_ROOT}/scripts/fake_release_server.py" "$req_fake_port" "$req_fake_assets_root" "v0.6.1" \
+    >"${TMP_ROOT}/from-request-fake-server.log" 2>&1 &
+  REQ_FAKE_PID=$!
+
+  if wait_for_http "${req_fake_base}/releases/latest" 10; then
+    pass "from-request fake release server reachable on ${req_fake_base}"
+  else
+    fail "from-request fake release server did not become reachable within 10s"
+    return
+  fi
+
+  local req_tampered_port="${REQ_TAMPERED_FAKE_PORT:-18196}"
+  local req_tampered_base="http://127.0.0.1:${req_tampered_port}"
+  python3 "${REPO_ROOT}/scripts/fake_release_server.py" "$req_tampered_port" "$req_tampered_assets_root" "v0.6.1" \
+    >"${TMP_ROOT}/from-request-fake-server-tampered.log" 2>&1 &
+  REQ_TAMPERED_FAKE_PID=$!
+
+  if wait_for_http "${req_tampered_base}/releases/latest" 10; then
+    pass "from-request tampered fake release server reachable on ${req_tampered_base}"
+  else
+    fail "from-request tampered fake release server did not become reachable within 10s"
+    return
+  fi
+
+  local agent_asset="cloud-pulse-agent-linux-${arch}"
+
+  # --- success: v0.6.0 -> v0.6.1 via a valid request file ---
+  local success_bin="${req_sandbox_dir}/cloud-pulse-agent-success"
+  local success_result_dir="${req_sandbox_dir}/result-success"
+  cp "${v060_dir}/${agent_asset}" "$success_bin"
+  chmod 0755 "$success_bin"
+  local success_req="${req_sandbox_dir}/request-success.json"
+  printf '{"job_id":1,"target":"v0.6.1"}' > "$success_req"
+
+  local success_out success_status
+  set +e
+  success_out="$(CP_UPDATE_LATEST_URL="${req_fake_base}/releases/latest" \
+    CP_RELEASE_BASE_URL="${req_fake_base}/releases/download/v0.6.1" \
+    "$success_bin" update --from-request "$success_req" --result-dir "$success_result_dir" 2>&1)"
+  success_status=$?
+  set -e
+  if [ "$success_status" -eq 0 ]; then
+    pass "update --from-request (success case) exits 0"
+  else
+    echo "$success_out" >&2
+    fail "update --from-request (success case) exited ${success_status}, want 0"
+  fi
+  local success_version_out
+  success_version_out="$("$success_bin" -version 2>&1)"
+  case "$success_version_out" in
+    *"v0.6.1"*) pass "update --from-request (success case) upgraded binary to v0.6.1" ;;
+    *) fail "update --from-request (success case) did not upgrade to v0.6.1: ${success_version_out}" ;;
+  esac
+  if [ -f "${success_result_dir}/result.json" ]; then
+    pass "update --from-request (success case) wrote result.json"
+    case "$(cat "${success_result_dir}/result.json")" in
+      *'"state":"succeeded"'*) pass "update --from-request (success case) result.json state=succeeded" ;;
+      *) fail "update --from-request (success case) result.json missing state=succeeded: $(cat "${success_result_dir}/result.json")" ;;
+    esac
+    case "$(cat "${success_result_dir}/result.json")" in
+      *'"job_id":1'*) pass "update --from-request (success case) result.json echoes job_id" ;;
+      *) fail "update --from-request (success case) result.json missing job_id: $(cat "${success_result_dir}/result.json")" ;;
+    esac
+  else
+    fail "update --from-request (success case) did not write ${success_result_dir}/result.json"
+  fi
+  local result_mode
+  result_mode="$(stat -c '%a' "${success_result_dir}/result.json" 2>/dev/null || stat -f '%Lp' "${success_result_dir}/result.json" 2>/dev/null || true)"
+  if [ "$result_mode" = "644" ]; then
+    pass "update --from-request result.json has mode 0644"
+  else
+    fail "update --from-request result.json mode = ${result_mode}, want 644"
+  fi
+
+  # --- checksum mismatch: tampered release -> failed result, binary untouched ---
+  local checksum_bin="${req_sandbox_dir}/cloud-pulse-agent-checksum"
+  local checksum_result_dir="${req_sandbox_dir}/result-checksum"
+  cp "${v060_dir}/${agent_asset}" "$checksum_bin"
+  chmod 0755 "$checksum_bin"
+  local checksum_before_sha
+  checksum_before_sha="$(sha256sum "$checksum_bin" | awk '{print $1}')"
+  local checksum_req="${req_sandbox_dir}/request-checksum.json"
+  printf '{"job_id":2,"target":"v0.6.1"}' > "$checksum_req"
+
+  local checksum_out checksum_status
+  set +e
+  checksum_out="$(CP_UPDATE_LATEST_URL="${req_tampered_base}/releases/latest" \
+    CP_RELEASE_BASE_URL="${req_tampered_base}/releases/download/v0.6.1" \
+    "$checksum_bin" update --from-request "$checksum_req" --result-dir "$checksum_result_dir" 2>&1)"
+  checksum_status=$?
+  set -e
+  # Per RunFromRequest's contract, the process itself still exits 0
+  # (the request file was valid and a result was written); the failure
+  # is reported via result.json, not the process exit code.
+  if [ "$checksum_status" -eq 0 ]; then
+    pass "update --from-request (checksum mismatch case) exits 0 (failure reported via result.json)"
+  else
+    echo "$checksum_out" >&2
+    fail "update --from-request (checksum mismatch case) exited ${checksum_status}, want 0"
+  fi
+  if [ -f "${checksum_result_dir}/result.json" ]; then
+    case "$(cat "${checksum_result_dir}/result.json")" in
+      *'"state":"failed"'*'"error_code":"checksum_mismatch"'*|*'"error_code":"checksum_mismatch"'*'"state":"failed"'*)
+        pass "update --from-request (checksum mismatch case) result.json state=failed error_code=checksum_mismatch" ;;
+      *) fail "update --from-request (checksum mismatch case) result.json unexpected content: $(cat "${checksum_result_dir}/result.json")" ;;
+    esac
+  else
+    fail "update --from-request (checksum mismatch case) did not write result.json"
+  fi
+  local checksum_after_sha
+  checksum_after_sha="$(sha256sum "$checksum_bin" | awk '{print $1}')"
+  if [ "$checksum_before_sha" = "$checksum_after_sha" ]; then
+    pass "update --from-request (checksum mismatch case) left the binary unchanged"
+  else
+    fail "update --from-request (checksum mismatch case) MODIFIED the binary despite a checksum failure"
+  fi
+
+  # --- downgrade refused: target older than current -> failed, no network needed ---
+  local downgrade_bin="${req_sandbox_dir}/cloud-pulse-agent-downgrade"
+  local downgrade_result_dir="${req_sandbox_dir}/result-downgrade"
+  cp "${v061_dir}/${agent_asset}" "$downgrade_bin"
+  chmod 0755 "$downgrade_bin"
+  local downgrade_before_sha
+  downgrade_before_sha="$(sha256sum "$downgrade_bin" | awk '{print $1}')"
+  local downgrade_req="${req_sandbox_dir}/request-downgrade.json"
+  printf '{"job_id":3,"target":"v0.6.0"}' > "$downgrade_req"
+
+  local downgrade_out downgrade_status
+  set +e
+  downgrade_out="$("$downgrade_bin" update --from-request "$downgrade_req" --result-dir "$downgrade_result_dir" 2>&1)"
+  downgrade_status=$?
+  set -e
+  if [ "$downgrade_status" -eq 0 ]; then
+    pass "update --from-request (downgrade case) exits 0"
+  else
+    echo "$downgrade_out" >&2
+    fail "update --from-request (downgrade case) exited ${downgrade_status}, want 0"
+  fi
+  if [ -f "${downgrade_result_dir}/result.json" ]; then
+    case "$(cat "${downgrade_result_dir}/result.json")" in
+      *'"error_code":"downgrade_refused"'*) pass "update --from-request (downgrade case) result.json error_code=downgrade_refused" ;;
+      *) fail "update --from-request (downgrade case) result.json unexpected content: $(cat "${downgrade_result_dir}/result.json")" ;;
+    esac
+  else
+    fail "update --from-request (downgrade case) did not write result.json"
+  fi
+  local downgrade_after_sha
+  downgrade_after_sha="$(sha256sum "$downgrade_bin" | awk '{print $1}')"
+  if [ "$downgrade_before_sha" = "$downgrade_after_sha" ]; then
+    pass "update --from-request (downgrade case) left the binary unchanged"
+  else
+    fail "update --from-request (downgrade case) MODIFIED the binary despite a refused downgrade"
+  fi
+
+  # --- malicious request files: process itself must error, no result.json ---
+  local malicious_bin="${req_sandbox_dir}/cloud-pulse-agent-malicious"
+  cp "${v060_dir}/${agent_asset}" "$malicious_bin"
+  chmod 0755 "$malicious_bin"
+
+  local malformed_req="${req_sandbox_dir}/request-malformed.json"
+  printf '{not valid json' > "$malformed_req"
+  local malformed_result_dir="${req_sandbox_dir}/result-malformed"
+  if "$malicious_bin" update --from-request "$malformed_req" --result-dir "$malformed_result_dir" >/dev/null 2>&1; then
+    fail "update --from-request (malformed JSON) unexpectedly exited 0"
+  else
+    pass "update --from-request (malformed JSON) exits non-zero"
+  fi
+  assert_no_result_file "$malformed_result_dir" "malformed JSON"
+
+  local bad_tag_req="${req_sandbox_dir}/request-bad-tag.json"
+  printf '{"job_id":4,"target":"; rm -rf /"}' > "$bad_tag_req"
+  local bad_tag_result_dir="${req_sandbox_dir}/result-bad-tag"
+  if "$malicious_bin" update --from-request "$bad_tag_req" --result-dir "$bad_tag_result_dir" >/dev/null 2>&1; then
+    fail "update --from-request (malicious target tag) unexpectedly exited 0"
+  else
+    pass "update --from-request (malicious target tag) exits non-zero"
+  fi
+  assert_no_result_file "$bad_tag_result_dir" "malicious target tag"
+
+  local bad_jobid_req="${req_sandbox_dir}/request-bad-jobid.json"
+  printf '{"job_id":0,"target":"v0.6.1"}' > "$bad_jobid_req"
+  local bad_jobid_result_dir="${req_sandbox_dir}/result-bad-jobid"
+  if "$malicious_bin" update --from-request "$bad_jobid_req" --result-dir "$bad_jobid_result_dir" >/dev/null 2>&1; then
+    fail "update --from-request (job_id <= 0) unexpectedly exited 0"
+  else
+    pass "update --from-request (job_id <= 0) exits non-zero"
+  fi
+  assert_no_result_file "$bad_jobid_result_dir" "job_id <= 0"
+
+  local oversized_req="${req_sandbox_dir}/request-oversized.json"
+  python3 -c "print('{\"job_id\":1,\"target\":\"' + ('v' * 8192) + '\"}')" > "$oversized_req"
+  local oversized_result_dir="${req_sandbox_dir}/result-oversized"
+  if "$malicious_bin" update --from-request "$oversized_req" --result-dir "$oversized_result_dir" >/dev/null 2>&1; then
+    fail "update --from-request (oversized request file) unexpectedly exited 0"
+  else
+    pass "update --from-request (oversized request file) exits non-zero"
+  fi
+  assert_no_result_file "$oversized_result_dir" "oversized request file"
+
+  local symlink_target="${req_sandbox_dir}/symlink-target.json"
+  printf '{"job_id":5,"target":"v0.6.1"}' > "$symlink_target"
+  local symlink_req="${req_sandbox_dir}/request-symlink.json"
+  ln -sf "$symlink_target" "$symlink_req"
+  local symlink_result_dir="${req_sandbox_dir}/result-symlink"
+  if "$malicious_bin" update --from-request "$symlink_req" --result-dir "$symlink_result_dir" >/dev/null 2>&1; then
+    fail "update --from-request (symlinked request file) unexpectedly exited 0"
+  else
+    pass "update --from-request (symlinked request file) exits non-zero (O_NOFOLLOW)"
+  fi
+  assert_no_result_file "$symlink_result_dir" "symlinked request file"
+
+  # --- combined flags rejected ---
+  local combined_status
+  set +e
+  "$malicious_bin" update --from-request "$success_req" --check >/dev/null 2>&1
+  combined_status=$?
+  set -e
+  if [ "$combined_status" -eq 0 ]; then
+    fail "update --from-request combined with --check unexpectedly exited 0"
+  else
+    pass "update --from-request combined with --check exits non-zero"
+  fi
+}
+
+# assert_no_result_file RESULT_DIR LABEL — asserts RESULT_DIR/result.json
+# was never created, for the malicious-request-file cases above where
+# the request itself is rejected before any update attempt (and
+# therefore before any result file would ever be written).
+assert_no_result_file() {
+  local result_dir="$1" label="$2"
+  if [ -f "${result_dir}/result.json" ]; then
+    fail "update --from-request (${label}) unexpectedly wrote a result.json"
+  else
+    pass "update --from-request (${label}) wrote no result.json"
+  fi
 }
 
 finish() {

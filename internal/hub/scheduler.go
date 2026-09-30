@@ -64,6 +64,12 @@ func (s *Server) RunBackground(ctx context.Context) {
 		}()
 	}
 
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.runUpdateJobTimeoutLoop(ctx)
+	}()
+
 	wg.Wait()
 }
 
@@ -115,6 +121,12 @@ func (s *Server) runPruneLoop(ctx context.Context) {
 			}
 			if err := s.store.PruneAlertEvents(ctx, now); err != nil {
 				s.logger.Error("scheduler: prune alert events failed", "error", err)
+			}
+			// SPEC-v0.6 §3 개선 c: audit_log entries older than
+			// models.AuditRetentionDays (400 days) are pruned on the
+			// same maintenance tick as every other retention window.
+			if err := s.store.PruneAuditEntries(ctx, now); err != nil {
+				s.logger.Error("scheduler: prune audit entries failed", "error", err)
 			}
 			s.limiter.cleanup()
 		}
@@ -169,6 +181,27 @@ func (s *Server) runCloudLoop(ctx context.Context) {
 
 // collectTimeout returns the timeout for a single collector run: the
 // smaller of CloudInterval and maxCollectTimeout.
+// updateJobTimeoutCheckInterval is how often
+// runUpdateJobTimeoutLoop scans for in_progress remote-update jobs that
+// have exceeded updateJobTimeout (SPEC-v0.6 §2).
+const updateJobTimeoutCheckInterval = 1 * time.Minute
+
+// runUpdateJobTimeoutLoop periodically fails any in_progress
+// remote-update job that has not received a status report within
+// updateJobTimeout (SPEC-v0.6 §2 step 5).
+func (s *Server) runUpdateJobTimeoutLoop(ctx context.Context) {
+	ticker := time.NewTicker(updateJobTimeoutCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.checkUpdateJobTimeouts(ctx, s.opts.now())
+		}
+	}
+}
+
 func (s *Server) collectTimeout() time.Duration {
 	interval := s.opts.CloudInterval
 	if interval <= 0 || interval > maxCollectTimeout {
