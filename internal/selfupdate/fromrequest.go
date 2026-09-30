@@ -24,6 +24,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/leejeonghun001/cloud-pulse/internal/version"
 )
@@ -126,6 +127,13 @@ type FromRequestOptions struct {
 // non-nil error, so the systemd oneshot service's own exit code doesn't
 // need to be inspected by anything.
 func RunFromRequest(ctx context.Context, o FromRequestOptions) (Result, error) {
+	// Request mode relies on O_NOFOLLOW reads and a root-owned result
+	// directory, which only the Linux + systemd deployment provides
+	// (SPEC-v0.6 §2). Refuse everywhere else instead of running with
+	// weaker file-handling guarantees.
+	if hostGOOS() != "linux" {
+		return Result{}, fmt.Errorf("selfupdate: from-request: remote updates require linux (running on %s): %w", hostGOOS(), ErrUnsupported)
+	}
 	req, err := readRequestFile(o.RequestPath)
 	if err != nil {
 		return Result{}, fmt.Errorf("selfupdate: from-request: %w", err)
@@ -316,3 +324,8 @@ func writeResultFileAtomic(dir string, rf UpdateResultFile) error {
 	}
 	return nil
 }
+
+// hostGOOS reports the operating system the process is actually running
+// on. It is a variable (not FromRequestOptions.GOOS, which only selects the
+// release asset) so tests can exercise the non-linux refusal on any host.
+var hostGOOS = func() string { return runtime.GOOS }

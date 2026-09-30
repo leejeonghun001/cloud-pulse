@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -397,8 +398,8 @@ func TestRunFromRequest_RejectsOversizedRequestFile(t *testing.T) {
 }
 
 func TestRunFromRequest_RefusesSymlinkRequestFile(t *testing.T) {
-	if os.Getenv("GOOS") == "windows" {
-		t.Skip("O_NOFOLLOW is a no-op stub on windows")
+	if runtime.GOOS == "windows" {
+		t.Skip("O_NOFOLLOW does not exist on windows; request mode refuses non-linux hosts")
 	}
 	t.Parallel()
 
@@ -438,6 +439,9 @@ func TestRunFromRequest_MissingRequestPath(t *testing.T) {
 }
 
 func TestRunFromRequest_ResultFileWrittenAtomicallyWithCorrectMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows has no unix permission bits; request mode refuses non-linux hosts")
+	}
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -518,5 +522,33 @@ func corruptedAssetSource(t *testing.T, binary, tag, goos, goarch string) Source
 		LatestURL:    srv.URL + "/latest",
 		AssetBaseURL: srv.URL + "/dl/" + tag,
 		Client:       srv.Client(),
+	}
+}
+
+// TestRunFromRequest_RefusesNonLinuxHost guards the SPEC-v0.6 §2 rule that
+// request mode runs only on Linux, where O_NOFOLLOW and the root-owned
+// result directory are guaranteed. Not parallel: it swaps hostGOOS.
+func TestRunFromRequest_RefusesNonLinuxHost(t *testing.T) {
+	orig := hostGOOS
+	hostGOOS = func() string { return "windows" }
+	t.Cleanup(func() { hostGOOS = orig })
+
+	dir := t.TempDir()
+	reqPath := filepath.Join(dir, "update-request.json")
+	if err := os.WriteFile(reqPath, []byte(`{"job_id":1,"target":"latest"}`), 0o600); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	resultDir := filepath.Join(dir, "result")
+	_, err := RunFromRequest(context.Background(), FromRequestOptions{
+		RequestPath: reqPath,
+		ResultDir:   resultDir,
+		Binary:      "cloud-pulse-agent",
+		Current:     "v0.6.0",
+	})
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("RunFromRequest error = %v, want ErrUnsupported", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(resultDir, "result.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("result.json must not be written on a refused platform (stat err = %v)", statErr)
 	}
 }
