@@ -113,6 +113,10 @@ FLAG_ALLOWLIST = {
     "--generate-notes",
     "--notes-file",
     "--verify-tag",
+    # scripts/hub-upgrade-check.sh's own bash-parsed flag surface (not
+    # a cmd/*.go flag.* call):
+    "--expect",
+    "--password-file",
 }
 
 MARKDOWN_LINK_EXCLUDE_SCHEMES = ("http://", "https://", "mailto:", "//")

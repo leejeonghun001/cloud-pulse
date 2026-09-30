@@ -13,3 +13,9 @@ node_modules/
 tmp/
 __pycache__/
 *.pyc
+
+# Local-only prepublish-check.py allowlist (real hostnames/emails/IPs
+# this operator doesn't want the public-repo scanner to flag) — never
+# committed, since committing it would be the leak the scanner exists
+# to catch. See scripts/prepublish-check.py and docs/maintainers.md.
+.prepublish-markers.local
