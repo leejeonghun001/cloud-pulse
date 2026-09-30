@@ -72,13 +72,10 @@ func TestHandleUpdateRequest_LogsReceipt(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	restoreStateDir := swapRequestStateDir(dir)
-	defer restoreStateDir()
-
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	handleUpdateRequest(context.Background(), logger, &models.UpdateRequest{JobID: 42, Target: "v0.6.0"})
+	handleUpdateRequestAt(context.Background(), logger, &models.UpdateRequest{JobID: 42, Target: "v0.6.0"}, dir)
 
 	out := buf.String()
 	if out == "" {
@@ -89,30 +86,9 @@ func TestHandleUpdateRequest_LogsReceipt(t *testing.T) {
 	}
 }
 
-// swapRequestStateDir points RequestStateDir at dir for the duration of
-// a test, returning a restore function. Tests must defer the restore
-// so package-level state doesn't leak across tests (they run with
-// t.Parallel(), so most callers should NOT use this helper alongside
-// t.Parallel() on the same subtree — the tests that do call it below
-// run serially for that reason).
-func swapRequestStateDir(dir string) func() {
-	old := RequestStateDir
-	RequestStateDir = dir
-	return func() { RequestStateDir = old }
-}
-
-func swapResultDir(dir string) func() {
-	old := ResultDir
-	ResultDir = dir
-	return func() { ResultDir = old }
-}
-
 func TestHandleUpdateRequest_WritesRequestFileAtomically(t *testing.T) {
 	dir := t.TempDir()
-	restore := swapRequestStateDir(dir)
-	defer restore()
-
-	handleUpdateRequest(context.Background(), nil, &models.UpdateRequest{JobID: 7, Target: "v0.6.1"})
+	handleUpdateRequestAt(context.Background(), nil, &models.UpdateRequest{JobID: 7, Target: "v0.6.1"}, dir)
 
 	path := filepath.Join(dir, RequestFileName)
 	data, err := os.ReadFile(path) //nolint:gosec // test reads its own tempdir fixture
@@ -136,11 +112,8 @@ func TestHandleUpdateRequest_WritesRequestFileAtomically(t *testing.T) {
 
 func TestHandleUpdateRequest_OverwritesPreviousRequest(t *testing.T) {
 	dir := t.TempDir()
-	restore := swapRequestStateDir(dir)
-	defer restore()
-
-	handleUpdateRequest(context.Background(), nil, &models.UpdateRequest{JobID: 1, Target: "v0.6.0"})
-	handleUpdateRequest(context.Background(), nil, &models.UpdateRequest{JobID: 2, Target: "v0.6.2"})
+	handleUpdateRequestAt(context.Background(), nil, &models.UpdateRequest{JobID: 1, Target: "v0.6.0"}, dir)
+	handleUpdateRequestAt(context.Background(), nil, &models.UpdateRequest{JobID: 2, Target: "v0.6.2"}, dir)
 
 	data, err := os.ReadFile(filepath.Join(dir, RequestFileName)) //nolint:gosec // test tempdir fixture
 	if err != nil {
@@ -157,10 +130,7 @@ func TestHandleUpdateRequest_OverwritesPreviousRequest(t *testing.T) {
 
 func TestHandleUpdateRequest_MissingDirIsCreated(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "state", "dir")
-	restore := swapRequestStateDir(dir)
-	defer restore()
-
-	handleUpdateRequest(context.Background(), nil, &models.UpdateRequest{JobID: 1, Target: "latest"})
+	handleUpdateRequestAt(context.Background(), nil, &models.UpdateRequest{JobID: 1, Target: "latest"}, dir)
 
 	if _, err := os.Stat(filepath.Join(dir, RequestFileName)); err != nil {
 		t.Errorf("expected request file to exist after MkdirAll, stat err: %v", err)
@@ -169,26 +139,22 @@ func TestHandleUpdateRequest_MissingDirIsCreated(t *testing.T) {
 
 func TestPendingUpdateStatus_StubAlwaysNilWhenNoResultDir(t *testing.T) {
 	t.Parallel()
-	restore := swapResultDir(filepath.Join(t.TempDir(), "does-not-exist"))
-	defer restore()
+	dir := filepath.Join(t.TempDir(), "does-not-exist")
 
-	if got := pendingUpdateStatus(context.Background(), nil); got != nil {
+	if got := pendingUpdateStatusAt(context.Background(), nil, dir); got != nil {
 		t.Errorf("pendingUpdateStatus = %+v, want nil (no result file)", got)
 	}
 }
 
 func TestPendingUpdateStatus_ParsesValidResultAndRemovesFile(t *testing.T) {
 	dir := t.TempDir()
-	restore := swapResultDir(dir)
-	defer restore()
-
 	writeResultFixture(t, dir, resultFile{
 		JobID:   99,
 		State:   models.UpdateJobSucceeded,
 		Version: "v0.6.0",
 	})
 
-	got := pendingUpdateStatus(context.Background(), nil)
+	got := pendingUpdateStatusAt(context.Background(), nil, dir)
 	if got == nil {
 		t.Fatal("pendingUpdateStatus = nil, want a status")
 	}
@@ -203,9 +169,6 @@ func TestPendingUpdateStatus_ParsesValidResultAndRemovesFile(t *testing.T) {
 
 func TestPendingUpdateStatus_FailedResultWithErrorCode(t *testing.T) {
 	dir := t.TempDir()
-	restore := swapResultDir(dir)
-	defer restore()
-
 	writeResultFixture(t, dir, resultFile{
 		JobID:     5,
 		State:     models.UpdateJobFailed,
@@ -213,7 +176,7 @@ func TestPendingUpdateStatus_FailedResultWithErrorCode(t *testing.T) {
 		Error:     "sha256 mismatch",
 	})
 
-	got := pendingUpdateStatus(context.Background(), nil)
+	got := pendingUpdateStatusAt(context.Background(), nil, dir)
 	if got == nil {
 		t.Fatal("pendingUpdateStatus = nil, want a status")
 	}
@@ -224,48 +187,36 @@ func TestPendingUpdateStatus_FailedResultWithErrorCode(t *testing.T) {
 
 func TestPendingUpdateStatus_RejectsInvalidJobID(t *testing.T) {
 	dir := t.TempDir()
-	restore := swapResultDir(dir)
-	defer restore()
-
 	writeResultFixture(t, dir, resultFile{JobID: 0, State: models.UpdateJobSucceeded, Version: "v0.6.0"})
 
-	if got := pendingUpdateStatus(context.Background(), nil); got != nil {
+	if got := pendingUpdateStatusAt(context.Background(), nil, dir); got != nil {
 		t.Errorf("pendingUpdateStatus = %+v, want nil for job_id <= 0", got)
 	}
 }
 
 func TestPendingUpdateStatus_RejectsInvalidState(t *testing.T) {
 	dir := t.TempDir()
-	restore := swapResultDir(dir)
-	defer restore()
-
 	// queued/in_progress are not states an agent is allowed to report.
 	writeResultFixture(t, dir, resultFile{JobID: 1, State: models.UpdateJobQueued})
 
-	if got := pendingUpdateStatus(context.Background(), nil); got != nil {
+	if got := pendingUpdateStatusAt(context.Background(), nil, dir); got != nil {
 		t.Errorf("pendingUpdateStatus = %+v, want nil for state=queued", got)
 	}
 }
 
 func TestPendingUpdateStatus_RejectsMalformedJSON(t *testing.T) {
 	dir := t.TempDir()
-	restore := swapResultDir(dir)
-	defer restore()
-
 	if err := os.WriteFile(filepath.Join(dir, ResultFileName), []byte("{not json"), 0o644); err != nil { //nolint:gosec // test fixture
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	if got := pendingUpdateStatus(context.Background(), nil); got != nil {
+	if got := pendingUpdateStatusAt(context.Background(), nil, dir); got != nil {
 		t.Errorf("pendingUpdateStatus = %+v, want nil for malformed JSON", got)
 	}
 }
 
 func TestPendingUpdateStatus_RejectsOversizedFile(t *testing.T) {
 	dir := t.TempDir()
-	restore := swapResultDir(dir)
-	defer restore()
-
 	oversized := make([]byte, maxResultFileBytes+1024)
 	for i := range oversized {
 		oversized[i] = ' '
@@ -274,7 +225,7 @@ func TestPendingUpdateStatus_RejectsOversizedFile(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	if got := pendingUpdateStatus(context.Background(), nil); got != nil {
+	if got := pendingUpdateStatusAt(context.Background(), nil, dir); got != nil {
 		t.Errorf("pendingUpdateStatus = %+v, want nil for oversized file", got)
 	}
 	// The oversized file must be left in place (never removed on a
@@ -289,9 +240,6 @@ func TestPendingUpdateStatus_RefusesSymlink(t *testing.T) {
 		t.Skip("O_NOFOLLOW is a no-op stub on windows")
 	}
 	dir := t.TempDir()
-	restore := swapResultDir(dir)
-	defer restore()
-
 	target := filepath.Join(t.TempDir(), "evil-target.json")
 	writeResultFixtureAt(t, target, resultFile{JobID: 1, State: models.UpdateJobSucceeded, Version: "v0.6.0"})
 
@@ -300,20 +248,17 @@ func TestPendingUpdateStatus_RefusesSymlink(t *testing.T) {
 		t.Fatalf("symlink: %v", err)
 	}
 
-	if got := pendingUpdateStatus(context.Background(), nil); got != nil {
+	if got := pendingUpdateStatusAt(context.Background(), nil, dir); got != nil {
 		t.Errorf("pendingUpdateStatus = %+v, want nil when result path is a symlink", got)
 	}
 }
 
 func TestPendingUpdateStatus_NoFileIsNilWithoutError(t *testing.T) {
 	dir := t.TempDir()
-	restore := swapResultDir(dir)
-	defer restore()
-
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
-	if got := pendingUpdateStatus(context.Background(), logger); got != nil {
+	if got := pendingUpdateStatusAt(context.Background(), logger, dir); got != nil {
 		t.Errorf("pendingUpdateStatus = %+v, want nil", got)
 	}
 	if buf.Len() != 0 {

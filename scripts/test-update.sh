@@ -42,6 +42,7 @@ TAMPERED_FAKE_PID=""
 TAMPERED_FAKE_PORT=""
 REQ_FAKE_PID=""
 REQ_TAMPERED_FAKE_PID=""
+REHEARSAL_FAKE_PID=""
 
 pass() {
   echo "PASS: $*"
@@ -70,6 +71,10 @@ cleanup() {
   if [ -n "$REQ_TAMPERED_FAKE_PID" ] && kill -0 "$REQ_TAMPERED_FAKE_PID" 2>/dev/null; then
     kill "$REQ_TAMPERED_FAKE_PID" 2>/dev/null || true
     wait "$REQ_TAMPERED_FAKE_PID" 2>/dev/null || true
+  fi
+  if [ -n "$REHEARSAL_FAKE_PID" ] && kill -0 "$REHEARSAL_FAKE_PID" 2>/dev/null; then
+    kill "$REHEARSAL_FAKE_PID" 2>/dev/null || true
+    wait "$REHEARSAL_FAKE_PID" 2>/dev/null || true
   fi
   if [ -n "$TMP_ROOT" ]; then
     rm -rf "$TMP_ROOT"
@@ -493,7 +498,108 @@ UNITEOF
 
   test_from_request_mode "$target" "$arch"
 
+  test_v060_to_v070_rehearsal "$target" "$arch"
+
   finish
+}
+
+# test_v060_to_v070_rehearsal — SPEC-v0.7 §6's pre-release gate ("v0.6.0
+# -> v0.7.0 update 리허설"): builds a v0.6.0-stamped agent binary and a
+# v0.7.0 release, then runs the real `update` subcommand end to end
+# (same fake-release-server approach as the v0.3.0->v0.3.1 rehearsal
+# above), asserting the binary ends up reporting v0.7.0. This exercises
+# exactly the Linux self-update path a real user's fleet takes when
+# upgrading past this release; the widened darwin/windows
+# RunFromRequest platform gate itself has no CLI-level way to inject a
+# non-host GOOS (HostGOOS is a Go-API-only test seam — see
+# internal/selfupdate/fromrequest.go), so verifying darwin/windows
+# *runtime* behavior is correctly left to the CI-only `agent-e2e` job
+# (SPEC-v0.7 §1's test plan) rather than attempted here.
+test_v060_to_v070_rehearsal() {
+  local target="$1" arch="$2"
+  local v060_dir v070_dir rehearsal_sandbox
+  v060_dir="${TMP_ROOT}/rehearsal-v0.6.0"
+  v070_dir="${TMP_ROOT}/rehearsal-v0.7.0"
+  rehearsal_sandbox="${TMP_ROOT}/rehearsal-sandbox"
+  mkdir -p "$v060_dir" "$v070_dir" "$rehearsal_sandbox"
+
+  echo "==> building v0.6.0 agent binary for the v0.6.0->v0.7.0 rehearsal (${target})"
+  if TARGETS="$target" ALLOW_ANY_VERSION=1 \
+    bash scripts/build-release.sh "v0.6.0" "$v060_dir" >"${TMP_ROOT}/build-rehearsal-v060.log" 2>&1; then
+    pass "build v0.6.0 agent binary for rehearsal"
+  else
+    cat "${TMP_ROOT}/build-rehearsal-v060.log" >&2
+    fail "build v0.6.0 agent binary for rehearsal"
+    return
+  fi
+
+  echo "==> building v0.7.0 release assets for the rehearsal (${target})"
+  if TARGETS="$target" ALLOW_ANY_VERSION=1 \
+    bash scripts/build-release.sh "v0.7.0" "$v070_dir" >"${TMP_ROOT}/build-rehearsal-v070.log" 2>&1; then
+    pass "build v0.7.0 release assets for rehearsal"
+  else
+    cat "${TMP_ROOT}/build-rehearsal-v070.log" >&2
+    fail "build v0.7.0 release assets for rehearsal"
+    return
+  fi
+
+  local rehearsal_port="${REHEARSAL_FAKE_PORT:-18195}"
+  local rehearsal_base="http://127.0.0.1:${rehearsal_port}"
+  local rehearsal_assets_root="${TMP_ROOT}/rehearsal-fake-assets"
+  mkdir -p "${rehearsal_assets_root}/v0.7.0"
+  cp "${v070_dir}"/* "${rehearsal_assets_root}/v0.7.0/" 2>/dev/null || true
+
+  python3 "${REPO_ROOT}/scripts/fake_release_server.py" "$rehearsal_port" "$rehearsal_assets_root" "v0.7.0" \
+    >"${TMP_ROOT}/rehearsal-fake-server.log" 2>&1 &
+  REHEARSAL_FAKE_PID=$!
+
+  if wait_for_http "${rehearsal_base}/releases/latest" 10; then
+    pass "v0.6.0->v0.7.0 rehearsal fake release server reachable on ${rehearsal_base}"
+  else
+    fail "v0.6.0->v0.7.0 rehearsal fake release server did not become reachable within 10s"
+    return
+  fi
+
+  local agent_asset="cloud-pulse-agent-linux-${arch}"
+  local rehearsal_bin="${rehearsal_sandbox}/cloud-pulse-agent"
+  cp "${v060_dir}/${agent_asset}" "$rehearsal_bin"
+  chmod 0755 "$rehearsal_bin"
+
+  local rehearsal_out rehearsal_status
+  set +e
+  rehearsal_out="$(CP_UPDATE_LATEST_URL="${rehearsal_base}/releases/latest" \
+    CP_RELEASE_BASE_URL="${rehearsal_base}/releases/download/v0.7.0" \
+    "$rehearsal_bin" update 2>&1)"
+  rehearsal_status=$?
+  set -e
+  if [ "$rehearsal_status" -eq 0 ]; then
+    pass "v0.6.0->v0.7.0 rehearsal: agent update (real) exits 0"
+  else
+    echo "$rehearsal_out" >&2
+    fail "v0.6.0->v0.7.0 rehearsal: agent update (real) exited ${rehearsal_status}, want 0"
+  fi
+
+  local rehearsal_version_out
+  rehearsal_version_out="$("$rehearsal_bin" -version 2>&1)"
+  case "$rehearsal_version_out" in
+    *"v0.7.0"*) pass "v0.6.0->v0.7.0 rehearsal: binary reports v0.7.0 after update" ;;
+    *) fail "v0.6.0->v0.7.0 rehearsal: binary does not report v0.7.0 after update: ${rehearsal_version_out}" ;;
+  esac
+
+  # The updated (now v0.7.0+) binary must itself support the new
+  # subcommands this stage introduced, proving the rehearsal didn't
+  # just replace bytes but produced a binary with the expected new
+  # capability surface.
+  if "$rehearsal_bin" plist --help >/dev/null 2>&1; then
+    pass "v0.6.0->v0.7.0 rehearsal: updated binary supports 'plist --help'"
+  else
+    fail "v0.6.0->v0.7.0 rehearsal: updated binary does not support 'plist --help'"
+  fi
+  if "$rehearsal_bin" service --help >/dev/null 2>&1; then
+    pass "v0.6.0->v0.7.0 rehearsal: updated binary supports 'service --help'"
+  else
+    fail "v0.6.0->v0.7.0 rehearsal: updated binary does not support 'service --help'"
+  fi
 }
 
 # test_from_request_mode — SPEC-v0.6 §2's `update --from-request FILE`

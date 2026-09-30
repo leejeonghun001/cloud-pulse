@@ -103,6 +103,17 @@
 #                         sandboxed paths.
 #   CP_TEST_UNAME_M       Override the value used in place of `uname -m`
 #                         (test hook for the unknown-arch path).
+#   CP_TEST_UNAME_S       Override the value used in place of `uname -s`
+#                         for platform detection (test hook: set to
+#                         "Darwin" to exercise the darwin-launchd branch
+#                         from a non-macOS host — see
+#                         scripts/test-install.sh's darwin sandbox
+#                         tests).
+#   CP_LAUNCHCTL          Override the `launchctl` binary path
+#                         (darwin-launchd only; test hook, mirrors
+#                         CP_SYSTEMCTL).
+#   CP_DSCL               Override the `dscl` binary path
+#                         (darwin-launchd only; test hook).
 #   CP_NONINTERACTIVE     Set to "1" to force non-interactive behavior
 #                         (skip the menu) even when a tty is attached.
 #                         Always set by scripts/test-install.sh's
@@ -132,6 +143,13 @@ CP_ASSET_NAME_AGENT_PREFIX="cloud-pulse-agent"
 CP_SERVICE_USER="cloud-pulse"
 CP_SERVICE_GROUP="cloud-pulse"
 
+# macOS-only (darwin-launchd platform, SPEC-v0.7 §1): dedicated hidden
+# system user the LaunchDaemon runs as, and the fixed launchd job
+# label/paths — see internal/launchd's identical Go-side constants.
+CP_DARWIN_USER="_cloudpulse"
+CP_LAUNCHD_LABEL="com.cloudpulse.agent"
+CP_LAUNCHD_UPDATE_LABEL="com.cloudpulse.agent-update"
+
 # ---------------------------------------------------------------------------
 # Globals populated by argument parsing / detection.
 # ---------------------------------------------------------------------------
@@ -155,7 +173,16 @@ OPT_ANY_FLAG_GIVEN=0
 
 SANDBOX_ROOT="${CP_INSTALL_ROOT:-}"
 SYSTEMCTL="${CP_SYSTEMCTL:-systemctl}"
+LAUNCHCTL="${CP_LAUNCHCTL:-launchctl}"
+DSCL="${CP_DSCL:-dscl}"
 IS_SANDBOX=0
+
+# PLATFORM is set by detect_platform: "linux-systemd", "darwin-launchd",
+# or "unsupported". Every later branch that differs between systemd and
+# launchd (system-user creation, unit/plist rendering, service
+# start/stop, uninstall) dispatches on this value rather than re-testing
+# `uname` — detect_platform is the single place OS detection happens.
+PLATFORM=""
 
 # Set by start_service so the final summary reports the actual lifecycle
 # action and the version of the binary that was launched.
@@ -173,6 +200,12 @@ UPDATE_SERVICE_UNIT_FILE=""
 UPDATE_STATE_DIR=""
 UPDATE_REQUEST_FILE=""
 UPDATE_RESULT_DIR=""
+
+# darwin-launchd-only path globals (SPEC-v0.7 §1); left empty and
+# unused on linux-systemd.
+PLIST_PATH=""
+UPDATE_PLIST_PATH=""
+LOG_PATH=""
 
 ARCH=""
 OS_NAME=""
@@ -529,14 +562,35 @@ detect_sandbox() {
   fi
 }
 
-detect_os() {
+detect_platform() {
   local uname_s
-  uname_s="$(uname -s)"
-  if [ "$uname_s" != "Linux" ]; then
-    err "cloud-pulse-agent's installer only supports Linux (systemd). Detected: ${uname_s}"
+  uname_s="${CP_TEST_UNAME_S:-$(uname -s)}"
+  case "$uname_s" in
+    Linux)
+      PLATFORM="linux-systemd"
+      OS_NAME="linux"
+      ;;
+    Darwin)
+      PLATFORM="darwin-launchd"
+      OS_NAME="darwin"
+      ;;
+    *)
+      PLATFORM="unsupported"
+      OS_NAME=""
+      ;;
+  esac
+  if [ "$PLATFORM" = "unsupported" ]; then
+    case "$uname_s" in
+      MINGW*|MSYS*|CYGWIN*)
+        err "this script does not support Windows. Use scripts/install-agent.ps1 instead:"
+        err "  irm https://raw.githubusercontent.com/${CP_REPO}/main/scripts/install-agent.ps1 | iex"
+        ;;
+      *)
+        err "cloud-pulse-agent's installer only supports Linux (systemd) and macOS (launchd). Detected: ${uname_s}"
+        ;;
+    esac
     exit 1
   fi
-  OS_NAME="linux"
 }
 
 detect_arch() {
@@ -550,6 +604,10 @@ detect_arch() {
       ARCH="arm64"
       ;;
     armv7l|armv7*)
+      if [ "$PLATFORM" = "darwin-launchd" ]; then
+        err "unsupported CPU architecture for macOS: ${uname_m} (no armv7 release exists for darwin)"
+        exit 1
+      fi
       ARCH="armv7"
       ;;
     *)
@@ -575,6 +633,10 @@ require_root_unless_sandbox() {
 
 setup_paths() {
   local root="${SANDBOX_ROOT}"
+  if [ "$PLATFORM" = "darwin-launchd" ]; then
+    setup_paths_darwin "$root"
+    return
+  fi
   BIN_DIR="${root}${OPT_PREFIX}/bin"
   ETC_DIR="${root}/etc/cloud-pulse"
   SYSTEMD_DIR="${root}/etc/systemd/system"
@@ -586,6 +648,28 @@ setup_paths() {
   UPDATE_STATE_DIR="${root}/var/lib/cloud-pulse-agent"
   UPDATE_REQUEST_FILE="${UPDATE_STATE_DIR}/update-request.json"
   UPDATE_RESULT_DIR="${root}/var/lib/cloud-pulse-agent-update"
+}
+
+# setup_paths_darwin — SPEC-v0.7 §1's fixed macOS path table:
+#   /usr/local/bin/cloud-pulse-agent            (root:wheel 0755)
+#   /usr/local/etc/cloud-pulse/agent.env        (root:_cloudpulse 0640)
+#   /Library/Application Support/cloud-pulse-agent/   (request file, _cloudpulse 0750)
+#   /Library/Application Support/cloud-pulse-agent-update/  (result, root 0755)
+#   /Library/LaunchDaemons/com.cloudpulse.agent.plist
+#   /Library/LaunchDaemons/com.cloudpulse.agent-update.plist
+#   /Library/Logs/cloud-pulse-agent.log
+setup_paths_darwin() {
+  local root="$1"
+  BIN_DIR="${root}${OPT_PREFIX}/bin"
+  ETC_DIR="${root}${OPT_PREFIX}/etc/cloud-pulse"
+  ENV_FILE="${ETC_DIR}/agent.env"
+  BIN_PATH="${BIN_DIR}/cloud-pulse-agent"
+  PLIST_PATH="${root}/Library/LaunchDaemons/${CP_LAUNCHD_LABEL}.plist"
+  UPDATE_PLIST_PATH="${root}/Library/LaunchDaemons/${CP_LAUNCHD_UPDATE_LABEL}.plist"
+  UPDATE_STATE_DIR="${root}/Library/Application Support/cloud-pulse-agent"
+  UPDATE_REQUEST_FILE="${UPDATE_STATE_DIR}/update-request.json"
+  UPDATE_RESULT_DIR="${root}/Library/Application Support/cloud-pulse-agent-update"
+  LOG_PATH="${root}/Library/Logs/cloud-pulse-agent.log"
 }
 
 # ---------------------------------------------------------------------------
@@ -638,6 +722,10 @@ download_and_verify() {
 # ---------------------------------------------------------------------------
 
 ensure_system_user() {
+  if [ "$PLATFORM" = "darwin-launchd" ]; then
+    ensure_system_user_darwin
+    return
+  fi
   if [ "$IS_SANDBOX" -eq 1 ]; then
     log "sandbox: would run useradd --system --no-create-home --shell /usr/sbin/nologin -U ${CP_SERVICE_USER}"
     if [ "$OPT_DOCKER" -eq 1 ]; then
@@ -652,6 +740,54 @@ ensure_system_user() {
     log "created system user/group '${CP_SERVICE_USER}'"
   fi
   ensure_docker_group_membership
+}
+
+# ensure_system_user_darwin — creates the dedicated hidden macOS system
+# user _cloudpulse via dscl (SPEC-v0.7 §1), reusing it if it already
+# exists. UID is chosen from the conventional system-account range
+# 200-400 (below 500, where Directory-Services-visible regular user
+# accounts start) — the first unused UID in that range is picked by
+# scanning existing UniqueIDs, matching the "이미 있으면 재사용한다"
+# (reuse if it already exists) + "UID는 200-400 중 빈 값을 쓴다"
+# (use an unused value in 200-400) requirement. --docker has no meaning
+# on macOS (Docker Desktop's VM-backed socket is a different
+# integration than the Linux docker-group model) — warn and ignore
+# rather than silently doing nothing.
+ensure_system_user_darwin() {
+  if [ "$OPT_DOCKER" -eq 1 ]; then
+    log "warning: --docker has no effect on macOS (Docker Desktop is not the Linux docker-group model); ignoring"
+  fi
+  if [ "$IS_SANDBOX" -eq 1 ] && [ -z "${CP_DSCL:-}" ]; then
+    log "sandbox: would run dscl . -create /Users/${CP_DARWIN_USER} (UID 200-400, hidden)"
+    return
+  fi
+  if "$DSCL" . -read "/Users/${CP_DARWIN_USER}" UniqueID >/dev/null 2>&1; then
+    log "system user '${CP_DARWIN_USER}' already exists"
+    return
+  fi
+
+  local uid used_uids candidate
+  used_uids="$("$DSCL" . -list /Users UniqueID 2>/dev/null | awk '{print $2}' || true)"
+  uid=""
+  for candidate in $(seq 200 400); do
+    if ! printf '%s\n' "$used_uids" | grep -qx "$candidate"; then
+      uid="$candidate"
+      break
+    fi
+  done
+  if [ -z "$uid" ]; then
+    err "no unused UID available in the 200-400 system-account range for ${CP_DARWIN_USER}"
+    exit 1
+  fi
+
+  "$DSCL" . -create "/Users/${CP_DARWIN_USER}"
+  "$DSCL" . -create "/Users/${CP_DARWIN_USER}" UserShell /usr/bin/false
+  "$DSCL" . -create "/Users/${CP_DARWIN_USER}" RealName "cloud-pulse agent"
+  "$DSCL" . -create "/Users/${CP_DARWIN_USER}" UniqueID "$uid"
+  "$DSCL" . -create "/Users/${CP_DARWIN_USER}" PrimaryGroupID 20
+  "$DSCL" . -create "/Users/${CP_DARWIN_USER}" NFSHomeDirectory /var/empty
+  "$DSCL" . -create "/Users/${CP_DARWIN_USER}" IsHidden 1
+  log "created hidden system user '${CP_DARWIN_USER}' (UID ${uid})"
 }
 
 # ensure_docker_group_membership — with --docker, add CP_SERVICE_USER to
@@ -968,21 +1104,41 @@ write_env_file() {
   rewrite_agent_env "$tmp_env" "$hub_url" "$token" "$host_id" "$interval" "$provider" "$egress_limit" "$net_exclude" "$time_sync" "$send_jitter" "$log_level" "$log_format" "$docker" "$remote_update"
 
   install -m 0640 "$tmp_env" "$ENV_FILE"
+  local env_group
+  env_group="$(env_file_group)"
   if [ "$IS_SANDBOX" -eq 1 ]; then
-    log "sandbox: would run chown root:${CP_SERVICE_GROUP} ${ENV_FILE}"
+    log "sandbox: would run chown root:${env_group} ${ENV_FILE}"
   else
-    chown "root:${CP_SERVICE_GROUP}" "$ENV_FILE"
+    chown "root:${env_group}" "$ENV_FILE"
   fi
   log "wrote ${ENV_FILE}"
   RESOLVED_HUB_URL="$hub_url"
 }
 RESOLVED_HUB_URL=""
 
+# env_file_group — the group write_env_file chowns ENV_FILE to:
+# CP_SERVICE_GROUP on linux-systemd, _cloudpulse's own primary group on
+# darwin-launchd (dscl above sets PrimaryGroupID 20, "staff" — matching
+# SPEC-v0.7 §1's "root:_cloudpulse 0640" table via group membership,
+# since macOS has no separate "_cloudpulse" *group* by convention, only
+# the user).
+env_file_group() {
+  if [ "$PLATFORM" = "darwin-launchd" ]; then
+    echo "$CP_DARWIN_USER"
+    return
+  fi
+  echo "$CP_SERVICE_GROUP"
+}
+
 # ---------------------------------------------------------------------------
 # systemd unit rendering
 # ---------------------------------------------------------------------------
 
 render_unit() {
+  if [ "$PLATFORM" = "darwin-launchd" ]; then
+    render_plist
+    return
+  fi
   mkdir -p "$SYSTEMD_DIR"
   local tmp_unit="${TMP_DIR}/cloud-pulse-agent.service"
 
@@ -995,6 +1151,71 @@ render_unit() {
 
   install -m 0644 "$tmp_unit" "$UNIT_FILE"
   log "wrote ${UNIT_FILE}"
+}
+
+# render_plist — darwin-launchd equivalent of render_unit: ask the
+# freshly installed binary to render its own plist via `plist print`
+# (internal/launchd, SPEC-v0.7 §1), falling back to a built-in heredoc
+# kept byte-identical to internal/launchd.Render's output (see the
+# golden test in internal/launchd/launchd_test.go and the drift test in
+# test-install.sh) only if that invocation fails (e.g. an explicit
+# --version pin older than the tag that introduced the `plist`
+# subcommand).
+render_plist() {
+  mkdir -p "$(dirname "$PLIST_PATH")"
+  local tmp_plist="${TMP_DIR}/${CP_LAUNCHD_LABEL}.plist"
+
+  if [ "${CP_INSTALL_FORCE_SCRIPT_UNIT:-0}" != "1" ] && render_plist_via_binary "$tmp_plist"; then
+    log "rendered ${PLIST_PATH} via '${BIN_PATH} plist print'"
+  else
+    render_plist_fallback "$tmp_plist"
+    log "rendered ${PLIST_PATH} via built-in fallback template"
+  fi
+
+  install -m 0644 "$tmp_plist" "$PLIST_PATH"
+  log "wrote ${PLIST_PATH}"
+}
+
+# render_plist_via_binary OUT_PATH — mirrors render_unit_via_binary.
+render_plist_via_binary() {
+  local out_path="$1"
+  if [ ! -x "$BIN_PATH" ]; then
+    return 1
+  fi
+  timeout 10 "$BIN_PATH" plist print --bin-path "$BIN_PATH" --env-file "$ENV_FILE" \
+    --user "$CP_DARWIN_USER" --log-path "$LOG_PATH" >"$out_path" 2>/dev/null
+}
+
+# render_plist_fallback OUT_PATH — bash heredoc fallback kept
+# byte-identical to internal/launchd.Render's output.
+render_plist_fallback() {
+  local out_path="$1"
+  {
+    echo '<?xml version="1.0" encoding="UTF-8"?>'
+    echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+    echo '<plist version="1.0">'
+    echo '<dict>'
+    echo '    <key>Label</key>'
+    echo "    <string>${CP_LAUNCHD_LABEL}</string>"
+    echo '    <key>ProgramArguments</key>'
+    echo '    <array>'
+    echo "        <string>${BIN_PATH}</string>"
+    echo '        <string>--env-file</string>'
+    echo "        <string>${ENV_FILE}</string>"
+    echo '    </array>'
+    echo '    <key>UserName</key>'
+    echo "    <string>${CP_DARWIN_USER}</string>"
+    echo '    <key>KeepAlive</key>'
+    echo '    <true/>'
+    echo '    <key>RunAtLoad</key>'
+    echo '    <true/>'
+    echo '    <key>StandardOutPath</key>'
+    echo "    <string>${LOG_PATH}</string>"
+    echo '    <key>StandardErrorPath</key>'
+    echo "    <string>${LOG_PATH}</string>"
+    echo '</dict>'
+    echo '</plist>'
+  } > "$out_path"
 }
 
 # install_update_units — write cloud-pulse-agent-update.path/.service
@@ -1014,6 +1235,10 @@ install_update_units() {
   if [ "$OPT_REMOTE_UPDATE" -ne 1 ]; then
     return
   fi
+  if [ "$PLATFORM" = "darwin-launchd" ]; then
+    install_update_plist
+    return
+  fi
 
   mkdir -p "$SYSTEMD_DIR" "$UPDATE_STATE_DIR" "$UPDATE_RESULT_DIR"
 
@@ -1029,6 +1254,51 @@ install_update_units() {
     install_update_units_fallback
     log "rendered ${UPDATE_PATH_UNIT_FILE} / ${UPDATE_SERVICE_UNIT_FILE} via built-in fallback template"
   fi
+}
+
+# install_update_plist — darwin-launchd equivalent of
+# install_update_units: writes the com.cloudpulse.agent-update
+# LaunchDaemon plist (WatchPaths=UPDATE_REQUEST_FILE, root, runs
+# `cloud-pulse-agent update --from-request ... --result-dir ...` —
+# SPEC-v0.7 §1) and ensures its state/result directories exist with
+# the documented ownership (_cloudpulse 0750 request dir, root 0755
+# result dir).
+install_update_plist() {
+  mkdir -p "$(dirname "$UPDATE_PLIST_PATH")" "$UPDATE_STATE_DIR" "$UPDATE_RESULT_DIR"
+  if [ "$IS_SANDBOX" -eq 1 ] && [ -z "${CP_DSCL:-}" ]; then
+    log "sandbox: would chown ${CP_DARWIN_USER} ${UPDATE_STATE_DIR} (0750) and root ${UPDATE_RESULT_DIR} (0755)"
+  else
+    chown "$CP_DARWIN_USER" "$UPDATE_STATE_DIR" 2>/dev/null || true
+    chmod 0750 "$UPDATE_STATE_DIR"
+    chmod 0755 "$UPDATE_RESULT_DIR"
+  fi
+
+  local tmp_plist="${TMP_DIR}/${CP_LAUNCHD_UPDATE_LABEL}.plist"
+  {
+    echo '<?xml version="1.0" encoding="UTF-8"?>'
+    echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+    echo '<plist version="1.0">'
+    echo '<dict>'
+    echo '    <key>Label</key>'
+    echo "    <string>${CP_LAUNCHD_UPDATE_LABEL}</string>"
+    echo '    <key>ProgramArguments</key>'
+    echo '    <array>'
+    echo "        <string>${BIN_PATH}</string>"
+    echo '        <string>update</string>'
+    echo '        <string>--from-request</string>'
+    echo "        <string>${UPDATE_REQUEST_FILE}</string>"
+    echo '        <string>--result-dir</string>'
+    echo "        <string>${UPDATE_RESULT_DIR}</string>"
+    echo '    </array>'
+    echo '    <key>WatchPaths</key>'
+    echo '    <array>'
+    echo "        <string>${UPDATE_REQUEST_FILE}</string>"
+    echo '    </array>'
+    echo '</dict>'
+    echo '</plist>'
+  } > "$tmp_plist"
+  install -m 0644 "$tmp_plist" "$UPDATE_PLIST_PATH"
+  log "wrote ${UPDATE_PLIST_PATH}"
 }
 
 # install_update_units_fallback — bash heredoc fallback kept
@@ -1073,12 +1343,28 @@ enable_update_path_unit() {
   if [ "$OPT_REMOTE_UPDATE" -ne 1 ]; then
     return
   fi
+  if [ "$PLATFORM" = "darwin-launchd" ]; then
+    enable_update_plist_darwin
+    return
+  fi
   if [ "$IS_SANDBOX" -eq 1 ] && [ -z "${CP_SYSTEMCTL:-}" ]; then
     log "sandbox: would run ${SYSTEMCTL} enable cloud-pulse-agent-update.path"
     return
   fi
   "$SYSTEMCTL" enable cloud-pulse-agent-update.path
   log "enabled cloud-pulse-agent-update.path (SPEC-v0.6 §2 remote update)"
+}
+
+# enable_update_plist_darwin — bootstrap the update-helper LaunchDaemon
+# into the system domain (idempotent: a "already bootstrapped" failure
+# from a re-run is not treated as fatal).
+enable_update_plist_darwin() {
+  if [ "$IS_SANDBOX" -eq 1 ] && [ -z "${CP_LAUNCHCTL:-}" ]; then
+    log "sandbox: would run ${LAUNCHCTL} bootstrap system ${UPDATE_PLIST_PATH}"
+    return
+  fi
+  "$LAUNCHCTL" bootstrap system "$UPDATE_PLIST_PATH" 2>/dev/null || true
+  log "bootstrapped ${CP_LAUNCHD_UPDATE_LABEL} (SPEC-v0.7 §1 remote update)"
 }
 
 # detect_preserved_docker_flag — if this is a re-run (reinstall/upgrade)
@@ -1091,6 +1377,9 @@ enable_update_path_unit() {
 # (re-)applied consistently with the unit file every time, not just on
 # the run --docker was first given.
 detect_preserved_docker_flag() {
+  if [ "$PLATFORM" = "darwin-launchd" ]; then
+    return
+  fi
   if [ "$OPT_DOCKER" -eq 1 ]; then
     return
   fi
@@ -1106,6 +1395,13 @@ detect_preserved_docker_flag() {
 # already has StateDirectory=cloud-pulse-agent preserves the opt-in.
 detect_preserved_remote_update_flag() {
   if [ "$OPT_REMOTE_UPDATE" -eq 1 ]; then
+    return
+  fi
+  if [ "$PLATFORM" = "darwin-launchd" ]; then
+    if [ -f "$UPDATE_PLIST_PATH" ]; then
+      OPT_REMOTE_UPDATE=1
+      log "preserving existing --remote-update setting (${UPDATE_PLIST_PATH} present)"
+    fi
     return
   fi
   if [ -f "$UNIT_FILE" ] && grep -q '^StateDirectory=cloud-pulse-agent$' "$UNIT_FILE" 2>/dev/null; then
@@ -1195,6 +1491,10 @@ render_unit_fallback() {
 }
 
 verify_unit() {
+  if [ "$PLATFORM" = "darwin-launchd" ]; then
+    verify_plist
+    return
+  fi
   if ! command -v systemd-analyze >/dev/null 2>&1; then
     log "systemd-analyze not available; skipping unit verification"
     return
@@ -1217,11 +1517,34 @@ verify_unit() {
   fi
 }
 
+# verify_plist — darwin-launchd equivalent of verify_unit: `plutil -lint`
+# validates the plist's XML/plist syntax (a standard macOS command-line
+# tool, always present); a fatal syntax error aborts the install the
+# same way a fatal systemd-analyze error does, non-fatal warnings just
+# continue.
+verify_plist() {
+  if ! command -v plutil >/dev/null 2>&1; then
+    log "plutil not available; skipping plist verification"
+    return
+  fi
+  if timeout 10 plutil -lint "$PLIST_PATH" >"${TMP_DIR}/plutil.log" 2>&1; then
+    log "plutil -lint: OK"
+  else
+    err "plutil -lint reported a fatal plist syntax error:"
+    sed 's/^/  /' "${TMP_DIR}/plutil.log" || true
+    exit 1
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # service start
 # ---------------------------------------------------------------------------
 
 start_service() {
+  if [ "$PLATFORM" = "darwin-launchd" ]; then
+    start_service_darwin
+    return
+  fi
   local service="cloud-pulse-agent.service"
   local previous_pid="" previous_started="" current_pid="" current_started=""
   local attempts=30
@@ -1266,6 +1589,43 @@ start_service() {
   exit 1
 }
 
+# start_service_darwin — darwin-launchd equivalent of start_service:
+# bootout (if currently loaded) then bootstrap, so a re-run always
+# picks up a changed plist, then kickstart -k to force an immediate
+# (re)start, then poll `launchctl print` for a Running PID.
+start_service_darwin() {
+  local attempts=30 pid=""
+
+  if [ "$IS_SANDBOX" -eq 1 ] && [ -z "${CP_LAUNCHCTL:-}" ]; then
+    log "sandbox: would run ${LAUNCHCTL} bootout system/${CP_LAUNCHD_LABEL} (if loaded)"
+    log "sandbox: would run ${LAUNCHCTL} bootstrap system ${PLIST_PATH}"
+    log "sandbox: would run ${LAUNCHCTL} kickstart -k system/${CP_LAUNCHD_LABEL}"
+    return
+  fi
+
+  if "$LAUNCHCTL" print "system/${CP_LAUNCHD_LABEL}" >/dev/null 2>&1; then
+    SERVICE_ACTION="restarted"
+    "$LAUNCHCTL" bootout "system/${CP_LAUNCHD_LABEL}" 2>/dev/null || true
+  else
+    SERVICE_ACTION="started"
+  fi
+  "$LAUNCHCTL" bootstrap system "$PLIST_PATH"
+  "$LAUNCHCTL" kickstart -k "system/${CP_LAUNCHD_LABEL}" 2>/dev/null || true
+
+  while [ "$attempts" -gt 0 ]; do
+    attempts=$((attempts - 1))
+    pid="$("$LAUNCHCTL" print "system/${CP_LAUNCHD_LABEL}" 2>/dev/null | awk '/pid = /{print $3; exit}' || true)"
+    if [ -n "$pid" ]; then
+      SERVICE_VERSION="$(probe_existing_version "$BIN_PATH")"
+      return
+    fi
+    sleep 0.5
+  done
+
+  err "${CP_LAUNCHD_LABEL} failed to ${SERVICE_ACTION}; check: log show --predicate 'process == \"cloud-pulse-agent\"' --last 5m"
+  exit 1
+}
+
 # ---------------------------------------------------------------------------
 # post-install sanity checks (non-fatal)
 # ---------------------------------------------------------------------------
@@ -1297,12 +1657,23 @@ print_summary() {
   echo "  Hub URL:      ${RESOLVED_HUB_URL}"
   echo "  Config file:  ${ENV_FILE}"
   if [ -n "$SERVICE_ACTION" ]; then
-    echo "  Service:      cloud-pulse-agent.service ${SERVICE_ACTION} (running ${SERVICE_VERSION})"
+    echo "  Service:      $(service_display_name) ${SERVICE_ACTION} (running ${SERVICE_VERSION})"
   else
-    echo "  Service:      cloud-pulse-agent.service"
+    echo "  Service:      $(service_display_name)"
   fi
   echo
   print_version_hint
+}
+
+# service_display_name — the systemd unit name on linux-systemd, or the
+# launchd label on darwin-launchd, for display in print_summary/error
+# messages.
+service_display_name() {
+  if [ "$PLATFORM" = "darwin-launchd" ]; then
+    echo "$CP_LAUNCHD_LABEL"
+    return
+  fi
+  echo "cloud-pulse-agent.service"
 }
 
 # print_version_hint — D-U7: on an upgrade (a binary already existed at
@@ -1344,20 +1715,34 @@ print_dry_run() {
   echo "  - detect OS/arch, download ${CP_ASSET_NAME_AGENT_PREFIX}-${OS_NAME}-${ARCH} (version: ${OPT_VERSION:-latest})"
   echo "  - verify sha256 against checksums.txt"
   echo "  - install -m 0755 to ${BIN_PATH}"
-  echo "  - ensure system user/group '${CP_SERVICE_USER}' exists"
-  if [ "$OPT_DOCKER" -eq 1 ]; then
-    echo "  - add '${CP_SERVICE_USER}' to the 'docker' group (--docker: root-equivalent access)"
-  fi
-  echo "  - write ${ENV_FILE} (mode 0640, owner root:${CP_SERVICE_GROUP})"
-  echo "  - write ${UNIT_FILE}"
-  if [ "$OPT_REMOTE_UPDATE" -eq 1 ]; then
-    echo "  - write ${UPDATE_PATH_UNIT_FILE} / ${UPDATE_SERVICE_UNIT_FILE} (--remote-update, SPEC-v0.6 §2)"
-  fi
-  echo "  - systemd-analyze verify the unit"
-  echo "  - ${SYSTEMCTL} daemon-reload && ${SYSTEMCTL} enable cloud-pulse-agent.service"
-  echo "  - start cloud-pulse-agent.service if inactive; restart it if already running"
-  if [ "$OPT_REMOTE_UPDATE" -eq 1 ]; then
-    echo "  - ${SYSTEMCTL} enable cloud-pulse-agent-update.path (--remote-update)"
+  if [ "$PLATFORM" = "darwin-launchd" ]; then
+    echo "  - ensure hidden system user '${CP_DARWIN_USER}' exists (dscl, UID 200-400)"
+    echo "  - write ${ENV_FILE} (mode 0640, owner root:${CP_DARWIN_USER})"
+    echo "  - write ${PLIST_PATH}"
+    if [ "$OPT_REMOTE_UPDATE" -eq 1 ]; then
+      echo "  - write ${UPDATE_PLIST_PATH} (--remote-update, SPEC-v0.7 §1)"
+    fi
+    echo "  - plutil -lint the plist"
+    echo "  - ${LAUNCHCTL} bootout system/${CP_LAUNCHD_LABEL} (if loaded) && bootstrap && kickstart -k"
+    if [ "$OPT_REMOTE_UPDATE" -eq 1 ]; then
+      echo "  - ${LAUNCHCTL} bootstrap system ${UPDATE_PLIST_PATH} (--remote-update)"
+    fi
+  else
+    echo "  - ensure system user/group '${CP_SERVICE_USER}' exists"
+    if [ "$OPT_DOCKER" -eq 1 ]; then
+      echo "  - add '${CP_SERVICE_USER}' to the 'docker' group (--docker: root-equivalent access)"
+    fi
+    echo "  - write ${ENV_FILE} (mode 0640, owner root:${CP_SERVICE_GROUP})"
+    echo "  - write ${UNIT_FILE}"
+    if [ "$OPT_REMOTE_UPDATE" -eq 1 ]; then
+      echo "  - write ${UPDATE_PATH_UNIT_FILE} / ${UPDATE_SERVICE_UNIT_FILE} (--remote-update, SPEC-v0.6 §2)"
+    fi
+    echo "  - systemd-analyze verify the unit"
+    echo "  - ${SYSTEMCTL} daemon-reload && ${SYSTEMCTL} enable cloud-pulse-agent.service"
+    echo "  - start cloud-pulse-agent.service if inactive; restart it if already running"
+    if [ "$OPT_REMOTE_UPDATE" -eq 1 ]; then
+      echo "  - ${SYSTEMCTL} enable cloud-pulse-agent-update.path (--remote-update)"
+    fi
   fi
   echo "  - run -once sanity check and curl \$HUB_URL/healthz (both non-fatal)"
   if [ -x "$BIN_PATH" ]; then
@@ -1386,6 +1771,14 @@ is_installed() {
 service_status_text() {
   if [ "$IS_SANDBOX" -eq 1 ]; then
     echo ""
+    return
+  fi
+  if [ "$PLATFORM" = "darwin-launchd" ]; then
+    if command -v "$LAUNCHCTL" >/dev/null 2>&1 && "$LAUNCHCTL" print "system/${CP_LAUNCHD_LABEL}" >/dev/null 2>&1; then
+      echo " (service: loaded)"
+    else
+      echo " (service: not loaded)"
+    fi
     return
   fi
   if ! command -v "$SYSTEMCTL" >/dev/null 2>&1; then
@@ -1445,15 +1838,17 @@ prompt_fresh_install_values() {
     OPT_HOST_ID="$answer"
   fi
 
-  prompt_tty "Monitor Docker containers? (adds the agent to the docker group; docker group access is root-equivalent) [y/N]: "
-  if ! read_line_tty answer; then
-    err "unexpected EOF on /dev/tty"
-    exit 1
+  if [ "$PLATFORM" != "darwin-launchd" ]; then
+    prompt_tty "Monitor Docker containers? (adds the agent to the docker group; docker group access is root-equivalent) [y/N]: "
+    if ! read_line_tty answer; then
+      err "unexpected EOF on /dev/tty"
+      exit 1
+    fi
+    case "$answer" in
+      [Yy]|[Yy][Ee][Ss]) OPT_DOCKER=1 ;;
+      *) ;;
+    esac
   fi
-  case "$answer" in
-    [Yy]|[Yy][Ee][Ss]) OPT_DOCKER=1 ;;
-    *) ;;
-  esac
 
   prompt_tty "Allow the hub to trigger updates of this agent? [y/N]: "
   if ! read_line_tty answer; then
@@ -1568,6 +1963,10 @@ menu_loop() {
 # ---------------------------------------------------------------------------
 
 do_uninstall() {
+  if [ "$PLATFORM" = "darwin-launchd" ]; then
+    do_uninstall_darwin
+    return
+  fi
   if [ "$IS_SANDBOX" -eq 1 ] && [ -z "${CP_SYSTEMCTL:-}" ]; then
     log "sandbox: would run ${SYSTEMCTL} stop cloud-pulse-agent.service"
     log "sandbox: would run ${SYSTEMCTL} disable cloud-pulse-agent.service"
@@ -1592,6 +1991,40 @@ do_uninstall() {
     rm -f "$ENV_FILE"
     rm -rf "$UPDATE_STATE_DIR" "$UPDATE_RESULT_DIR"
     log "purged config and remote-update state (--purge)"
+  else
+    log "kept ${ENV_FILE} (pass --purge to remove it)"
+  fi
+}
+
+# do_uninstall_darwin — darwin-launchd equivalent of do_uninstall:
+# bootout both LaunchDaemons (best-effort, "not loaded" is not fatal),
+# remove the plists and binary, and (with --purge) the env file, the
+# request/result directories, and the dedicated _cloudpulse user
+# itself (dscl delete; a missing user is not fatal either — matches
+# do_uninstall's "best-effort, never fails on an already-absent
+# resource" philosophy).
+do_uninstall_darwin() {
+  if [ "$IS_SANDBOX" -eq 1 ] && [ -z "${CP_LAUNCHCTL:-}" ]; then
+    log "sandbox: would run ${LAUNCHCTL} bootout system/${CP_LAUNCHD_LABEL}"
+    log "sandbox: would run ${LAUNCHCTL} bootout system/${CP_LAUNCHD_UPDATE_LABEL}"
+  elif command -v "$LAUNCHCTL" >/dev/null 2>&1; then
+    "$LAUNCHCTL" bootout "system/${CP_LAUNCHD_LABEL}" 2>/dev/null || true
+    "$LAUNCHCTL" bootout "system/${CP_LAUNCHD_UPDATE_LABEL}" 2>/dev/null || true
+  fi
+
+  rm -f "$PLIST_PATH" "$UPDATE_PLIST_PATH"
+  rm -f "$BIN_PATH"
+  log "removed plist(s) and binary"
+
+  if [ "$OPT_PURGE" -eq 1 ]; then
+    rm -f "$ENV_FILE"
+    rm -rf "$UPDATE_STATE_DIR" "$UPDATE_RESULT_DIR"
+    if [ "$IS_SANDBOX" -eq 1 ] && [ -z "${CP_DSCL:-}" ]; then
+      log "sandbox: would run dscl . -delete /Users/${CP_DARWIN_USER}"
+    else
+      "$DSCL" . -delete "/Users/${CP_DARWIN_USER}" 2>/dev/null || true
+    fi
+    log "purged config, remote-update state, and system user (--purge)"
   else
     log "kept ${ENV_FILE} (pass --purge to remove it)"
   fi
@@ -1628,7 +2061,7 @@ run_install_flow() {
 main() {
   parse_args "$@"
   detect_sandbox
-  detect_os
+  detect_platform
   detect_arch
   setup_paths
   require_root_unless_sandbox

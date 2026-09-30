@@ -132,16 +132,19 @@ type FromRequestOptions struct {
 // non-nil error, so the systemd oneshot service's own exit code doesn't
 // need to be inspected by anything.
 func RunFromRequest(ctx context.Context, o FromRequestOptions) (Result, error) {
-	// Request mode relies on O_NOFOLLOW reads and a root-owned result
-	// directory, which only the Linux + systemd deployment provides
-	// (SPEC-v0.6 §2). Refuse everywhere else instead of running with
-	// weaker file-handling guarantees.
+	// Request mode relies on a platform-appropriate safe-open (Unix:
+	// O_NOFOLLOW; Windows: FILE_FLAG_OPEN_REPARSE_POINT +
+	// FILE_ATTRIBUTE_REPARSE_POINT rejection — see nofollow_windows.go)
+	// and a root/Administrators-owned result directory, provided by
+	// the Linux+systemd, macOS+launchd, and Windows+service deployment
+	// models (SPEC-v0.6 §2, SPEC-v0.7 §1). Refuse everywhere else
+	// instead of running with weaker file-handling guarantees.
 	hostOS := o.HostGOOS
 	if hostOS == "" {
 		hostOS = runtime.GOOS
 	}
-	if hostOS != "linux" {
-		return Result{}, fmt.Errorf("selfupdate: from-request: remote updates require linux (running on %s): %w", hostOS, ErrUnsupported)
+	if hostOS != "linux" && hostOS != "darwin" && hostOS != "windows" {
+		return Result{}, fmt.Errorf("selfupdate: from-request: remote updates require linux, darwin, or windows (running on %s): %w", hostOS, ErrUnsupported)
 	}
 	req, err := readRequestFile(o.RequestPath)
 	if err != nil {
@@ -264,16 +267,19 @@ func classifyRunError(err error) string {
 	}
 }
 
-// readRequestFile opens path with O_NOFOLLOW (refusing a symlink at the
-// final path component), reads at most maxRequestFileBytesForUpdate+1
-// bytes, and strictly decodes+validates it: job_id must be > 0, target
-// must be "latest" or pass version.ValidTag.
+// readRequestFile opens path with a platform-appropriate
+// symlink/reparse-point refusal (O_NOFOLLOW on Unix, CreateFile +
+// FILE_FLAG_OPEN_REPARSE_POINT rejection on Windows — see
+// openRequestFileNoFollow), reads at most
+// maxRequestFileBytesForUpdate+1 bytes, and strictly decodes+validates
+// it: job_id must be > 0, target must be "latest" or pass
+// version.ValidTag.
 func readRequestFile(path string) (UpdateRequestFile, error) {
 	if path == "" {
 		return UpdateRequestFile{}, errors.New("--from-request requires a file path")
 	}
 
-	f, err := os.OpenFile(path, os.O_RDONLY|unixNoFollowFlag(), 0)
+	f, err := openRequestFileNoFollow(path)
 	if err != nil {
 		return UpdateRequestFile{}, fmt.Errorf("open request file %s: %w", path, err)
 	}

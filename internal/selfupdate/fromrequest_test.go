@@ -538,10 +538,12 @@ func corruptedAssetSource(t *testing.T, binary, tag, goos, goarch string) Source
 	}
 }
 
-// TestRunFromRequest_RefusesNonLinuxHost guards the SPEC-v0.6 §2 rule that
-// request mode runs only on Linux, where O_NOFOLLOW and the root-owned
+// TestRunFromRequest_RefusesUnsupportedHost guards the SPEC-v0.6
+// §2/SPEC-v0.7 §1 rule that request mode runs only on Linux, macOS, or
+// Windows, where a platform-appropriate safe-open (O_NOFOLLOW or
+// CreateFile+FILE_FLAG_OPEN_REPARSE_POINT) and a root/Administrators-owned
 // result directory are guaranteed.
-func TestRunFromRequest_RefusesNonLinuxHost(t *testing.T) {
+func TestRunFromRequest_RefusesUnsupportedHost(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -555,12 +557,57 @@ func TestRunFromRequest_RefusesNonLinuxHost(t *testing.T) {
 		ResultDir:   resultDir,
 		Binary:      "cloud-pulse-agent",
 		Current:     "v0.6.0",
-		HostGOOS:    "windows",
+		HostGOOS:    "plan9",
 	})
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("RunFromRequest error = %v, want ErrUnsupported", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(resultDir, "result.json")); !os.IsNotExist(statErr) {
 		t.Fatalf("result.json must not be written on a refused platform (stat err = %v)", statErr)
+	}
+}
+
+// TestRunFromRequest_AcceptsDarwinAndWindowsHosts guards SPEC-v0.7 §1's
+// widened platform gate: darwin and windows must pass the initial
+// HostGOOS check (i.e. never return ErrUnsupported), unlike plan9
+// above. This uses an already-satisfied request (target == Current) so
+// the flow completes without needing a real Source/network call,
+// isolating the assertion to the platform gate itself rather than the
+// full download pipeline.
+func TestRunFromRequest_AcceptsDarwinAndWindowsHosts(t *testing.T) {
+	t.Parallel()
+
+	for _, goos := range []string{"darwin", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			dir := t.TempDir()
+			reqPath := filepath.Join(dir, "update-request.json")
+			if err := os.WriteFile(reqPath, []byte(`{"job_id":1,"target":"v0.6.0"}`), 0o600); err != nil {
+				t.Fatalf("write request: %v", err)
+			}
+			resultDir := filepath.Join(dir, "result")
+			result, err := RunFromRequest(context.Background(), FromRequestOptions{
+				RequestPath: reqPath,
+				ResultDir:   resultDir,
+				Binary:      "cloud-pulse-agent",
+				Current:     "v0.6.0",
+				HostGOOS:    goos,
+			})
+			if errors.Is(err, ErrUnsupported) {
+				t.Fatalf("RunFromRequest error = %v, want anything but ErrUnsupported for GOOS=%s", err, goos)
+			}
+			if err != nil {
+				t.Fatalf("RunFromRequest unexpected error for GOOS=%s: %v", goos, err)
+			}
+			if result.Message == "" {
+				t.Errorf("expected an already-up-to-date result message for GOOS=%s", goos)
+			}
+			data, readErr := os.ReadFile(filepath.Join(resultDir, "result.json"))
+			if readErr != nil {
+				t.Fatalf("expected result.json to be written for GOOS=%s: %v", goos, readErr)
+			}
+			if !strings.Contains(string(data), `"succeeded"`) {
+				t.Errorf("result.json for GOOS=%s = %s, want state=succeeded (already up to date)", goos, data)
+			}
+		})
 	}
 }

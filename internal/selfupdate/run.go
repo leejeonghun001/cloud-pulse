@@ -345,13 +345,31 @@ func defaultVerify(ctx context.Context, path, tag string) error {
 	return nil
 }
 
-// defaultRestart implements Run's documented default restart behavior:
-// systemctl-based restart, only on Linux, only as root, only for a unit
-// that exists and is already active.
+// defaultRestart implements Run's documented default restart behavior.
+// On Linux: systemctl-based restart, only as root, only for a unit
+// that exists and is already active. On macOS and Windows, restart is
+// delegated to defaultRestartDarwin/defaultRestartWindows (SPEC-v0.7
+// §1) — see restart_launchd.go/restart_windows.go. Every other OS
+// (FreeBSD, or a test injecting a HostGOOS it doesn't recognize) has
+// no restart mechanism at all and always returns the manual-restart
+// message.
 func defaultRestart(ctx context.Context, unit string) (bool, string, error) {
-	if runtime.GOOS != "linux" {
+	switch runtime.GOOS {
+	case "linux":
+		return defaultRestartLinux(ctx, unit)
+	case "darwin":
+		return defaultRestartDarwin(ctx, unit)
+	case "windows":
+		return defaultRestartWindows(ctx, unit)
+	default:
 		return false, fmt.Sprintf("restart %s manually to run the new version", unit), nil
 	}
+}
+
+// defaultRestartLinux is Run's pre-v0.7.0 default restart behavior,
+// extracted unchanged (byte-identical logic) so defaultRestart can
+// dispatch to it alongside the new darwin/windows variants.
+func defaultRestartLinux(ctx context.Context, unit string) (bool, string, error) {
 	if os.Geteuid() != 0 {
 		return false, fmt.Sprintf("restart %s manually to run the new version (not running as root)", unit), nil
 	}
@@ -384,29 +402,43 @@ func defaultRestart(ctx context.Context, unit string) (bool, string, error) {
 }
 
 // defaultPostUpdateFor returns Run's documented default PostUpdate
-// implementation for binary: it applies systemd unit-file changes via
-// "<binPath> systemd-unit apply" — but only when every one of the
-// following holds, so that a downgrade or an unmanaged host is always a
-// safe no-op rather than an error:
+// implementation for binary, dispatching by runtime.GOOS:
 //
-//   - GOOS is linux (systemd-only feature)
-//   - running as root (euid 0): unit files under /etc/systemd/system
-//     require root to write, and Apply would just fail with a
-//     permission error otherwise
-//   - a "/etc/systemd/system/<binary>.service" unit file exists: an
-//     unmanaged/dev invocation (no installed service) has nothing to
-//     apply
-//   - tag (the version just installed) is at or after
-//     version.UnitManagedSince: only a binary from that tag onward is
-//     guaranteed to itself understand "systemd-unit apply", which is
-//     exactly the binPath this function is about to invoke (the
-//     just-replaced, just-installed executable, not the one that was
-//     running before Run started)
+//   - linux: applies systemd unit-file changes via "<binPath>
+//     systemd-unit apply" — but only when every one of the following
+//     holds, so that a downgrade or an unmanaged host is always a
+//     safe no-op rather than an error: running as root (euid 0); a
+//     "/etc/systemd/system/<binary>.service" unit file exists; and tag
+//     (the version just installed) is at or after
+//     version.UnitManagedSince (only a binary from that tag onward is
+//     guaranteed to itself understand "systemd-unit apply").
+//   - darwin: re-renders and kickstarts the LaunchDaemon plist via
+//     "<binPath> plist apply" (SPEC-v0.7 §1) — see
+//     postupdate_launchd.go — under the analogous root + tag-managed
+//     gating (version.LaunchdManagedSince instead of
+//     UnitManagedSince).
+//   - windows: no plist/unit file to re-render (the Windows service's
+//     BinaryPathName never changes across an update — it always
+//     points at the same installed .exe path), so this is a no-op;
+//     the actual service restart happens in defaultRestartWindows
+//     instead, which Run always calls after PostUpdate regardless.
+//   - every other OS: no-op.
 func defaultPostUpdateFor(binary string) func(ctx context.Context, binPath, tag string) (string, error) {
+	switch runtime.GOOS {
+	case "linux":
+		return defaultPostUpdateLinux(binary)
+	case "darwin":
+		return defaultPostUpdateDarwin(binary)
+	default:
+		return func(ctx context.Context, binPath, tag string) (string, error) { return "", nil }
+	}
+}
+
+// defaultPostUpdateLinux is Run's pre-v0.7.0 default PostUpdate
+// behavior, extracted unchanged so defaultPostUpdateFor can dispatch to
+// it alongside the new darwin variant.
+func defaultPostUpdateLinux(binary string) func(ctx context.Context, binPath, tag string) (string, error) {
 	return func(ctx context.Context, binPath, tag string) (string, error) {
-		if runtime.GOOS != "linux" {
-			return "", nil
-		}
 		if os.Geteuid() != 0 {
 			return "", nil
 		}

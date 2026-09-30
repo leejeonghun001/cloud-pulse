@@ -34,23 +34,17 @@ import (
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
 )
 
-// RequestStateDir is the systemd StateDirectory the agent unit is
-// granted (SPEC-v0.6 §2 step 3): "StateDirectory=cloud-pulse-agent"
-// resolves to this path at runtime. Exported as a var (not const) only
-// so tests can point it at a temp directory; production code never
-// reassigns it.
-var RequestStateDir = "/var/lib/cloud-pulse-agent"
+const defaultRequestStateDir = "/var/lib/cloud-pulse-agent"
 
 // RequestFileName is the file the agent atomically writes inside
 // RequestStateDir, watched by the cloud-pulse-agent-update.path systemd
 // unit.
 const RequestFileName = "update-request.json"
 
-// ResultDir is the root-owned directory `cloud-pulse-agent update
+// defaultResultDir is the root-owned directory `cloud-pulse-agent update
 // --from-request` writes its outcome to (SPEC-v0.6 §2 step 4: "root
 // 소유 디렉터리 ... 에이전트가 쓸 수 없는 위치라 symlink 공격을 차단").
-// Exported as a var for the same test-only reason as RequestStateDir.
-var ResultDir = "/var/lib/cloud-pulse-agent-update"
+const defaultResultDir = "/var/lib/cloud-pulse-agent-update"
 
 // ResultFileName is the result file inside ResultDir that the agent
 // process reads back on a subsequent report cycle.
@@ -135,7 +129,11 @@ type requestFile struct {
 // StateDirectory) is logged at warn level and otherwise swallowed —
 // the next report will simply re-deliver the same UpdateRequest since
 // the hub has not yet seen an ack.
-func handleUpdateRequest(_ context.Context, logger *slog.Logger, req *models.UpdateRequest) {
+func handleUpdateRequest(ctx context.Context, logger *slog.Logger, req *models.UpdateRequest) {
+	handleUpdateRequestAt(ctx, logger, req, defaultRequestStateDir)
+}
+
+func handleUpdateRequestAt(_ context.Context, logger *slog.Logger, req *models.UpdateRequest, stateDir string) {
 	if req == nil {
 		return
 	}
@@ -144,7 +142,7 @@ func handleUpdateRequest(_ context.Context, logger *slog.Logger, req *models.Upd
 	}
 	logger.Debug("received remote update request", "job_id", req.JobID, "target", req.Target)
 
-	if err := writeRequestFileAtomic(RequestStateDir, requestFile{JobID: req.JobID, Target: req.Target}); err != nil {
+	if err := writeRequestFileAtomic(stateDir, requestFile{JobID: req.JobID, Target: req.Target}); err != nil {
 		logger.Warn("failed to write remote update request file", "job_id", req.JobID, "error", err)
 	}
 }
@@ -214,12 +212,16 @@ func validResultState(s models.UpdateJobState) bool {
 // the file is removed so the same result is never reported twice; a
 // removal failure is logged but does not prevent the status from being
 // returned for this cycle.
-func pendingUpdateStatus(_ context.Context, logger *slog.Logger) *models.AgentUpdateStatus {
+func pendingUpdateStatus(ctx context.Context, logger *slog.Logger) *models.AgentUpdateStatus {
+	return pendingUpdateStatusAt(ctx, logger, defaultResultDir)
+}
+
+func pendingUpdateStatusAt(_ context.Context, logger *slog.Logger, resultDir string) *models.AgentUpdateStatus {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
 
-	path := filepath.Join(ResultDir, ResultFileName)
+	path := filepath.Join(resultDir, ResultFileName)
 	data, err := readFileNoFollow(path, maxResultFileBytes)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {

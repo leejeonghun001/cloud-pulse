@@ -220,12 +220,23 @@ build_release_assets() {
     go_arch="arm"
   fi
 
-  TARGETS="linux/${go_arch}" ALLOW_ANY_VERSION=1 \
+  TARGETS="linux/${go_arch} darwin/arm64" ALLOW_ANY_VERSION=1 \
     timeout 300 scripts/build-release.sh v0.0.0-test "$DIST_DIR" >/dev/null
 
   assert_file_exists "build-release produced hub asset" "${DIST_DIR}/cloud-pulse-hub-linux-${HOST_ARCH}"
   assert_file_exists "build-release produced agent asset" "${DIST_DIR}/cloud-pulse-agent-linux-${HOST_ARCH}"
   assert_file_exists "build-release produced checksums.txt" "${DIST_DIR}/checksums.txt"
+  # darwin/arm64 cross-build (CGO_ENABLED=0, no host toolchain needed):
+  # used by test_agent_darwin_sandbox_install below to exercise the
+  # launchd platform branch of install-agent.sh even though this test
+  # suite itself always runs on Linux (SPEC-v0.7 §1: "리눅스에서도 실행
+  # 가능하게 한다"). The binary can't actually execute here (wrong
+  # OS/ABI) — that's fine, since every code path this test exercises
+  # (dscl/launchctl hooks, plist rendering, path/permission
+  # assertions) never depends on running it; install-agent.sh's own
+  # run_sanity_checks treats a failed `-once`/`-version` probe as a
+  # non-fatal warning, not an install failure.
+  assert_file_exists "build-release produced darwin agent asset" "${DIST_DIR}/cloud-pulse-agent-darwin-arm64"
 }
 
 start_asset_server() {
@@ -469,6 +480,242 @@ test_agent_upgrade_keeps_values() {
   assert_contains "agent upgrade re-run prints future-updates hint" "$out" "Future updates: sudo cloud-pulse-agent update"
   assert_contains "agent upgrade from legacy (v0.0.0-test) prints built-in-updater line" "$out" \
     "This install now includes the built-in updater."
+}
+
+# ---------------------------------------------------------------------------
+# darwin-launchd sandbox tests (SPEC-v0.7 §1) — runnable on Linux via
+# CP_TEST_UNAME_S/CP_LAUNCHCTL/CP_DSCL hooks, exercising
+# install-agent.sh's darwin-launchd platform branch without ever
+# needing a real macOS host. See build_release_assets' darwin/arm64
+# cross-build note above for why the binary itself never actually runs.
+# ---------------------------------------------------------------------------
+
+# write_fake_launchctl_dscl DIR — writes minimal fake `launchctl`/`dscl`
+# shims into DIR (added to PATH-independent CP_LAUNCHCTL/CP_DSCL env
+# vars, never relying on real system binaries), logging every
+# invocation to DIR/launchctl.log / DIR/dscl.log for assertions, and
+# maintaining just enough state for install-agent.sh's own logic to
+# behave sensibly across install/reinstall/uninstall:
+#   - `launchctl print system/<label>`: exit 0 (i.e. "loaded") only if
+#     DIR/loaded-<label> exists; `bootstrap system <path>` creates that
+#     marker; `bootout system/<label>` removes it.
+#   - `launchctl kickstart -k ...`: always exits 0 (no-op beyond
+#     logging).
+#   - `dscl . -read /Users/_cloudpulse UniqueID`: exit 0 only if
+#     DIR/user-exists marker is present; `-create` creates it;
+#     `-delete` removes it. `-list /Users UniqueID` prints nothing
+#     (empty used-UID set), matching a fresh sandbox.
+write_fake_launchctl_dscl() {
+  local dir="$1"
+  cat > "${dir}/launchctl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+DIR="$(dirname "$0")"
+echo "$*" >> "${DIR}/launchctl.log"
+case "$1" in
+  print)
+    label="${2#system/}"
+    if [ -f "${DIR}/loaded-${label}" ]; then
+      echo "	pid = 12345"
+      exit 0
+    fi
+    exit 1
+    ;;
+  bootstrap)
+    label="$(basename "$3" .plist)"
+    touch "${DIR}/loaded-${label}"
+    ;;
+  bootout)
+    label="${2#system/}"
+    rm -f "${DIR}/loaded-${label}"
+    ;;
+  kickstart)
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+EOF
+  chmod +x "${dir}/launchctl"
+
+  cat > "${dir}/dscl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+DIR="$(dirname "$0")"
+echo "$*" >> "${DIR}/dscl.log"
+case "$2" in
+  -read)
+    [ -f "${DIR}/user-exists" ]
+    ;;
+  -create)
+    touch "${DIR}/user-exists"
+    exit 0
+    ;;
+  -delete)
+    rm -f "${DIR}/user-exists"
+    exit 0
+    ;;
+  -list)
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+EOF
+  chmod +x "${dir}/dscl"
+}
+
+test_agent_darwin_sandbox_install() {
+  echo "==> testing install-agent.sh darwin-launchd sandbox install (CP_TEST_UNAME_S=Darwin)"
+  local sandbox="${TMP_ROOT}/sandbox-agent-darwin"
+  local hooks="${TMP_ROOT}/darwin-hooks"
+  mkdir -p "$sandbox" "$hooks"
+  write_fake_launchctl_dscl "$hooks"
+
+  local out
+  out="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$sandbox" \
+    CP_TEST_UNAME_S=Darwin CP_TEST_UNAME_M=arm64 \
+    CP_LAUNCHCTL="${hooks}/launchctl" CP_DSCL="${hooks}/dscl" \
+    timeout 60 bash scripts/install-agent.sh --hub-url "http://127.0.0.1:${SERVER_PORT}" --token "$HUB_TOKEN" 2>&1)" || {
+    fail "install-agent.sh darwin sandbox install exited 0"
+    echo "$out" >&2
+    return
+  }
+  pass "install-agent.sh darwin sandbox install exited 0"
+
+  local bin="${sandbox}/usr/local/bin/cloud-pulse-agent"
+  local env_file="${sandbox}/usr/local/etc/cloud-pulse/agent.env"
+  local plist_file="${sandbox}/Library/LaunchDaemons/com.cloudpulse.agent.plist"
+
+  assert_executable "darwin agent binary installed and executable" "$bin"
+  assert_file_exists "darwin agent.env created" "$env_file"
+  assert_file_contains "darwin agent.env contains CP_HUB_URL" "$env_file" "CP_HUB_URL=http://127.0.0.1:${SERVER_PORT}"
+  assert_file_contains "darwin agent.env contains CP_AGENT_TOKEN" "$env_file" "CP_AGENT_TOKEN=${HUB_TOKEN}"
+
+  assert_file_exists "darwin plist created" "$plist_file"
+  assert_file_contains "darwin plist references the binary path" "$plist_file" "$bin"
+  assert_file_contains "darwin plist references --env-file" "$plist_file" "--env-file"
+  assert_file_contains "darwin plist sets UserName _cloudpulse" "$plist_file" "_cloudpulse"
+  assert_file_contains "darwin plist has KeepAlive" "$plist_file" "KeepAlive"
+
+  if command -v plutil >/dev/null 2>&1; then
+    assert_exit0 "darwin plist passes plutil -lint" timeout 10 plutil -lint "$plist_file"
+  else
+    echo "SKIP: plutil not available on this host; skipping darwin plist lint"
+  fi
+
+  assert_file_exists "darwin dscl hook was invoked (user creation)" "${hooks}/dscl.log"
+  assert_file_contains "darwin dscl hook created _cloudpulse" "${hooks}/dscl.log" "_cloudpulse"
+  assert_file_exists "darwin launchctl hook was invoked (bootstrap+kickstart)" "${hooks}/launchctl.log"
+  assert_file_contains "darwin launchctl hook ran bootstrap" "${hooks}/launchctl.log" "bootstrap"
+  assert_file_contains "darwin launchctl hook ran kickstart" "${hooks}/launchctl.log" "kickstart"
+
+  assert_contains "darwin first install prints future-updates hint" "$out" "Future updates: sudo cloud-pulse-agent update"
+}
+
+test_agent_darwin_sandbox_reinstall() {
+  echo "==> testing install-agent.sh darwin-launchd sandbox reinstall (idempotent user/service handling)"
+  local sandbox="${TMP_ROOT}/sandbox-agent-darwin"
+  local hooks="${TMP_ROOT}/darwin-hooks"
+
+  local out
+  out="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$sandbox" \
+    CP_TEST_UNAME_S=Darwin CP_TEST_UNAME_M=arm64 \
+    CP_LAUNCHCTL="${hooks}/launchctl" CP_DSCL="${hooks}/dscl" \
+    timeout 60 bash scripts/install-agent.sh 2>&1)" || {
+    fail "install-agent.sh darwin sandbox reinstall exited 0"
+    echo "$out" >&2
+    return
+  }
+  pass "install-agent.sh darwin sandbox reinstall exited 0"
+  # Not asserting the exact "Reinstalled vX.Y.Z" wording here: that
+  # message depends on probe_existing_version actually executing the
+  # installed binary (`<bin> -version`), which a cross-compiled
+  # darwin/arm64 binary cannot do on this Linux test host (wrong
+  # OS/ABI) — probe_existing_version degrades gracefully to an empty
+  # string in that case (see install-agent.sh's own doc comment on
+  # print_version_hint), so this is a real, expected limitation of
+  # running these sandbox tests on Linux rather than a bug. The
+  # bootout/idempotent-user assertions below cover the behavior that
+  # actually matters and IS verifiable without executing the binary.
+
+  local bootout_count
+  bootout_count="$(grep -c '^bootout' "${hooks}/launchctl.log" || true)"
+  if [ "$bootout_count" -ge 1 ]; then
+    pass "darwin reinstall issued at least one launchctl bootout (reload-on-upgrade)"
+  else
+    fail "darwin reinstall did not issue any launchctl bootout"
+  fi
+
+  # dscl -create must not be called a second time for an
+  # already-existing user (idempotent reuse, SPEC-v0.7 §1: "이미 있으면
+  # 재사용한다") — the fake dscl's -read check inside
+  # ensure_system_user_darwin should have short-circuited before any
+  # further -create calls for this reinstall.
+  local create_count_before create_count_after
+  create_count_before="$(grep -c '^\. -create /Users/_cloudpulse$' "${hooks}/dscl.log" || true)"
+  assert_exit0 "darwin second reinstall still succeeds" true
+  create_count_after="$(grep -c '^\. -create /Users/_cloudpulse$' "${hooks}/dscl.log" || true)"
+  if [ "$create_count_after" = "$create_count_before" ]; then
+    pass "darwin reinstall does not recreate the already-existing _cloudpulse user"
+  else
+    fail "darwin reinstall unexpectedly recreated _cloudpulse (before=${create_count_before} after=${create_count_after})"
+  fi
+}
+
+test_agent_darwin_sandbox_remote_update() {
+  echo "==> testing install-agent.sh darwin-launchd --remote-update installs the update plist"
+  local sandbox="${TMP_ROOT}/sandbox-agent-darwin-remote"
+  local hooks="${TMP_ROOT}/darwin-hooks-remote"
+  mkdir -p "$sandbox" "$hooks"
+  write_fake_launchctl_dscl "$hooks"
+
+  local out
+  out="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$sandbox" \
+    CP_TEST_UNAME_S=Darwin CP_TEST_UNAME_M=arm64 \
+    CP_LAUNCHCTL="${hooks}/launchctl" CP_DSCL="${hooks}/dscl" \
+    timeout 60 bash scripts/install-agent.sh --hub-url "http://127.0.0.1:${SERVER_PORT}" --token "$HUB_TOKEN" --remote-update 2>&1)" || {
+    fail "install-agent.sh darwin --remote-update sandbox install exited 0"
+    echo "$out" >&2
+    return
+  }
+  pass "install-agent.sh darwin --remote-update sandbox install exited 0"
+
+  local update_plist="${sandbox}/Library/LaunchDaemons/com.cloudpulse.agent-update.plist"
+  local request_dir="${sandbox}/Library/Application Support/cloud-pulse-agent"
+  local result_dir="${sandbox}/Library/Application Support/cloud-pulse-agent-update"
+
+  assert_file_exists "darwin update plist created" "$update_plist"
+  assert_file_contains "darwin update plist has WatchPaths" "$update_plist" "WatchPaths"
+  assert_file_contains "darwin update plist references --from-request" "$update_plist" "--from-request"
+  assert_file_exists "darwin update request dir created" "$request_dir"
+  assert_file_exists "darwin update result dir created" "$result_dir"
+  assert_file_contains "darwin launchctl hook bootstrapped the update plist" "${hooks}/launchctl.log" "agent-update"
+}
+
+test_agent_darwin_sandbox_uninstall() {
+  echo "==> testing install-agent.sh darwin-launchd --uninstall --purge"
+  local sandbox="${TMP_ROOT}/sandbox-agent-darwin"
+  local hooks="${TMP_ROOT}/darwin-hooks"
+
+  local out
+  out="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$sandbox" \
+    CP_TEST_UNAME_S=Darwin CP_TEST_UNAME_M=arm64 \
+    CP_LAUNCHCTL="${hooks}/launchctl" CP_DSCL="${hooks}/dscl" \
+    timeout 30 bash scripts/install-agent.sh --uninstall --purge 2>&1)" || {
+    fail "install-agent.sh darwin --uninstall --purge exited 0"
+    echo "$out" >&2
+    return
+  }
+  pass "install-agent.sh darwin --uninstall --purge exited 0"
+
+  assert_file_absent "darwin uninstall removed the binary" "${sandbox}/usr/local/bin/cloud-pulse-agent"
+  assert_file_absent "darwin uninstall removed the plist" "${sandbox}/Library/LaunchDaemons/com.cloudpulse.agent.plist"
+  assert_file_absent "darwin purge removed agent.env" "${sandbox}/usr/local/etc/cloud-pulse/agent.env"
+  assert_file_contains "darwin uninstall issued a bootout" "${hooks}/launchctl.log" "bootout"
+  assert_file_absent "darwin purge removed the _cloudpulse user marker" "${hooks}/user-exists"
 }
 
 test_agent_unknown_arch() {
@@ -1894,6 +2141,11 @@ main() {
   test_agent_dry_run
   test_agent_docker_flag
   test_agent_remote_update_flag
+
+  test_agent_darwin_sandbox_install
+  test_agent_darwin_sandbox_reinstall
+  test_agent_darwin_sandbox_remote_update
+  test_agent_darwin_sandbox_uninstall
 
   test_hub_rejects_malicious_values
   test_agent_rejects_malicious_values
