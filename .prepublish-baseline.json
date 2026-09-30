@@ -2,64 +2,14 @@
   "version": 1,
   "findings": [
     {
-      "baseline_key": "062a5a8285a3f584fb71a2bd6a70b891af262161d9e8a5130259bf09107e3424",
-      "rule_id": "internal.local_marker",
-      "location": "history:fabb66d4b90f:internal/hub/interfaces_test.go:35"
-    },
-    {
-      "baseline_key": "0b2dc2140912518d1b2290a4a0b973e4ef33de13c145f1f35f7a7eaff21905ad",
-      "rule_id": "internal.local_marker",
-      "location": "history:19732e07f229:internal/models/network_test.go:155"
-    },
-    {
       "baseline_key": "156a8bd8d202610068fc4cab913e1593097307a3a710fd756696298817fa4069",
       "rule_id": "internal.host_ip",
       "location": "history:84476e973ab5:web/test/settings-network-helpers.test.mjs:31"
     },
     {
-      "baseline_key": "176c72068068cf835212fc199536e7ecf388e0a0023a49a6ff346d0afe3ad9d9",
-      "rule_id": "internal.local_marker",
-      "location": "history:84476e973ab5:web/test/settings-network-helpers.test.mjs:101"
-    },
-    {
-      "baseline_key": "1a95ff1cea5d3005a4c18d11cca261fcca44a54925d21dad9f9330d206c56039",
-      "rule_id": "internal.local_marker",
-      "location": "history:19732e07f229:internal/models/network_test.go:188"
-    },
-    {
-      "baseline_key": "4851c93e561045e3d1b224ae407fc0871eb00b8c1136beec1ab7dc4c57818cd3",
-      "rule_id": "internal.local_marker",
-      "location": "history:84476e973ab5:web/test/settings-network-helpers.test.mjs:141"
-    },
-    {
-      "baseline_key": "48e3b29749b7a90bbdceb7b454aefcfaa4dc34bf4a9c49940e29959ecb9c2f80",
-      "rule_id": "internal.local_marker",
-      "location": "history:19732e07f229:internal/models/network_test.go:13"
-    },
-    {
-      "baseline_key": "4c1f901ad80164377f54a034053870f6a4882892468cbc93ce6facfc80cc953f",
-      "rule_id": "internal.local_marker",
-      "location": "history:84476e973ab5:web/test/settings-network-helpers.test.mjs:55"
-    },
-    {
-      "baseline_key": "5ccd2e368f3a70188bb393d195e60fe6d2b954df133ed7f152648bb5fd9fd5a6",
-      "rule_id": "internal.local_marker",
-      "location": "history:19732e07f229:internal/models/network_test.go:127"
-    },
-    {
-      "baseline_key": "646ec504acfa1944a70e6e3bf9e86a8eafebc64149ee670685c9744890228b5a",
-      "rule_id": "internal.local_marker",
-      "location": "history:84476e973ab5:web/test/settings-network-helpers.test.mjs:42"
-    },
-    {
-      "baseline_key": "67d56768f782161ffa06d62f6bdbe4b8ed718f48e5deac00069b4970080719aa",
-      "rule_id": "internal.local_marker",
-      "location": "history:84476e973ab5:web/test/settings-network-helpers.test.mjs:37"
-    },
-    {
-      "baseline_key": "6a299b2a8fe17e021b215aefb80143e118cd8a8dd95b369682c7fcd1fc6fd596",
-      "rule_id": "internal.local_marker",
-      "location": "history:84476e973ab5:web/test/settings-network-helpers.test.mjs:41"
+      "baseline_key": "5cebe3c477428bfd53b67704ce61d72d8d3e10a1affe392d2a9d6ab147a9acb0",
+      "rule_id": "internal.host_ip",
+      "location": "history:c1b685486987:scripts/capture-screenshots-lib.mjs:155"
     },
     {
       "baseline_key": "6c83841b9f7a0ce2579a71eda0db1254666c4d6bb253cff94bca95c8c2ec6631",
@@ -67,14 +17,14 @@
       "location": "history:d71d3c4fa765:internal/agent/inventory_test.go:46"
     },
     {
-      "baseline_key": "7c89f085d9cafb949d439e2b419c6af24a0ea4f1271936402fac8b89f98eaf9f",
-      "rule_id": "internal.local_marker",
-      "location": "history:fabb66d4b90f:internal/hub/interfaces_test.go:36"
+      "baseline_key": "889827835090b7f4914b76147a3ef98bddb742efae938a57498011d60bb17166",
+      "rule_id": "internal.home_path",
+      "location": "history:1138ce2ca0b7:scripts/tests/test_prepublish_check.py:257"
     },
     {
-      "baseline_key": "7dc8913be133350ed56c9b2737bbf0ae6dbc2148760fa657d20a71caaac24aa0",
-      "rule_id": "internal.local_marker",
-      "location": "history:84476e973ab5:web/test/settings-network-helpers.test.mjs:43"
+      "baseline_key": "9324edd71c1240379b39f8d4048ec3bdfcb6c1ad12eb274690d14edbdff092d9",
+      "rule_id": "internal.home_path",
+      "location": "history:1138ce2ca0b7:scripts/tests/test_prepublish_check.py:264"
     },
     {
       "baseline_key": "968ee23081215a8fdd7daa88b4fd61ad32960f60ab37f74d14b0767484bcb073",
@@ -87,59 +37,14 @@
       "location": "history:d71d3c4fa765:internal/agent/inventory_test.go:41"
     },
     {
-      "baseline_key": "a6b4cfe4174a0bd0a6f76b5719f10f421ebe9d87cc0b5f000650d39e11c87d4d",
-      "rule_id": "internal.local_marker",
-      "location": "history:19732e07f229:internal/models/network_test.go:131"
-    },
-    {
-      "baseline_key": "ad89cafb98140933d6b9eef207669536cc24645863f9bd9351bbe69cf9a29336",
-      "rule_id": "internal.local_marker",
-      "location": "history:84476e973ab5:web/test/settings-network-helpers.test.mjs:107"
-    },
-    {
       "baseline_key": "c2519989e31a36c09611e59b4fbc2b46bd4ed1221c0d4840139f1ba8dfe7f2dd",
       "rule_id": "internal.host_ip",
       "location": "history:19732e07f229:internal/hub/ratelimit_test.go:163"
     },
     {
-      "baseline_key": "c5b9681cbb9dd6161e149bf51dc63991464337607347ba123a39e6397a68018f",
-      "rule_id": "internal.local_marker",
-      "location": "history:84476e973ab5:web/test/settings-network-helpers.test.mjs:161"
-    },
-    {
-      "baseline_key": "cc17a80408910ecd2540592d9ae3d941a3eff497df36fcd433140c9df02a73d5",
-      "rule_id": "internal.local_marker",
-      "location": "history:19732e07f229:internal/models/network_test.go:47"
-    },
-    {
-      "baseline_key": "d443bdead2d92b045908778a71a566235e8882f41e842752e69a35efe566bd1e",
-      "rule_id": "internal.local_marker",
-      "location": "history:84476e973ab5:web/assets/js/pages/settings/network-helpers.js:151"
-    },
-    {
-      "baseline_key": "d9da00e64c545e319ada6ea49c5fecbe0a551390e0b3dbfcb697dfff105d88b5",
-      "rule_id": "internal.local_marker",
-      "location": "history:19732e07f229:internal/models/network_test.go:48"
-    },
-    {
-      "baseline_key": "ea86767a64149d90a33d55ee9039495f0bfdb21c7b969807d5e8fab6e63b1595",
-      "rule_id": "internal.local_marker",
-      "location": "history:19732e07f229:internal/models/network_test.go:168"
-    },
-    {
-      "baseline_key": "efb73e2bc494adf7ceb5f9869b5cba3b90b190cdf5a9a263bc522a60ce1fbf37",
-      "rule_id": "internal.local_marker",
-      "location": "history:84476e973ab5:web/test/settings-network-helpers.test.mjs:91"
-    },
-    {
-      "baseline_key": "efd8f4e197f71ab88b103bb43bc9ea22887d4a0a1444a4a33bbb32bbea8e1449",
-      "rule_id": "internal.local_marker",
-      "location": "history:fabb66d4b90f:internal/hub/interfaces_test.go:34"
-    },
-    {
-      "baseline_key": "f2abe9850aec1efaa34b16d425b109abfbb2329c7ec9490797a415d851a87b56",
-      "rule_id": "internal.local_marker",
-      "location": "history:19732e07f229:internal/models/network_test.go:45"
+      "baseline_key": "c83e4f9f63fd81aed6706d7c589b5c593c33a78bcd96b38a4539b51ca03d4519",
+      "rule_id": "internal.home_path",
+      "location": "history:1138ce2ca0b7:scripts/tests/test_prepublish_check.py:265"
     }
   ]
 }
