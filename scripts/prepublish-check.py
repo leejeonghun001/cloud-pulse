@@ -642,8 +642,13 @@ def scan_working_tree_for_markers(
 
 
 def scan_tree(repo_root: Path, markers: Iterable[Marker | str]) -> list[Finding]:
+    """Scans every file Git would publish: tracked plus untracked, non-ignored.
+
+    Including untracked files means a local run catches a problem *before*
+    the file is committed (in CI the two sets are identical).
+    """
     findings: list[Finding] = []
-    for relpath in list_tracked_files(repo_root):
+    for relpath in list_working_tree_files(repo_root):
         full = repo_root / relpath
         if not full.is_file():
             continue

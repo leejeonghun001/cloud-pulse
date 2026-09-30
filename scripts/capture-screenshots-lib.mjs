@@ -151,8 +151,8 @@ export function applyWordBoundedSubstitution(text, real, demo, protectedIdentifi
 /**
  * IPV4_WHOLE builds a regex matching a specific dotted-quad IPv4 address
  * only when NOT immediately adjacent to another digit or '.' on either
- * side (so "10.1.2.3" does not match inside "10.1.2.30" or
- * "110.1.2.3"). IPv6 and hostname/word markers use the generic
+ * side (so "192.0.2.3" does not match inside "192.0.2.30" or
+ * "1192.0.2.3"). IPv6 and hostname/word markers use the generic
  * token-boundary logic above instead, since ':' (IPv6) is not a token
  * char and would already be a boundary; IPv4 needs its own check because
  * '.' is deliberately NOT a token character (so hostnames like

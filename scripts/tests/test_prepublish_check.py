@@ -254,15 +254,15 @@ class InternalInfoRuleTests(unittest.TestCase):
         return list(PC.scan_line_for_internal_info(line, "tree:x.go", 1, self.markers, "x.go"))
 
     def test_home_path_detected(self) -> None:
-        findings = self._findings('path := "/home/alice/.config/cloud-pulse"')
+        findings = self._findings('path := "/home/alice/.config/cloud-pulse"')  # allow-secret-scan: synthetic fixture user
         self.assertEqual([f.rule_id for f in findings], ["internal.home_path"])
 
     def test_home_path_allowlisted_account_not_flagged(self) -> None:
         self.assertEqual(self._findings('path := "/home/runneradmin/work"'), [])
 
     def test_macos_and_windows_home_paths_detected(self) -> None:
-        self.assertEqual(len(self._findings('path := "/Users/alice/Library"')), 1)
-        self.assertEqual(len(self._findings(r'path := "C:\Users\alice\AppData"')), 1)
+        self.assertEqual(len(self._findings('path := "/Users/alice/Library"')), 1)  # allow-secret-scan: synthetic fixture user
+        self.assertEqual(len(self._findings(r'path := "C:\Users\alice\AppData"')), 1)  # allow-secret-scan: synthetic fixture user
 
     def test_orchestrator_dir_name_detected(self) -> None:
         name = "." + "cloud-pulse-orchestrator"
@@ -518,6 +518,22 @@ class TreeAndHygieneIntegrationTests(unittest.TestCase):
             repo.commit("init")
             findings = PC.scan_tree(repo.root, set())
             self.assertEqual(findings, [])
+        finally:
+            repo.cleanup()
+
+    def test_tree_scan_includes_untracked_non_ignored_files(self) -> None:
+        # Regression: the tree scan used to read only tracked files, so a
+        # problem in a brand-new file was invisible until after commit.
+        repo = TempGitRepo()
+        try:
+            repo.write("main.go", "package main\n")
+            repo.commit("init")
+            repo.write("new_file.go", 'var key = "' + _fake_aws_key() + '"\n')
+            repo.write(".gitignore", "ignored.go\n")
+            repo.write("ignored.go", 'var key = "' + _fake_aws_key() + '"\n')
+            locations = {f.location for f in PC.scan_tree(repo.root, set())}
+            self.assertTrue(any("new_file.go" in loc for loc in locations), locations)
+            self.assertFalse(any("ignored.go" in loc for loc in locations), locations)
         finally:
             repo.cleanup()
 
