@@ -15,6 +15,7 @@ import {
   hostScopeLabel,
   scopeLabel,
   isStorageScopedMetric,
+  isThresholdlessMetric,
   channelsLabel,
   ruleSummarySentence,
   presetByID,
@@ -25,7 +26,7 @@ import {
 
 test("METRICS/OPERATORS cover every models enum value", () => {
   const values = METRICS.map((m) => m.value);
-  assert.deepEqual(values, ["cpu", "memory", "disk", "load1", "egress_out_pct", "egress_in_pct", "host_down", "storage_usage_pct"]);
+  assert.deepEqual(values, ["cpu", "memory", "disk", "load1", "egress_out_pct", "egress_in_pct", "host_down", "storage_usage_pct", "agent_outdated", "update_batch_failed"]);
   assert.deepEqual(OPERATORS.map((o) => o.value), [">", ">="]);
 });
 
@@ -74,6 +75,8 @@ test("formatDurationShort spells out a single unit", () => {
   assert.equal(formatDurationShort(300), "5 minutes");
   assert.equal(formatDurationShort(3600), "1 hour");
   assert.equal(formatDurationShort(7200), "2 hours");
+  assert.equal(formatDurationShort(86400), "1 day");
+  assert.equal(formatDurationShort(14 * 86400), "14 days");
 });
 
 test("formatDurationShort falls back to seconds when not an even minute/hour", () => {
@@ -160,6 +163,35 @@ test("ruleSummarySentence: storage_usage_pct with no scope means any account", (
   assert.equal(sentence, "Alert when storage account usage on any connected storage account is above 90% of quota → no channels");
 });
 
+test("ruleSummarySentence: agent_outdated with no scope means any host, uses the 14-day default when duration is 0", () => {
+  const rule = { metric: "agent_outdated", host_id: "", operator: ">", threshold: 0, duration_sec: 0, channel_ids: [] };
+  const sentence = ruleSummarySentence(rule);
+  assert.equal(sentence, "Alert when a host's agent is behind the latest release for 14 days → no channels");
+});
+
+test("ruleSummarySentence: agent_outdated scoped to one host uses its hostname", () => {
+  const rule = { metric: "agent_outdated", host_id: "h1", operator: ">", threshold: 0, duration_sec: 7 * 86400, channel_ids: [] };
+  const sentence = ruleSummarySentence(rule, { hostnameByID: (id) => (id === "h1" ? "web-1" : undefined) });
+  assert.equal(sentence, "Alert when web-1 is behind the latest release for 7 days → no channels");
+});
+
+test("ruleSummarySentence: update_batch_failed ignores scope/threshold/duration entirely", () => {
+  const rule = { metric: "update_batch_failed", host_id: "", operator: ">", threshold: 0, duration_sec: 0, channel_ids: [1] };
+  const sentence = ruleSummarySentence(rule, { channelNameByID: (id) => (id === 1 ? "Discord #ops" : undefined) });
+  assert.equal(sentence, "Alert when a remote-update batch finishes with at least one failure → Discord #ops");
+});
+
+test("isThresholdlessMetric: host_down, agent_outdated, update_batch_failed are thresholdless", () => {
+  assert.equal(isThresholdlessMetric("host_down"), true);
+  assert.equal(isThresholdlessMetric("agent_outdated"), true);
+  assert.equal(isThresholdlessMetric("update_batch_failed"), true);
+});
+
+test("isThresholdlessMetric: every other metric uses a threshold", () => {
+  assert.equal(isThresholdlessMetric("cpu"), false);
+  assert.equal(isThresholdlessMetric("storage_usage_pct"), false);
+});
+
 test("PRESETS: every preset id is unique and rule is well-formed", () => {
   const ids = PRESETS.map((p) => p.id);
   assert.equal(new Set(ids).size, ids.length);
@@ -171,7 +203,7 @@ test("PRESETS: every preset id is unique and rule is well-formed", () => {
   }
 });
 
-test("PRESETS covers every SPEC-v0.5/v0.7 preset sentence", () => {
+test("PRESETS covers every SPEC-v0.5/v0.7/v0.8 preset sentence", () => {
   const labels = PRESETS.map((p) => p.label);
   assert.deepEqual(labels, [
     "CPU above 90% for 5 minutes",
@@ -181,6 +213,8 @@ test("PRESETS covers every SPEC-v0.5/v0.7 preset sentence", () => {
     "Inbound traffic above 80% of limit",
     "Host offline for 2 minutes",
     "Storage account above 90% of quota",
+    "Agent behind latest release for 14 days",
+    "Remote update batch has a failure",
   ]);
 });
 

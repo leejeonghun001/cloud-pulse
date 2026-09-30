@@ -21,6 +21,8 @@ export const METRICS = [
   { value: "egress_in_pct", label: "Inbound traffic", unit: "% of limit" },
   { value: "host_down", label: "Host offline", unit: "" },
   { value: "storage_usage_pct", label: "Storage account usage", unit: "% of quota" },
+  { value: "agent_outdated", label: "Agent behind latest release", unit: "" },
+  { value: "update_batch_failed", label: "Remote update batch failed", unit: "" },
 ];
 
 /**
@@ -35,6 +37,21 @@ export const METRICS = [
  */
 export function isStorageScopedMetric(metric) {
   return metric === "storage_usage_pct";
+}
+
+/**
+ * isThresholdlessMetric reports whether metric's condition is purely
+ * duration/event-based rather than a threshold crossing — host_down
+ * (duration-only) and SPEC-v0.8 §3-1's two rollout metrics:
+ * agent_outdated (duration-only, like host_down) and
+ * update_batch_failed (event-only, no duration either). Callers use
+ * this to decide whether the rule editor's threshold field/payload
+ * value applies at all.
+ * @param {string} metric
+ * @returns {boolean}
+ */
+export function isThresholdlessMetric(metric) {
+  return metric === "host_down" || metric === "agent_outdated" || metric === "update_batch_failed";
 }
 
 /** OPERATORS lists every models.AlertOperator value with a display label. */
@@ -84,7 +101,7 @@ export function operatorLabel(operator) {
  * @returns {string}
  */
 export function formatThreshold(metric, threshold) {
-  if (metric === "host_down") return "";
+  if (isThresholdlessMetric(metric)) return "";
   const unit = metricByValue(metric)?.unit ?? "";
   const num = Number.isFinite(threshold) ? threshold : 0;
   const numText = metric === "load1" ? num.toFixed(2).replace(/\.?0+$/, "") || "0" : String(num);
@@ -96,7 +113,9 @@ export function formatThreshold(metric, threshold) {
 /**
  * formatDurationShort renders a duration in seconds as a compact human
  * string tuned for rule summaries/labels, e.g. 300 -> "5 minutes", 60
- * -> "1 minute", 30 -> "30 seconds", 0 -> "0 seconds". Unlike
+ * -> "1 minute", 30 -> "30 seconds", 0 -> "0 seconds", 86400 -> "1 day"
+ * (days added for SPEC-v0.8 §3-1's agent_outdated preset, whose 14-day
+ * default would otherwise render as an unwieldy "336 hours"). Unlike
  * core/format.js's formatDuration this always spells out a single unit
  * with its full word (never abbreviated to "5m"), matching the
  * human-sentence style SPEC-v0.5 §D asks for.
@@ -105,6 +124,10 @@ export function formatThreshold(metric, threshold) {
  */
 export function formatDurationShort(seconds) {
   const s = Math.max(0, Math.floor(Number(seconds) || 0));
+  if (s % 86400 === 0 && s >= 86400) {
+    const d = s / 86400;
+    return `${d} day${d === 1 ? "" : "s"}`;
+  }
   if (s % 3600 === 0 && s >= 3600) {
     const h = s / 3600;
     return `${h} hour${h === 1 ? "" : "s"}`;
@@ -187,6 +210,16 @@ export function ruleSummarySentence(rule, { hostnameByID, channelNameByID = () =
     return `Alert when ${subject} goes offline for ${duration} → ${channels}`;
   }
 
+  if (rule.metric === "agent_outdated") {
+    const subject = rule.host_id ? scope : "a host's agent";
+    const behindDuration = formatDurationShort(rule.duration_sec || AGENT_OUTDATED_DEFAULT_DURATION_SEC);
+    return `Alert when ${subject} is behind the latest release for ${behindDuration} → ${channels}`;
+  }
+
+  if (rule.metric === "update_batch_failed") {
+    return `Alert when a remote-update batch finishes with at least one failure → ${channels}`;
+  }
+
   const label = lowerFirstWord(metricLabel(rule.metric));
   const op = operatorLabel(rule.operator);
   const threshold = formatThreshold(rule.metric, rule.threshold);
@@ -208,6 +241,14 @@ function lowerFirstWord(s) {
   if (/^[A-Z]{2,}/.test(s)) return s;
   return s[0].toLowerCase() + s.slice(1);
 }
+
+/** AGENT_OUTDATED_DEFAULT_DURATION_SEC mirrors the hub's default (see
+ * internal/alerting/rollout.go's AgentOutdatedDurationDefaultSec):
+ * SPEC-v0.8 §3-1's "at least N days behind" default of 14 days,
+ * applied when an agent_outdated rule's duration is left at 0. Defined
+ * ahead of PRESETS below since it's referenced there and JS const
+ * bindings are not hoisted the way function declarations are. */
+export const AGENT_OUTDATED_DEFAULT_DURATION_SEC = 14 * 24 * 60 * 60;
 
 /**
  * PRESETS lists the SPEC-v0.5 §D rule presets shown in the rule editor
@@ -253,6 +294,16 @@ export const PRESETS = [
     label: "Storage account above 90% of quota",
     rule: { name: "Storage account above 90% of quota", metric: "storage_usage_pct", host_id: "", operator: ">", threshold: 90, duration_sec: 0 },
   },
+  {
+    id: "agent-outdated-14d",
+    label: "Agent behind latest release for 14 days",
+    rule: { name: "Agent behind latest release for 14 days", metric: "agent_outdated", host_id: "", operator: ">", threshold: 0, duration_sec: AGENT_OUTDATED_DEFAULT_DURATION_SEC },
+  },
+  {
+    id: "update-batch-failed",
+    label: "Remote update batch has a failure",
+    rule: { name: "Remote update batch has a failure", metric: "update_batch_failed", host_id: "", operator: ">", threshold: 0, duration_sec: 0 },
+  },
 ];
 
 /**
@@ -295,7 +346,7 @@ export function validateRuleForm(form) {
   if (!OPERATORS.some((o) => o.value === form.operator)) {
     errors.operator = "Choose an operator.";
   }
-  if (form.metric !== "host_down" && (!Number.isFinite(form.threshold) || form.threshold < 0)) {
+  if (!isThresholdlessMetric(form.metric) && (!Number.isFinite(form.threshold) || form.threshold < 0)) {
     errors.threshold = "Threshold must be a non-negative number.";
   }
   if (!Number.isFinite(form.durationSec) || form.durationSec < 0) {
