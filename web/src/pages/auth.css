@@ -15,7 +15,7 @@
   }
 
   .cp-auth-brand .cp-icon {
-    @apply h-8 w-8 text-cp-accent;
+    @apply h-8 w-8 text-[rgb(var(--link))];
   }
 
   .cp-auth-brand h1 {
@@ -56,7 +56,7 @@
   }
 
   .cp-pw-checklist-item[data-met="true"] {
-    @apply text-cp-ok;
+    @apply text-emerald-700 dark:text-cp-ok;
   }
 
   /* Password strength meter */

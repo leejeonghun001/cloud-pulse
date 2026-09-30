@@ -5,7 +5,7 @@
 // SPEC-v0.4 §4 on top of the v0.3.x data layer (zero feature loss:
 // egress split, hub-override badges, update badges, buckets free tier,
 // 15s refresh + visibility pause + AbortController all preserved).
-import { getHosts, getEgress, getBuckets, ApiError } from "../core/api.js";
+import { getHosts, getEgress, getBuckets, getStorageAccounts, ApiError } from "../core/api.js";
 import { formatDisplayAmount } from "../core/currency.js";
 import { loadDisplayCurrency } from "../core/display-currency.js";
 import {
@@ -35,6 +35,7 @@ import {
 import { getItem, setItem, getJSON, setJSON } from "../core/store.js";
 import { buildEgressSection, currentMonth, getStoredDirection, setStoredDirection } from "./egress.js";
 import { buildBucketsSection } from "./buckets.js";
+import { buildStorageAccountsSection } from "./storage-overview.js";
 import { outdatedAgentCount, agentVersionText, hostUpdateBadgeText } from "../core/updates.js";
 import {
   COLUMNS,
@@ -81,7 +82,8 @@ export function mountOverviewPage(container, { announce }) {
   const systemsCard = el("section", { class: "cp-card cp-systems-card", attrs: { "aria-labelledby": "cp-systems-heading" } });
   const egressHost = el("div", { class: "cp-egress-host" });
   const bucketsHost = el("div", { class: "cp-buckets-host" });
-  container.append(bannerHost, statCardsHost, systemsCard, egressHost, bucketsHost);
+  const storageAccountsHost = el("div", { class: "cp-storage-accounts-host" });
+  container.append(bannerHost, statCardsHost, systemsCard, egressHost, bucketsHost, storageAccountsHost);
 
   function showBanner(message) {
     clearChildren(bannerHost);
@@ -117,11 +119,15 @@ export function mountOverviewPage(container, { announce }) {
 
   async function refresh() {
     try {
-      const [hostsResp, egressResp, bucketsResp, displayCurrency] = await Promise.all([
+      const [hostsResp, egressResp, bucketsResp, displayCurrency, storageAccountsResp] = await Promise.all([
         getHosts(controller.signal),
         getEgress(state.month, controller.signal),
         getBuckets(controller.signal),
         loadDisplayCurrency(controller.signal),
+        getStorageAccounts(controller.signal).catch((err) => {
+          if (err?.name === "AbortError") throw err;
+          return { accounts: [] };
+        }),
       ]);
       state.displayCurrency = displayCurrency;
       clearBanner();
@@ -159,6 +165,9 @@ export function mountOverviewPage(container, { announce }) {
       });
       bucketsHost.append(node);
       state.charts = charts;
+
+      clearChildren(storageAccountsHost);
+      storageAccountsHost.append(buildStorageAccountsSection({ accounts: storageAccountsResp.accounts || [], nowMs }));
 
       announce?.("Dashboard data refreshed.");
     } catch (err) {

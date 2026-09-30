@@ -27,7 +27,7 @@
   }
 
   .cp-settings-nav-link-active {
-    @apply bg-cp-accent/10 text-cp-accent hover:bg-cp-accent/10 hover:text-cp-accent;
+    @apply bg-cp-accent/10 text-[rgb(var(--link))] hover:bg-cp-accent/10 hover:text-[rgb(var(--link))];
   }
 
   .cp-settings-content {
@@ -71,7 +71,7 @@
   }
 
   .cp-network-kind-tailscale {
-    @apply bg-cp-accent/15 text-cp-accent;
+    @apply bg-cp-accent/15 text-[rgb(var(--link))];
   }
 
   .cp-network-kind-virtual {
@@ -111,7 +111,11 @@
   }
 
   .cp-network-chip-remove {
-    @apply inline-flex items-center justify-center h-4 w-4 rounded-full text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] hover:bg-[rgb(var(--border))] cursor-pointer;
+    @apply inline-flex items-center justify-center h-7 w-7 rounded-full text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] hover:bg-[rgb(var(--border))] cursor-pointer;
+  }
+
+  .cp-network-chip-remove .cp-icon {
+    @apply h-3.5 w-3.5;
   }
 
   .cp-network-suggestions {
@@ -119,7 +123,7 @@
   }
 
   .cp-network-warning {
-    @apply text-cp-warning;
+    @apply text-amber-700 dark:text-cp-warning;
   }
 
   .cp-network-actions {
@@ -163,7 +167,7 @@
   }
 
   .cp-link {
-    @apply text-sm font-medium text-cp-accent hover:underline;
+    @apply text-sm font-medium text-[rgb(var(--link))] hover:underline;
   }
 
   .cp-settings-form {

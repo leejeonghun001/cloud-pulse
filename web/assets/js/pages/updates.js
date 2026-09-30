@@ -18,6 +18,24 @@ export const PROGRESS_POLL_MS = 5000;
 const JOB_STATE_LABELS = { queued: "Queued", in_progress: "In progress", succeeded: "Succeeded", failed: "Failed" };
 const JOB_STATE_CLASSES = { queued: "cp-chip-other", in_progress: "cp-chip-warning", succeeded: "cp-chip-ok", failed: "cp-chip-critical" };
 
+/** PLATFORM_LABELS maps a models.AgentOS ("linux"|"darwin"|"windows")
+ * to its display name for the Updates page's OS column (SPEC-v0.7 §1);
+ * an empty/unrecognized platform (older agent that predates reporting
+ * it) shows as "Unknown". */
+const PLATFORM_LABELS = { linux: "Linux", darwin: "macOS", windows: "Windows" };
+
+/**
+ * platformLabel renders a models.RemoteUpdateCapability.Platform value
+ * ("linux"|"darwin"|"windows"|"") for display, falling back to
+ * "Unknown" for an empty/unrecognized value (an older agent build that
+ * predates reporting its OS family at all).
+ * @param {string} platform
+ * @returns {string}
+ */
+export function platformLabel(platform) {
+  return PLATFORM_LABELS[platform] || "Unknown";
+}
+
 /** REASON_LABELS maps a models.UpdateJobReason to a short human
  * message shown next to a failed job. */
 const REASON_LABELS = {
@@ -41,6 +59,25 @@ const REASON_LABELS = {
  */
 export function isTerminalJobState(state) {
   return state === "succeeded" || state === "failed";
+}
+
+/**
+ * manualUpdateCommand returns the ready-to-run manual update command
+ * for a host that can't (or shouldn't yet) use remote update — the
+ * hub already computes this OS-aware per SPEC-v0.7 §1 (Linux/macOS:
+ * `sudo cloud-pulse-agent update`; Windows: no `sudo`, "run as
+ * Administrator" instead; a pre-v0.3.0 agent on any OS: the legacy
+ * installer one-liner) and returns it as `host.update.command` — this
+ * helper just falls back to a generic hint when that field is absent
+ * (a host that has never reported at all, so `update` itself is null).
+ * @param {{update?: {command?: string}|null}} host a GET /api/v1/hosts
+ *   entry ({host, update, ...})
+ * @returns {string}
+ */
+export function manualUpdateCommand(host) {
+  const command = host?.update?.command;
+  if (command) return command;
+  return "sudo cloud-pulse-agent update";
 }
 
 /**
@@ -153,7 +190,7 @@ function agentTable({ hosts, signal, announce, onBatchCreated }) {
   const thead = el("thead");
   const headRow = el("tr");
   headRow.append(el("th", { text: "" }));
-  for (const label of ["Host", "Version", "Update available", "Remote update"]) {
+  for (const label of ["Host", "OS", "Version", "Update available", "Remote update"]) {
     headRow.append(el("th", { text: label }));
   }
   thead.append(headRow);
@@ -179,9 +216,10 @@ function agentTable({ hosts, signal, announce, onBatchCreated }) {
     row.append(checkboxCell);
 
     row.append(el("td", { text: h.host.hostname }));
+    row.append(el("td", { text: platformLabel(cap.platform || h.host.os) }));
     row.append(el("td", { text: h.host.agent_version || "unknown" }));
     row.append(el("td", { text: h.update?.available ? `Yes (${h.update.latest})` : "No" }));
-    row.append(el("td", { children: [capabilityBadge(cap)] }));
+    row.append(el("td", { children: [capabilityCell(cap, h)] }));
 
     tbody.append(row);
   }
@@ -256,16 +294,40 @@ function agentTable({ hosts, signal, announce, onBatchCreated }) {
 }
 
 /**
- * capabilityBadge builds the "remote update" status chip for one host:
- * green "Ready" when supported+opted-in, otherwise an explanatory
- * amber/gray chip with the reason.
+ * capabilityCell builds the "remote update" column's contents for one
+ * host: a green "Ready" chip when supported+opted-in, otherwise an
+ * explanatory chip plus (SPEC-v0.7 §1) that host's own OS-aware manual
+ * update command as a fallback — copy button included, since an
+ * ineligible host is still updatable by hand.
+ * @param {Object} cap models.RemoteUpdateCapability
+ * @param {Object} host a GET /api/v1/hosts entry ({host, update, ...})
+ * @returns {HTMLElement}
  */
-function capabilityBadge(cap) {
+function capabilityCell(cap, host) {
+  const wrap = el("div", { class: "cp-updates-capability" });
   if (cap.supported && cap.opted_in) {
-    return el("span", { class: "cp-chip cp-chip-ok", text: "Ready" });
+    wrap.append(el("span", { class: "cp-chip cp-chip-ok", text: "Ready" }));
+    return wrap;
   }
   const reasonText = REASON_LABELS[cap.reason] || (cap.opted_in ? "Not supported." : "Opt-in required (--remote-update).");
-  return el("span", { class: "cp-chip cp-chip-other", text: "Not available", attrs: { title: reasonText } });
+  wrap.append(el("span", { class: "cp-chip cp-chip-other", text: "Not available", attrs: { title: reasonText } }));
+
+  const command = manualUpdateCommand(host);
+  const commandRow = el("div", { class: "cp-updates-manual-command" });
+  commandRow.append(el("code", { class: "cp-code-inline", text: command }));
+  const copyBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button", "aria-label": `Copy manual update command for ${host.host.hostname}` } });
+  copyBtn.append(icon("copy"));
+  copyBtn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(command);
+      showToast({ message: "Command copied.", variant: "success" });
+    } catch {
+      showToast({ message: "Copy failed — select and copy manually.", variant: "error" });
+    }
+  });
+  commandRow.append(copyBtn);
+  wrap.append(commandRow);
+  return wrap;
 }
 
 /**

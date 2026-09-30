@@ -20,7 +20,22 @@ export const METRICS = [
   { value: "egress_out_pct", label: "Outbound traffic", unit: "% of limit" },
   { value: "egress_in_pct", label: "Inbound traffic", unit: "% of limit" },
   { value: "host_down", label: "Host offline", unit: "" },
+  { value: "storage_usage_pct", label: "Storage account usage", unit: "% of quota" },
 ];
+
+/**
+ * isStorageScopedMetric reports whether metric is
+ * "storage_usage_pct" — the one metric whose AlertRule.HostID field is
+ * repurposed to hold a storage account ID instead of a host ID (see
+ * models.AlertMetricStorageUsagePct's doc comment). Callers use this to
+ * decide whether a rule's scope selector should list storage accounts
+ * instead of hosts.
+ * @param {string} metric
+ * @returns {boolean}
+ */
+export function isStorageScopedMetric(metric) {
+  return metric === "storage_usage_pct";
+}
 
 /** OPERATORS lists every models.AlertOperator value with a display label. */
 export const OPERATORS = [
@@ -73,7 +88,9 @@ export function formatThreshold(metric, threshold) {
   const unit = metricByValue(metric)?.unit ?? "";
   const num = Number.isFinite(threshold) ? threshold : 0;
   const numText = metric === "load1" ? num.toFixed(2).replace(/\.?0+$/, "") || "0" : String(num);
-  return unit === "% of limit" ? `${numText}% of limit` : `${numText}${unit}`;
+  if (unit === "% of limit") return `${numText}% of limit`;
+  if (unit === "% of quota") return `${numText}% of quota`;
+  return `${numText}${unit}`;
 }
 
 /**
@@ -113,6 +130,27 @@ export function hostScopeLabel(hostID, hostnameByID) {
 }
 
 /**
+ * scopeLabel renders a rule's scope for display, dispatching between
+ * host and storage-account naming depending on the rule's metric: "any
+ * host"/hostname for every metric except storage_usage_pct, "any
+ * connected storage account"/account name for storage_usage_pct (see
+ * isStorageScopedMetric).
+ * @param {string} metric
+ * @param {string} scopeID rule.host_id (a host ID, or a storage
+ *   account ID formatted as a decimal string, depending on metric)
+ * @param {(id: string) => string|undefined} [hostnameByID]
+ * @param {(id: string) => string|undefined} [storageAccountNameByID]
+ * @returns {string}
+ */
+export function scopeLabel(metric, scopeID, hostnameByID, storageAccountNameByID) {
+  if (isStorageScopedMetric(metric)) {
+    if (!scopeID) return "any connected storage account";
+    return storageAccountNameByID?.(scopeID) || scopeID;
+  }
+  return hostScopeLabel(scopeID, hostnameByID);
+}
+
+/**
  * channelsLabel renders a rule's channel list for display, e.g.
  * "Discord #ops, Telegram". Returns "no channels" when channelIDs is
  * empty, or when none resolve via channelNameByID.
@@ -139,8 +177,8 @@ export function channelsLabel(channelIDs, channelNameByID) {
  * @param {(id: number) => string|undefined} [lookups.channelNameByID]
  * @returns {string}
  */
-export function ruleSummarySentence(rule, { hostnameByID, channelNameByID = () => undefined } = {}) {
-  const scope = hostScopeLabel(rule.host_id, hostnameByID);
+export function ruleSummarySentence(rule, { hostnameByID, channelNameByID = () => undefined, storageAccountNameByID } = {}) {
+  const scope = scopeLabel(rule.metric, rule.host_id, hostnameByID, storageAccountNameByID);
   const channels = channelsLabel(rule.channel_ids, channelNameByID);
   const duration = formatDurationShort(rule.duration_sec);
 
@@ -209,6 +247,11 @@ export const PRESETS = [
     id: "host-down-2m",
     label: "Host offline for 2 minutes",
     rule: { name: "Host offline for 2 minutes", metric: "host_down", host_id: "", operator: ">", threshold: 0, duration_sec: 120 },
+  },
+  {
+    id: "storage-usage-90",
+    label: "Storage account above 90% of quota",
+    rule: { name: "Storage account above 90% of quota", metric: "storage_usage_pct", host_id: "", operator: ">", threshold: 90, duration_sec: 0 },
   },
 ];
 

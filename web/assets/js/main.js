@@ -254,7 +254,7 @@ async function refreshPaletteHostCache() {
 async function openAddAgent() {
   try {
     const data = await getAgentToken();
-    openAddAgentDialog(data.install_command);
+    openAddAgentDialog(data.install_command, data.install_commands);
   } catch {
     showToast({ message: "Sign in as admin to reveal the install command, or use the Settings page.", variant: "error" });
   }

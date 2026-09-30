@@ -16,11 +16,22 @@
   }
 
   .cp-navbar-bell-active {
-    @apply text-cp-warning;
+    @apply text-amber-700 dark:text-cp-warning;
   }
 
   .cp-navbar-bell-badge {
-    @apply absolute top-1 right-1 inline-flex items-center justify-center min-w-[1rem] h-4 px-1 rounded-full bg-cp-exceeded text-white text-[10px] font-semibold leading-none;
+    /* Literal hex via arbitrary-value syntax, not Tailwind's red-600
+       keyword: Tailwind v4's built-in palette colors are defined in
+       oklch() (see --color-red-600 in @theme), and
+       scripts/ui-audit.mjs's contrast checker (owned by the
+       ui-audit-tool stage, not this one) can't resolve a computed
+       oklch()-sourced custom-property reference even without an
+       opacity modifier — it silently mis-reports a false "identical
+       foreground/background" (ratio 1) finding. A literal hex value
+       (#dc2626, the same color red-600 refers to) sidesteps the oklch
+       resolution path entirely; #dc2626 on white text is a real
+       4.83:1, comfortably WCAG AA. */
+    @apply absolute top-1 right-1 inline-flex items-center justify-center min-w-[1rem] h-4 px-1 rounded-full bg-[#dc2626] text-white text-[10px] font-semibold leading-none;
   }
 
   .cp-navbar-bell-menu-title {
@@ -64,7 +75,7 @@
   }
 
   .cp-alerts-active-link {
-    @apply flex items-center gap-2 no-underline text-[rgb(var(--text))];
+    @apply flex items-center gap-2 no-underline text-[rgb(var(--text))] min-h-6 py-0.5;
   }
 
   .cp-alerts-active-name {

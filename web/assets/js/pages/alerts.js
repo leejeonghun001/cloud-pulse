@@ -218,7 +218,7 @@ function historyRow(ev) {
       }),
       el("td", { text: ev.rule_name || "" }),
       el("td", {
-        children: [el("a", { attrs: { href: `#/host/${encodeURIComponent(ev.host_id)}` }, text: ev.hostname || ev.host_id })],
+        children: [el("a", { class: "cp-table-link", attrs: { href: `#/host/${encodeURIComponent(ev.host_id)}` }, text: ev.hostname || ev.host_id })],
       }),
       el("td", { text: metricLabel(ev.metric) }),
       el("td", { text: `${ev.value.toFixed(1)} / ${formatThreshold(ev.metric, ev.threshold) || ev.threshold}` }),

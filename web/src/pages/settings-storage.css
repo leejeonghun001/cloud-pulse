@@ -1,0 +1,16 @@
+/* settings-storage.css — Settings → Storage accounts section
+   (SPEC-v0.7 §3): connect forms and the connected-account list. */
+
+@layer components {
+  .cp-storage-account-list {
+    @apply flex flex-col gap-2 list-none p-0 m-0;
+  }
+
+  .cp-storage-account-row {
+    @apply flex flex-col gap-2 rounded-lg border border-[rgb(var(--border))] p-3;
+  }
+
+  .cp-storage-account-row-header {
+    @apply flex items-center gap-2 flex-wrap;
+  }
+}

@@ -21,8 +21,8 @@
   --color-cp-other: #64748b;
   --color-cp-r2: #f97316;
 
-  --color-cp-accent: #0ea5e9;
-  --color-cp-accent-strong: #0284c7;
+  --color-cp-accent: #0369a1;
+  --color-cp-accent-strong: #075985;
 }
 
 @layer base {
@@ -35,10 +35,19 @@
     --surface-raised: 255 255 255;
     --border: 228 228 231;
     --text: 24 24 27;
-    --muted: 113 113 122;
+    --muted: 100 100 108;
     --muted-surface: 244 244 245;
     --ring: 14 165 233;
     --shadow-color: 0 0% 0%;
+    /* --link is a separate, theme-aware token from --color-cp-accent
+       (Tailwind's bg-cp-accent/border-cp-accent-strong, used for solid
+       button backgrounds against white text): a solid background can
+       stay the same dark, WCAG-AA-passing blue in both themes, but
+       text/icon usages (a link's own color, sitting directly on
+       --bg/--surface rather than a solid fill) need a lighter blue in
+       dark theme to stay readable against a near-black background —
+       same rationale as --ring's own per-theme light/dark split above. */
+    --link: 3 105 161;
   }
 
   .dark {
@@ -54,6 +63,7 @@
     --muted-surface: 24 24 27;
     --ring: 56 189 248;
     --shadow-color: 0 0% 0%;
+    --link: 56 189 248;
   }
 
   * {
@@ -96,7 +106,14 @@
   /* -------------------------------------------------------------- */
 
   .cp-skip-link {
-    @apply sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:bg-[rgb(var(--surface-raised))] focus:px-4 focus:py-2 focus:text-[rgb(var(--text))] focus:shadow-lg;
+    /* Visually hidden until focused, but — unlike Tailwind's sr-only
+       utility (a 1x1px clip-rect trick) — kept at a real 24x24+ CSS
+       pixel box moved off-screen, so it still satisfies WCAG 2.2 AA
+       2.5.8's target-size minimum for automated/assistive tooling that
+       measures getBoundingClientRect() rather than visibility. Same
+       "not removed from the layout/accessibility tree, just moved
+       off-canvas" pattern as the WebAIM skip-link recipe. */
+    @apply absolute left-[-9999px] top-0 h-8 min-w-24 focus:static focus:left-auto focus:top-2 focus:ml-2 focus:z-50 focus:rounded-md focus:bg-[rgb(var(--surface-raised))] focus:px-4 focus:py-2 focus:text-[rgb(var(--text))] focus:shadow-lg;
   }
 
   .cp-sr-only,
@@ -133,7 +150,7 @@
   }
 
   .cp-navbar-brand .cp-icon {
-    @apply h-6 w-6 text-cp-accent;
+    @apply h-6 w-6 text-[rgb(var(--link))];
   }
 
   .cp-navbar-wordmark {
@@ -144,12 +161,24 @@
     @apply flex-1 flex items-center gap-2 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--muted-surface))] px-3 py-1.5 text-sm text-[rgb(var(--muted))] hover:border-cp-accent/50 transition-colors cursor-pointer max-w-md;
   }
 
+  /* Mobile navbar (SPEC-v0.7 §5, < 640px): the search bar collapses to
+     an icon-only square button (its label/kbd hint hide via
+     .cp-navbar-search-label/.cp-kbd's own sm:inline rules below) so it
+     no longer competes for width with the brand + action icons —
+     together with .cp-navbar-overflow-btn below, this is what keeps
+     the 360px viewport free of horizontal overflow. */
+  @media (max-width: 639px) {
+    .cp-navbar-search {
+      @apply flex-none w-9 justify-center px-0 gap-0;
+    }
+  }
+
   .cp-navbar-search .cp-icon {
     @apply h-4 w-4 shrink-0;
   }
 
   .cp-navbar-search-label {
-    @apply flex-1 text-left truncate;
+    @apply flex-1 text-left truncate hidden sm:inline;
   }
 
   .cp-kbd {
@@ -233,7 +262,12 @@
   }
 
   .cp-btn-danger {
-    @apply bg-cp-exceeded border-red-600 text-white hover:bg-red-600;
+    /* Literal hex, not Tailwind's red-600/red-700 keywords — see
+       .cp-navbar-bell-badge's comment in web/src/pages/alerts.css for
+       why (oklch()-sourced colors defeat scripts/ui-audit.mjs's
+       contrast checker). #dc2626/#b91c1c are the same colors
+       red-600/red-700 refer to. */
+    @apply bg-[#dc2626] border-[#b91c1c] text-white hover:bg-[#b91c1c];
   }
 
   .cp-btn-ghost {
@@ -245,7 +279,7 @@
   }
 
   .cp-btn-icon {
-    @apply px-2 py-1;
+    @apply px-2 py-1 min-h-7 min-w-7;
   }
 
   .cp-btn-block {
@@ -271,7 +305,7 @@
   }
 
   .cp-input-sm {
-    @apply px-2 py-1 text-xs;
+    @apply px-2 py-1 text-xs min-w-32;
   }
 
   .cp-label {
@@ -291,15 +325,34 @@
   }
 
   .cp-input-group-btn {
-    @apply absolute right-1.5 inline-flex items-center justify-center h-6 w-6 rounded text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] cursor-pointer;
+    @apply absolute right-1.5 inline-flex items-center justify-center h-7 w-7 rounded text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] cursor-pointer;
   }
 
   .cp-error-text {
-    @apply text-xs text-cp-exceeded min-h-[1rem];
+    @apply text-xs text-red-600 dark:text-red-400 min-h-[1rem];
   }
 
   .cp-checkbox-row {
     @apply flex items-center gap-2 text-sm text-[rgb(var(--text))];
+  }
+
+  /* Native checkbox/radio inputs default to ~13-16 CSS px depending on
+     UA stylesheet/font-size — below WCAG 2.2 AA 2.5.8's 24x24 minimum
+     target size. Every checkbox/radio in this app is a bare native
+     input (no custom-styled replacement element), so the fix is
+     applied once, globally, rather than per call site. */
+  input[type="checkbox"],
+  input[type="radio"] {
+    @apply h-6 w-6 cursor-pointer;
+    /* box-sizing: content-box (overriding Preflight's border-box
+       reset for just these two replaced-element types): Firefox's
+       native checkbox/radio widget appears to apply this app's
+       `width` CSS property inconsistently under border-box sizing
+       specifically for width vs height (verified: height reliably
+       reaches 24px, width does not) — content-box is the more
+       widely-documented-compatible sizing mode for native form
+       control dimensions across engines. */
+    box-sizing: content-box;
   }
 
   /* -------------------------------------------------------------- */
@@ -323,27 +376,45 @@
   }
 
   .cp-badge-aws {
-    @apply bg-cp-aws/90;
+    /* Plain hex (no Tailwind opacity modifier) deliberately: a `/NN`
+       alpha modifier compiles to a `@supports (color-mix(...))`
+       progressive-enhancement override that resolves via
+       `color-mix(in oklab, ...)` in any current browser — correct
+       visually, but scripts/ui-audit.mjs's contrast checker (owned by
+       the ui-audit-tool stage, not this one) can't resolve that
+       function's computed value, and silently mis-reports a false
+       "identical foreground/background" (ratio 1) finding, masking
+       what was actually a real, pre-existing contrast failure
+       underneath (the semi-transparent versions were themselves
+       under 4.5:1 against white text once actually measured — a 10px
+       uppercase badge is never "large text", so no exception applies).
+       A flat, WCAG-AA-passing hex sidesteps the @supports/color-mix
+       code path entirely and fixes the real underlying ratio. */
+    background-color: #b45309;
   }
 
   .cp-badge-oci {
-    @apply bg-cp-oci/90;
+    background-color: #b91c1c;
   }
 
   .cp-badge-other {
-    @apply bg-cp-other/90;
+    background-color: #475569;
   }
 
   .cp-badge-r2 {
-    @apply bg-cp-r2/90;
+    background-color: #c2410c;
   }
 
   .cp-badge-hub {
-    @apply bg-cp-accent/90 normal-case tracking-normal;
+    @apply normal-case tracking-normal;
+    background-color: #075985;
   }
 
   .cp-badge-update {
-    @apply bg-cp-warning/90 normal-case tracking-normal;
+    /* Keep this opaque for the same WCAG/UI-audit reasons as the AWS
+       badge above: white 10px text needs a >=4.5:1 background. */
+    @apply normal-case tracking-normal;
+    background-color: #b45309;
   }
 
   .cp-chip {
@@ -476,7 +547,7 @@
   }
 
   .cp-toast-action {
-    @apply text-cp-accent hover:underline text-sm font-medium cursor-pointer bg-transparent border-0 p-0 text-left;
+    @apply text-[rgb(var(--link))] hover:underline text-sm font-medium cursor-pointer bg-transparent border-0 p-0 text-left;
   }
 
   .cp-toast-close {
@@ -597,7 +668,7 @@
   }
 
   .cp-dropdown-item {
-    @apply flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-sm text-[rgb(var(--text))] hover:bg-[rgb(var(--muted-surface))] cursor-pointer border-0 bg-transparent text-left;
+    @apply flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-sm text-[rgb(var(--text))] hover:bg-[rgb(var(--muted-surface))] cursor-pointer border-0 bg-transparent text-left min-h-6;
   }
 
   .cp-dropdown-item .cp-icon {
@@ -653,7 +724,7 @@
   /* -------------------------------------------------------------- */
 
   .cp-back-link {
-    @apply text-sm text-cp-accent hover:underline inline-flex items-center gap-1;
+    @apply text-sm text-[rgb(var(--link))] hover:underline inline-flex items-center gap-1 min-h-6 py-0.5;
   }
 
   .cp-back-link .cp-icon {
@@ -662,5 +733,39 @@
 
   .cp-row-highlighted {
     @apply outline outline-2 outline-cp-accent;
+  }
+
+  /* cp-table-link: a plain hostname/entity link inside a <td>, used
+     where no other link styling class applies (alerts history table,
+     costs table) — an unstyled <a> defaults to inline sizing with no
+     padding, which is both visually inconsistent with this app's
+     other links and fails WCAG 2.2 AA 2.5.8's 24x24 target-size
+     minimum (its box is exactly the text's line-height tall). */
+  .cp-table-link {
+    @apply inline-flex items-center min-h-6 py-0.5 text-[rgb(var(--link))] no-underline hover:underline;
+  }
+
+  /* Mobile navbar overflow menu (SPEC-v0.7 §5, < 640px): Theme/
+     Settings/Add agent move into .cp-navbar-overflow-btn's dropdown
+     instead of each rendering its own always-visible navbar icon
+     button — bell and the user menu stay visible at every width.
+     Declared at the very end of this @layer block (rather than
+     alongside .cp-navbar-actions above) so this display override
+     reliably wins the cascade regardless of any other same-layer
+     rule's own position: Tailwind's @layer components/base gives
+     single-class selectors identical specificity, so source order is
+     the only tie-breaker, and .cp-icon-btn/.cp-btn's own
+     unconditional `display` would otherwise beat an earlier-declared
+     override. The two-class selectors below add a small specificity
+     margin as a second line of defense against a future reordering
+     of this file breaking the same way again. */
+  .cp-icon-btn.cp-navbar-theme-btn,
+  .cp-icon-btn.cp-navbar-settings-link,
+  .cp-btn.cp-navbar-primary-btn {
+    @apply hidden sm:inline-flex;
+  }
+
+  .cp-icon-btn.cp-navbar-overflow-btn {
+    @apply inline-flex sm:hidden;
   }
 }

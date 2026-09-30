@@ -29,4 +29,12 @@
   .cp-updates-job-reason {
     @apply text-[rgb(var(--muted))];
   }
+
+  .cp-updates-capability {
+    @apply flex flex-col items-start gap-1.5 min-w-[180px];
+  }
+
+  .cp-updates-manual-command {
+    @apply flex items-center gap-1.5 flex-wrap max-w-full;
+  }
 }

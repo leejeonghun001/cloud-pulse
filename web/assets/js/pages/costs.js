@@ -259,7 +259,7 @@ function hostCostTable(hosts, displayCurrency) {
 
 function hostCostRow(h, displayCurrency) {
   const row = el("tr");
-  row.append(el("td", { children: [el("a", { text: h.hostname, attrs: { href: `#/host/${encodeURIComponent(h.host_id)}` } })] }));
+  row.append(el("td", { children: [el("a", { class: "cp-table-link", text: h.hostname, attrs: { href: `#/host/${encodeURIComponent(h.host_id)}` } })] }));
   row.append(el("td", { children: h.provider ? [providerBadge(h.provider)] : [el("span", { class: "cp-muted-small", text: "—" })] }));
 
   const amounts = hostCostDisplayAmounts(h, displayCurrency);

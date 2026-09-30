@@ -644,6 +644,75 @@ export function getAuditEntries(params = {}, signal) {
   return apiFetch(`/api/v1/audit${suffix}`, { signal });
 }
 
+// ---------------------------------------------------------------------------
+// Storage-usage accounts (SPEC-v0.7 §3): Google Drive device flow +
+// Dropbox PKCE, quota snapshots, polling interval.
+// ---------------------------------------------------------------------------
+
+/** getStorageAccounts fetches GET /api/v1/storage/accounts (session or
+ * API token); secrets are redacted by the hub. */
+export function getStorageAccounts(signal) {
+  return apiFetch("/api/v1/storage/accounts", { signal });
+}
+
+/**
+ * createStorageAccount calls POST /api/v1/storage/accounts (admin).
+ * @param {{provider: "googledrive"|"dropbox", name: string, config: Object<string,string>, secret?: Object<string,string>}} body
+ */
+export function createStorageAccount(body, signal) {
+  return apiFetch("/api/v1/storage/accounts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+}
+
+/** deleteStorageAccount calls DELETE /api/v1/storage/accounts/{id} (admin). */
+export function deleteStorageAccount(id, signal) {
+  return apiFetch(`/api/v1/storage/accounts/${encodeURIComponent(id)}`, { method: "DELETE", signal });
+}
+
+/** startStorageAccountOAuth calls POST /api/v1/storage/accounts/{id}/oauth/start
+ * (admin). Returns models.StorageOAuthStartResponse (device or pkce flow). */
+export function startStorageAccountOAuth(id, signal) {
+  return apiFetch(`/api/v1/storage/accounts/${encodeURIComponent(id)}/oauth/start`, { method: "POST", signal });
+}
+
+/**
+ * completeStorageAccountOAuth calls POST
+ * /api/v1/storage/accounts/{id}/oauth/complete (admin). code is only
+ * meaningful for the Dropbox PKCE flow; omit it to poll the Google
+ * device-flow status. Returns models.StorageOAuthCompleteResponse.
+ * @param {string|number} id
+ * @param {string} [code]
+ */
+export function completeStorageAccountOAuth(id, code, signal) {
+  return apiFetch(`/api/v1/storage/accounts/${encodeURIComponent(id)}/oauth/complete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(code ? { code } : {}),
+    signal,
+  });
+}
+
+/** refreshStorageAccounts calls POST /api/v1/storage/refresh (admin);
+ * rate-limited to once per minute (429 rate_limited otherwise). */
+export function refreshStorageAccounts(signal) {
+  return apiFetch("/api/v1/storage/refresh", { method: "POST", signal });
+}
+
+/** setStorageInterval calls PUT /api/v1/settings/storage/interval
+ * (admin) with one of "15m"|"1h"|"6h"|"24h". */
+export function setStorageInterval(interval, signal) {
+  return apiFetch("/api/v1/settings/storage/interval", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ interval }),
+    signal,
+  });
+}
+
 /**
  * withToastOnError wraps an async action, showing an error toast for
  * any thrown ApiError/RateLimitError that isn't already handled by the

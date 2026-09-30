@@ -84,10 +84,11 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
     applyTheme(next);
     renderThemeIcon();
   });
+  themeBtn.classList.add("cp-navbar-theme-btn");
   actions.append(themeBtn);
 
   const settingsLink = el("a", {
-    class: "cp-icon-btn",
+    class: "cp-icon-btn cp-navbar-settings-link",
     attrs: { href: "#/settings", "aria-label": "Settings" },
   });
   settingsLink.append(icon("settings"));
@@ -135,6 +136,48 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
   addAgentBtn.append(icon("plus"), el("span", { text: "Add agent" }));
   addAgentBtn.addEventListener("click", () => onAddAgent());
   actions.append(addAgentBtn);
+
+  // Mobile overflow menu (< 640px, SPEC-v0.7 §5): consolidates Theme,
+  // Settings, and Add agent into a single dropdown so the navbar's
+  // primary row fits at a 360px viewport without horizontal overflow —
+  // .cp-navbar-theme-btn/.cp-navbar-settings-link/.cp-navbar-primary-btn
+  // hide at that breakpoint (see web/src/base.css), this button (and
+  // its mirror actions) only shows there. Bell and user-menu stay
+  // visible at every width as the two most frequently needed actions.
+  const overflowBtn = /** @type {HTMLButtonElement} */ (
+    el("button", { class: "cp-icon-btn cp-navbar-overflow-btn", attrs: { type: "button", "aria-label": "More actions" } })
+  );
+  overflowBtn.append(icon("ellipsisVertical"));
+  actions.append(overflowBtn);
+  createDropdown({
+    trigger: overflowBtn,
+    buildMenu: () => {
+      const frag = document.createDocumentFragment();
+      frag.append(
+        dropdownItem({
+          label: "Add agent",
+          icon: icon("plus"),
+          onClick: () => onAddAgent(),
+        }),
+        dropdownItem({
+          label: "Toggle theme",
+          icon: icon("monitor"),
+          onClick: () => {
+            const next = cycleTheme(getStoredTheme());
+            setStoredTheme(next);
+            applyTheme(next);
+            renderThemeIcon();
+          },
+        }),
+        dropdownItem({
+          label: "Settings",
+          icon: icon("settings"),
+          onClick: () => { globalThis.location.hash = "#/settings"; },
+        }),
+      );
+      return frag;
+    },
+  });
 
   navbar.append(actions);
   header.append(navbar);
@@ -232,23 +275,59 @@ function buildBellMenu(events) {
  * directly; it does not fetch the token itself, keeping shell.js free
  * of the admin-token endpoint dependency — reuse the settings page's
  * agent-enrollment card for the fetch+reveal flow.
- * @param {string} installCommand
+ *
+ * @param {string} installCommand Fallback single command (pre-v0.7.0
+ *   shape, or used directly when installCommands is omitted/empty).
+ * @param {Array<{os: string, label: string, command: string}>} [installCommands]
+ *   Per-OS one-liners (SPEC-v0.7 §1). When present, renders one tab
+ *   per OS instead of a single fixed command.
  */
-export function openAddAgentDialog(installCommand) {
+export function openAddAgentDialog(installCommand, installCommands) {
   const { body, open } = createDialog({
     titleId: "cp-add-agent-title",
     title: "Add an agent",
     description: "Run this on the host you want to monitor:",
     wide: true,
   });
+
+  const tabs = Array.isArray(installCommands) && installCommands.length > 0
+    ? installCommands
+    : [{ os: "linux", label: "Linux / macOS", command: installCommand }];
+
+  const tabList = el("div", { class: "cp-btn-group", attrs: { role: "tablist", "aria-label": "Operating system" } });
   const pre = el("pre", { class: "cp-code-block cp-code-block-wrap" });
-  pre.append(el("code", { text: installCommand }));
+  const code = el("code", { text: tabs[0].command });
+  pre.append(code);
+
+  let activeCommand = tabs[0].command;
+  const tabButtons = tabs.map((tab, index) =>
+    el("button", {
+      class: `cp-btn cp-btn-secondary${index === 0 ? " cp-btn-secondary-active" : ""}`,
+      attrs: { type: "button", role: "tab", "aria-selected": index === 0 ? "true" : "false" },
+      text: tab.label,
+    }),
+  );
+  tabButtons.forEach((btn, index) => {
+    btn.addEventListener("click", () => {
+      activeCommand = tabs[index].command;
+      code.textContent = activeCommand;
+      tabButtons.forEach((b, i) => {
+        b.classList.toggle("cp-btn-secondary-active", i === index);
+        b.setAttribute("aria-selected", i === index ? "true" : "false");
+      });
+    });
+    tabList.append(btn);
+  });
+
+  if (tabs.length > 1) {
+    body.append(tabList);
+  }
   body.append(pre);
 
   const copyBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" }, text: "Copy command" });
   copyBtn.addEventListener("click", async () => {
     try {
-      await globalThis.navigator.clipboard.writeText(installCommand);
+      await globalThis.navigator.clipboard.writeText(activeCommand);
       showToast({ message: "Install command copied.", variant: "success" });
     } catch {
       showToast({ message: "Could not copy automatically — select and copy manually.", variant: "error" });

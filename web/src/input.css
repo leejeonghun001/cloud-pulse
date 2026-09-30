@@ -16,6 +16,7 @@
 @import "./pages/costs.css";
 @import "./pages/updates.css";
 @import "./pages/settings-billing.css";
+@import "./pages/settings-storage.css";
 
 /* ------------------------------------------------------------------ */
 /* Legacy dashboard component classes (ported as-is from v0.3.2).      */
@@ -67,8 +68,16 @@
     @apply bg-cp-accent border-cp-accent-strong text-white;
   }
 
+  .cp-btn-group {
+    @apply flex flex-wrap gap-2 mb-3;
+  }
+
+  .cp-btn-secondary-active {
+    @apply bg-cp-accent border-cp-accent-strong text-white;
+  }
+
   .cp-egress-row-head a {
-    @apply text-sm font-medium text-cp-accent hover:underline;
+    @apply text-sm font-medium text-[rgb(var(--link))] hover:underline;
   }
 
   .cp-host-detail-meta {

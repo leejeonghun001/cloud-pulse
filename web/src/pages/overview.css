@@ -113,7 +113,7 @@
   }
 
   .cp-systems-row-link {
-    @apply flex items-center gap-2 text-[rgb(var(--text))] no-underline;
+    @apply flex items-center gap-2 text-[rgb(var(--text))] no-underline min-h-6 py-0.5;
   }
 
   .cp-systems-row {
@@ -209,7 +209,7 @@
   }
 
   .cp-host-card-offline-note {
-    @apply text-xs text-cp-exceeded;
+    @apply text-xs text-red-600 dark:text-red-400;
   }
 
   .cp-metric-row {
@@ -278,6 +278,12 @@
 
   .cp-egress-top-row {
     @apply flex flex-wrap items-center justify-between gap-3;
+  }
+
+  /* Host-name links in monthly-traffic rows: WCAG 2.2 2.5.8 minimum
+     24x24 target (these are standalone links, not inline text). */
+  .cp-egress-row-head a {
+    @apply inline-flex items-center min-h-6;
   }
 
   .cp-segmented {
@@ -377,7 +383,7 @@
   }
 
   .cp-collector-error {
-    @apply text-xs text-cp-exceeded;
+    @apply text-xs text-red-600 dark:text-red-400;
   }
 
   .cp-summary-host {

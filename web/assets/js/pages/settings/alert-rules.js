@@ -18,6 +18,7 @@ import {
   previewAlertRule,
   getNotifyChannels,
   getHosts,
+  getStorageAccounts,
   ApiError,
 } from "../../core/api.js";
 import {
@@ -29,6 +30,7 @@ import {
   validateRuleForm,
   durationSecFromParts,
   bestDurationParts,
+  isStorageScopedMetric,
 } from "../../core/alerts.js";
 
 const DURATION_UNITS = [
@@ -51,12 +53,13 @@ export function mountAlertRulesSection(container, { announce }) {
   async function refresh() {
     clearChildren(container);
 
-    let rules, channels, hostsResp;
+    let rules, channels, hostsResp, storageAccountsResp;
     try {
-      [rules, channels, hostsResp] = await Promise.all([
+      [rules, channels, hostsResp, storageAccountsResp] = await Promise.all([
         getAlertRules(controller.signal),
         getNotifyChannels(controller.signal),
         getHosts(controller.signal),
+        getStorageAccounts(controller.signal).catch(() => ({ accounts: [] })),
       ]);
     } catch (err) {
       if (err?.name === "AbortError") return;
@@ -65,7 +68,8 @@ export function mountAlertRulesSection(container, { announce }) {
     }
 
     const hosts = (hostsResp.hosts || []).map((h) => ({ id: h.host.id, hostname: h.host.hostname }));
-    container.append(rulesCard({ rules, channels, hosts, signal: controller.signal, announce, onChanged: refresh }));
+    const storageAccounts = (storageAccountsResp.accounts || []).map((a) => ({ id: String(a.id), name: a.name }));
+    container.append(rulesCard({ rules, channels, hosts, storageAccounts, signal: controller.signal, announce, onChanged: refresh }));
   }
 
   function teardown() {
@@ -75,13 +79,13 @@ export function mountAlertRulesSection(container, { announce }) {
   return { refresh, teardown };
 }
 
-function rulesCard({ rules, channels, hosts, signal, announce, onChanged }) {
+function rulesCard({ rules, channels, hosts, storageAccounts, signal, announce, onChanged }) {
   const card = el("div", { class: "cp-card" });
   const head = el("div", { class: "cp-metric-head" });
   head.append(el("h2", { class: "cp-card-title", text: "Alert rules" }));
   const addBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" } });
   addBtn.append(icon("plus"), el("span", { text: "Add rule" }));
-  addBtn.addEventListener("click", () => openRuleDialog({ channels, hosts, signal, announce, onChanged }));
+  addBtn.addEventListener("click", () => openRuleDialog({ channels, hosts, storageAccounts, signal, announce, onChanged }));
   head.append(addBtn);
   card.append(head);
 
@@ -98,16 +102,17 @@ function rulesCard({ rules, channels, hosts, signal, announce, onChanged }) {
 
   const hostnameByID = (id) => hosts.find((h) => h.id === id)?.hostname;
   const channelNameByID = (id) => channels.find((c) => c.id === id)?.name;
+  const storageAccountNameByID = (id) => storageAccounts.find((a) => a.id === id)?.name;
 
   const list = el("ul", { class: "cp-rule-list", attrs: { role: "list" } });
   for (const rule of rules) {
-    list.append(ruleRow({ rule, channels, hosts, hostnameByID, channelNameByID, signal, announce, onChanged }));
+    list.append(ruleRow({ rule, channels, hosts, storageAccounts, hostnameByID, channelNameByID, storageAccountNameByID, signal, announce, onChanged }));
   }
   card.append(list);
   return card;
 }
 
-function ruleRow({ rule, channels, hosts, hostnameByID, channelNameByID, signal, announce, onChanged }) {
+function ruleRow({ rule, channels, hosts, storageAccounts, hostnameByID, channelNameByID, storageAccountNameByID, signal, announce, onChanged }) {
   const row = el("li", { class: "cp-rule-row" });
   const top = el("div", { class: "cp-rule-row-top" });
   top.append(statusDot(rule.enabled ? "up" : "down"));
@@ -115,12 +120,12 @@ function ruleRow({ rule, channels, hosts, hostnameByID, channelNameByID, signal,
   top.append(el("span", { class: `cp-chip ${rule.enabled ? "cp-chip-ok" : "cp-chip-other"}`, text: rule.enabled ? "Enabled" : "Disabled" }));
   row.append(top);
 
-  row.append(el("p", { class: "cp-muted-small", text: ruleSummarySentence(rule, { hostnameByID, channelNameByID }) }));
+  row.append(el("p", { class: "cp-muted-small", text: ruleSummarySentence(rule, { hostnameByID, channelNameByID, storageAccountNameByID }) }));
 
   const actions = el("div", { class: "cp-rule-row-actions" });
   const editBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button" } });
   editBtn.append(icon("pencil"), el("span", { text: "Edit" }));
-  editBtn.addEventListener("click", () => openRuleDialog({ rule, channels, hosts, signal, announce, onChanged }));
+  editBtn.addEventListener("click", () => openRuleDialog({ rule, channels, hosts, storageAccounts, signal, announce, onChanged }));
 
   const deleteBtn = el("button", { class: "cp-btn cp-btn-danger cp-btn-sm", attrs: { type: "button" } });
   deleteBtn.append(icon("trash"), el("span", { text: "Delete" }));
@@ -147,11 +152,13 @@ function ruleRow({ rule, channels, hosts, hostnameByID, channelNameByID, signal,
  * @param {Object} [opts.rule] existing models.AlertRule (edit mode)
  * @param {Object[]} opts.channels
  * @param {Object[]} opts.hosts
+ * @param {Object[]} [opts.storageAccounts] {id, name} pairs for the
+ *   storage_usage_pct metric's account-scoped selector
  * @param {AbortSignal} opts.signal
  * @param {(text: string) => void} [opts.announce]
  * @param {() => void} opts.onChanged
  */
-function openRuleDialog({ rule, channels, hosts, signal, announce, onChanged }) {
+function openRuleDialog({ rule, channels, hosts, storageAccounts = [], signal, announce, onChanged }) {
   const isEdit = Boolean(rule);
   const { dialog, body, open, close } = createDialog({
     titleId: "cp-rule-dialog-title",
@@ -178,6 +185,7 @@ function openRuleDialog({ rule, channels, hosts, signal, announce, onChanged }) 
   };
 
   const hostnameByID = (id) => hosts.find((h) => h.id === id)?.hostname;
+  const storageAccountNameByID = (id) => storageAccounts.find((a) => a.id === id)?.name;
   const channelNameByID = (id) => channels.find((c) => c.id === id)?.name;
 
   // --- Presets (add mode only) ---
@@ -222,13 +230,13 @@ function openRuleDialog({ rule, channels, hosts, signal, announce, onChanged }) 
       channel_ids: draft.channelIDs,
     };
     summaryHost.append(
-      el("p", { class: "cp-rule-summary-sentence", text: ruleSummarySentence(rulePreview, { hostnameByID, channelNameByID }) }),
+      el("p", { class: "cp-rule-summary-sentence", text: ruleSummarySentence(rulePreview, { hostnameByID, channelNameByID, storageAccountNameByID }) }),
     );
   }
 
   function rerenderForm() {
     clearChildren(formHost);
-    formHost.append(buildRuleForm(draft, hosts, channels, updateSummary));
+    formHost.append(buildRuleForm(draft, hosts, storageAccounts, channels, updateSummary, rerenderForm));
     updateSummary();
   }
   rerenderForm();
@@ -312,7 +320,7 @@ function openRuleDialog({ rule, channels, hosts, signal, announce, onChanged }) 
   open();
 }
 
-function buildRuleForm(draft, hosts, channels, onChange) {
+function buildRuleForm(draft, hosts, storageAccounts, channels, onChange, onFullChange = onChange) {
   const frag = document.createDocumentFragment();
 
   const nameField = el("div", { class: "cp-field" });
@@ -345,11 +353,15 @@ function buildRuleForm(draft, hosts, channels, onChange) {
   });
   metricSelect.addEventListener("change", () => {
     draft.metric = metricSelect.value;
-    onChange();
+    draft.hostID = "";
+    onFullChange();
   });
   row1.append(metricNode);
 
-  const hostOptions = [{ value: "", label: "All hosts" }, ...hosts.map((h) => ({ value: h.id, label: h.hostname }))];
+  const scopeIsStorage = isStorageScopedMetric(draft.metric);
+  const hostOptions = scopeIsStorage
+    ? [{ value: "", label: "All connected storage accounts" }, ...storageAccounts.map((a) => ({ value: a.id, label: a.name }))]
+    : [{ value: "", label: "All hosts" }, ...hosts.map((h) => ({ value: h.id, label: h.hostname }))];
   const { node: hostNode, select: hostSelect } = selectField({
     id: "cp-rule-host",
     label: "Scope",

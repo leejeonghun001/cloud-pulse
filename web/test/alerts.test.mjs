@@ -13,6 +13,8 @@ import {
   formatThreshold,
   formatDurationShort,
   hostScopeLabel,
+  scopeLabel,
+  isStorageScopedMetric,
   channelsLabel,
   ruleSummarySentence,
   presetByID,
@@ -23,7 +25,7 @@ import {
 
 test("METRICS/OPERATORS cover every models enum value", () => {
   const values = METRICS.map((m) => m.value);
-  assert.deepEqual(values, ["cpu", "memory", "disk", "load1", "egress_out_pct", "egress_in_pct", "host_down"]);
+  assert.deepEqual(values, ["cpu", "memory", "disk", "load1", "egress_out_pct", "egress_in_pct", "host_down", "storage_usage_pct"]);
   assert.deepEqual(OPERATORS.map((o) => o.value), [">", ">="]);
 });
 
@@ -60,6 +62,10 @@ test("formatThreshold: host_down ignores threshold entirely", () => {
   assert.equal(formatThreshold("host_down", 999), "");
 });
 
+test("formatThreshold: storage_usage_pct is percent-of-quota", () => {
+  assert.equal(formatThreshold("storage_usage_pct", 90), "90% of quota");
+});
+
 test("formatDurationShort spells out a single unit", () => {
   assert.equal(formatDurationShort(0), "0 seconds");
   assert.equal(formatDurationShort(1), "1 second");
@@ -80,6 +86,23 @@ test("hostScopeLabel", () => {
   assert.equal(hostScopeLabel("host-1", () => "web-1"), "web-1");
   assert.equal(hostScopeLabel("host-1", () => undefined), "host-1");
   assert.equal(hostScopeLabel("host-1"), "host-1");
+});
+
+test("isStorageScopedMetric", () => {
+  assert.equal(isStorageScopedMetric("storage_usage_pct"), true);
+  assert.equal(isStorageScopedMetric("cpu"), false);
+  assert.equal(isStorageScopedMetric("host_down"), false);
+});
+
+test("scopeLabel: non-storage metric delegates to hostScopeLabel", () => {
+  assert.equal(scopeLabel("cpu", "", () => "web-1"), "any host");
+  assert.equal(scopeLabel("cpu", "host-1", () => "web-1"), "web-1");
+});
+
+test("scopeLabel: storage_usage_pct uses storageAccountNameByID", () => {
+  assert.equal(scopeLabel("storage_usage_pct", "", undefined, (id) => `acct-${id}`), "any connected storage account");
+  assert.equal(scopeLabel("storage_usage_pct", "3", undefined, (id) => (id === "3" ? "drive@example.com" : undefined)), "drive@example.com");
+  assert.equal(scopeLabel("storage_usage_pct", "3", undefined, () => undefined), "3");
 });
 
 test("channelsLabel", () => {
@@ -122,6 +145,21 @@ test("ruleSummarySentence: host_down, scoped host", () => {
   assert.equal(sentence, "Alert when web-1 goes offline for 2 minutes → no channels");
 });
 
+test("ruleSummarySentence: storage_usage_pct uses storageAccountNameByID for scope", () => {
+  const rule = { metric: "storage_usage_pct", host_id: "3", operator: ">", threshold: 90, duration_sec: 0, channel_ids: [1] };
+  const sentence = ruleSummarySentence(rule, {
+    channelNameByID: () => "Discord #ops",
+    storageAccountNameByID: (id) => (id === "3" ? "drive@example.com" : undefined),
+  });
+  assert.equal(sentence, "Alert when storage account usage on drive@example.com is above 90% of quota → Discord #ops");
+});
+
+test("ruleSummarySentence: storage_usage_pct with no scope means any account", () => {
+  const rule = { metric: "storage_usage_pct", host_id: "", operator: ">", threshold: 90, duration_sec: 0, channel_ids: [] };
+  const sentence = ruleSummarySentence(rule);
+  assert.equal(sentence, "Alert when storage account usage on any connected storage account is above 90% of quota → no channels");
+});
+
 test("PRESETS: every preset id is unique and rule is well-formed", () => {
   const ids = PRESETS.map((p) => p.id);
   assert.equal(new Set(ids).size, ids.length);
@@ -133,7 +171,7 @@ test("PRESETS: every preset id is unique and rule is well-formed", () => {
   }
 });
 
-test("PRESETS covers every SPEC-v0.5 preset sentence", () => {
+test("PRESETS covers every SPEC-v0.5/v0.7 preset sentence", () => {
   const labels = PRESETS.map((p) => p.label);
   assert.deepEqual(labels, [
     "CPU above 90% for 5 minutes",
@@ -142,6 +180,7 @@ test("PRESETS covers every SPEC-v0.5 preset sentence", () => {
     "Outbound traffic above 80% of limit",
     "Inbound traffic above 80% of limit",
     "Host offline for 2 minutes",
+    "Storage account above 90% of quota",
   ]);
 });
 
