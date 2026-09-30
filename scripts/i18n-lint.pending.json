@@ -6,7 +6,6 @@
     "web/assets/js/pages/settings/billing.js",
     "web/assets/js/pages/settings/network.js",
     "web/assets/js/pages/settings/notifications.js",
-    "web/assets/js/pages/settings/security.js",
     "web/assets/js/pages/settings/storage.js",
     "web/assets/js/pages/updates.js"
   ]

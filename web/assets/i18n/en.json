@@ -449,6 +449,26 @@
     "provider_other": "other",
     "up_to_date": "up to date"
   },
+  "security": {
+    "change_password_title": "Change password",
+    "change_password_description": "Signs you out of every other session on success.",
+    "update_password": "Update password",
+    "password_updated_toast": "Password updated. Other sessions were signed out.",
+    "active_sessions_title": "Active sessions",
+    "failed_to_load_sessions": "Failed to load sessions: {reason}",
+    "sign_out_other_sessions": "Sign out other sessions",
+    "signed_out_sessions": { "one": "Signed out {count} other session.", "other": "Signed out {count} other sessions." },
+    "revoke_failed": "Failed: {reason}",
+    "no_active_sessions": "No active sessions.",
+    "col_session": "Session",
+    "col_created": "Created",
+    "col_last_seen": "Last seen",
+    "col_expires": "Expires",
+    "col_remote": "Remote",
+    "this_session": "{id} (this session)",
+    "api_token_title": "API token",
+    "api_token_description": "CP_UI_TOKEN is an optional static bearer token for scripts and CI (curl, agents don't use it) — full read/admin access, never subject to the must-change-password gate. It never bypasses this dashboard's own sign-in. Set or rotate it in hub.env and restart the service."
+  },
   "health": {
     "title": "Health"
   },

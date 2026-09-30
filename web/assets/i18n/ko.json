@@ -449,6 +449,26 @@
     "provider_other": "기타",
     "up_to_date": "최신 버전"
   },
+  "security": {
+    "change_password_title": "비밀번호 변경",
+    "change_password_description": "변경에 성공하면 다른 모든 세션에서 로그아웃됩니다.",
+    "update_password": "비밀번호 변경",
+    "password_updated_toast": "비밀번호가 변경되었습니다. 다른 세션은 로그아웃되었습니다.",
+    "active_sessions_title": "활성 세션",
+    "failed_to_load_sessions": "세션 목록을 불러오지 못했습니다: {reason}",
+    "sign_out_other_sessions": "다른 세션 로그아웃",
+    "signed_out_sessions": { "one": "다른 세션 {count}개를 로그아웃했습니다.", "other": "다른 세션 {count}개를 로그아웃했습니다." },
+    "revoke_failed": "실패: {reason}",
+    "no_active_sessions": "활성 세션이 없습니다.",
+    "col_session": "세션",
+    "col_created": "생성 시각",
+    "col_last_seen": "마지막 확인",
+    "col_expires": "만료",
+    "col_remote": "원격 주소",
+    "this_session": "{id} (현재 세션)",
+    "api_token_title": "API 토큰",
+    "api_token_description": "CP_UI_TOKEN은 스크립트와 CI를 위한 선택적 고정 베어러 토큰입니다(curl 용도, 에이전트는 사용하지 않음) — 전체 읽기/관리 권한을 가지며 비밀번호 변경 강제 정책의 대상이 아닙니다. 이 대시보드 자체의 로그인을 우회하지는 않습니다. hub.env에서 설정하거나 교체한 뒤 서비스를 재시작하세요."
+  },
   "health": {
     "title": "상태"
   },
