@@ -117,6 +117,8 @@ FLAG_ALLOWLIST = {
     # a cmd/*.go flag.* call):
     "--expect",
     "--password-file",
+    "--root",
+    "--systemctl",
 }
 
 MARKDOWN_LINK_EXCLUDE_SCHEMES = ("http://", "https://", "mailto:", "//")
