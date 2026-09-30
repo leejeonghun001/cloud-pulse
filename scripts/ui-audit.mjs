@@ -53,6 +53,11 @@ import {
   aggregateReport,
 } from "./ui-audit-lib.mjs";
 
+// BROWSER_START_TIMEOUT_MS bounds how long to wait for Firefox's WebDriver
+// BiDi endpoint. Cold starts on CI runners (fresh profile) can exceed 20 s;
+// override with CP_UI_AUDIT_BROWSER_START_MS.
+const BROWSER_START_TIMEOUT_MS = Number(process.env.CP_UI_AUDIT_BROWSER_START_MS) || 90_000;
+
 const DEFAULT_ROUTES = ["#/login", "#/", "#/alerts", "#/costs", "#/updates"];
 const SETTINGS_SECTIONS = [
   "general",
@@ -176,7 +181,24 @@ class BidiSession {
     this.cspViolations = [];
   }
 
-  async start() {
+  // start opens the BiDi session, retrying once with a fresh profile: a
+  // cold Firefox start on a CI runner occasionally misses the deadline.
+  async start(attempts = 2) {
+    let lastErr = null;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        await this._startOnce();
+        return;
+      } catch (err) {
+        lastErr = err;
+        try { this.ff?.kill("SIGKILL"); } catch { /* already exited */ }
+        process.stderr.write(`firefox start attempt ${attempt}/${attempts} failed: ${String(err.message).split("\n")[0]}\n`);
+      }
+    }
+    throw lastErr;
+  }
+
+  async _startOnce() {
     this.profile = mkdtempSync(join(tmpdir(), "cp-ui-audit-"));
     const port = await freePort();
     this.ff = spawn(
@@ -195,7 +217,8 @@ class BidiSession {
     });
 
     let ws = null;
-    for (let i = 0; i < 200 && !ws && !exited; i++) {
+    const startDeadline = Date.now() + BROWSER_START_TIMEOUT_MS;
+    while (!ws && !exited && Date.now() < startDeadline) {
       if (/WebDriver BiDi listening/.test(stderr)) {
         ws = new WebSocket(`ws://127.0.0.1:${port}/session`);
         await new Promise((res, rej) => {
