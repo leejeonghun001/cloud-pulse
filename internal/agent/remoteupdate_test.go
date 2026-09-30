@@ -8,10 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
+	"github.com/leejeonghun001/cloud-pulse/internal/updatepaths"
 )
 
 func TestResolveRemoteUpdateCapability(t *testing.T) {
@@ -19,7 +21,14 @@ func TestResolveRemoteUpdateCapability(t *testing.T) {
 
 	dirInfo := fakeFileInfo{dir: true}
 	missing := func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
-	present := func(string) (os.FileInfo, error) { return dirInfo, nil }
+	// present reports the real file types: the launchd helper is a regular
+	// file, every other probed path is a directory.
+	present := func(path string) (os.FileInfo, error) {
+		if path == darwinUpdateHelperPlist {
+			return fakeFileInfo{dir: false}, nil
+		}
+		return dirInfo, nil
+	}
 
 	tests := []struct {
 		name, goos string
@@ -298,5 +307,70 @@ func writeResultFixtureAt(t *testing.T, path string, rf resultFile) {
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil { //nolint:gosec // test fixture
 		t.Fatalf("write fixture %s: %v", path, err)
+	}
+}
+
+// realisticStat maps absolute probe paths onto a temp tree so the probe sees
+// real file types: the launchd helper plist is a regular FILE and the request
+// directory is a DIRECTORY. (The table test above uses one fake FileInfo for
+// every path, which hid a probe that required the plist to be a directory.)
+func realisticStat(t *testing.T, files, dirs []string) func(string) (os.FileInfo, error) {
+	t.Helper()
+	root := t.TempDir()
+	mapped := map[string]string{}
+	for i, f := range files {
+		p := filepath.Join(root, "f"+strconv.Itoa(i))
+		if err := os.WriteFile(p, []byte("<plist/>"), 0o644); err != nil {
+			t.Fatalf("write fixture: %v", err)
+		}
+		mapped[f] = p
+	}
+	for i, d := range dirs {
+		p := filepath.Join(root, "d"+strconv.Itoa(i))
+		if err := os.Mkdir(p, 0o750); err != nil {
+			t.Fatalf("mkdir fixture: %v", err)
+		}
+		mapped[d] = p
+	}
+	return func(path string) (os.FileInfo, error) {
+		if p, ok := mapped[path]; ok {
+			return os.Stat(p)
+		}
+		return nil, os.ErrNotExist
+	}
+}
+
+func TestResolveRemoteUpdateCapability_DarwinRealFileTypes(t *testing.T) {
+	t.Parallel()
+	paths, ok := updatepaths.For("darwin")
+	if !ok {
+		t.Fatal("updatepaths.For(darwin) not supported")
+	}
+	tests := []struct {
+		name        string
+		files, dirs []string
+		want        bool
+	}{
+		{"helper plist file + request dir", []string{darwinUpdateHelperPlist}, []string{paths.RequestDir}, true},
+		{"helper plist missing", nil, []string{paths.RequestDir}, false},
+		{"request dir missing", []string{darwinUpdateHelperPlist}, nil, false},
+		{"helper path is a directory, not a plist", nil, []string{darwinUpdateHelperPlist, paths.RequestDir}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := resolveRemoteUpdateCapabilityWithProbe(true, capabilityProbe{
+				goos:             "darwin",
+				statDir:          realisticStat(t, tc.files, tc.dirs),
+				isWindowsService: func() bool { return false },
+				writableDir:      func(string) bool { return false },
+			})
+			if got.Supported != tc.want {
+				t.Fatalf("Supported = %v, want %v (%+v)", got.Supported, tc.want, got)
+			}
+			if got.Platform != "darwin" {
+				t.Fatalf("Platform = %q, want darwin", got.Platform)
+			}
+		})
 	}
 }

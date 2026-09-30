@@ -117,7 +117,7 @@ func remoteUpdateMechanismPresent(goos string, paths updatepaths.Paths, probe ca
 	case "linux":
 		return probeDirectory(probe.statDir, "/run/systemd/system")
 	case "darwin":
-		return probeDirectory(probe.statDir, "/Library/LaunchDaemons/com.cloudpulse.agent-update.plist") &&
+		return probeRegularFile(probe.statDir, darwinUpdateHelperPlist) &&
 			probeDirectory(probe.statDir, paths.RequestDir)
 	case "windows":
 		// The virtual service account can write the request directory but does
@@ -129,6 +129,17 @@ func remoteUpdateMechanismPresent(goos string, paths updatepaths.Paths, probe ca
 	default:
 		return false
 	}
+}
+
+// darwinUpdateHelperPlist is the privileged launchd job that consumes
+// update requests on macOS (installed by install-agent.sh --remote-update).
+const darwinUpdateHelperPlist = "/Library/LaunchDaemons/com.cloudpulse.agent-update.plist"
+
+// probeRegularFile reports whether path exists and is a regular file (the
+// launchd helper plist is a file, not a directory).
+func probeRegularFile(statDir func(string) (os.FileInfo, error), path string) bool {
+	info, err := statDir(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
 func probeDirectory(statDir func(string) (os.FileInfo, error), dir string) bool {
