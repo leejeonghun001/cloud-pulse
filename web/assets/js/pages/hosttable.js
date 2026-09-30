@@ -26,14 +26,18 @@ export const COLUMNS = [
   { key: "inbound", label: "Inbound (mo.)", sortable: true, alwaysVisible: false },
   { key: "load", label: "Load", sortable: true, alwaysVisible: false },
   { key: "containers", label: "Containers", sortable: true, alwaysVisible: false },
+  { key: "cost", label: "Est. cost", sortable: true, alwaysVisible: false },
   { key: "agent", label: "Agent", sortable: false, alwaysVisible: false },
   { key: "lastSeen", label: "Last seen", sortable: true, alwaysVisible: false },
 ];
 
-/** DEFAULT_VISIBLE_COLUMNS is the initial columns-dropdown selection
- * (every column shown by default). */
+/** DEFAULT_VISIBLE_COLUMNS is the initial columns-dropdown selection:
+ * every column shown by default except "cost" (SPEC-v0.6 §1's "선택
+ * 컬럼" — opt-in, since it requires cloud billing/pricing-plan setup
+ * most hubs won't have configured), which the user can enable via the
+ * columns dropdown. */
 export function defaultVisibleColumns() {
-  return COLUMNS.map((c) => c.key);
+  return COLUMNS.filter((c) => c.key !== "cost").map((c) => c.key);
 }
 
 /**
@@ -51,6 +55,7 @@ export const columnAccessors = {
   inbound: (row) => row.egress?.rx_bytes ?? 0,
   load: (row) => row.latest?.load1 ?? -1,
   containers: (row) => row.containers_running ?? -1,
+  cost: (row) => row.cost?.total_mtd ?? -1,
   lastSeen: (row) => row.last_seen ?? 0,
 };
 

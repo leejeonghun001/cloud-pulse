@@ -5,6 +5,8 @@
 // traffic card, and agent update card. Redesigned per SPEC-v0.4 §4 on
 // top of the v0.3.x data layer (zero feature loss).
 import { getHost, getHostMetrics, getHostInventory, ApiError } from "../core/api.js";
+import { formatDisplayAmount } from "../core/currency.js";
+import { loadDisplayCurrency } from "../core/display-currency.js";
 import { el, clearChildren, emptyState, errorBanner, egressDirectionRow, agentUpdatePanel, statusDot } from "../ui/components.js";
 import { selectField } from "../ui/select.js";
 import { icon } from "../ui/icons.js";
@@ -65,7 +67,8 @@ export function mountHostDetailPage(container, hostID, { announce, copyToClipboa
   const egressHost = el("div", { class: "cp-egress-host" });
   const inventoryHost = el("div", { class: "cp-inventory-host" });
   const agentUpdateHost = el("div", { class: "cp-agent-update-host" });
-  container.append(chartsHost, disksHost, egressHost, inventoryHost, agentUpdateHost);
+  const costHost = el("div", { class: "cp-host-cost-host" });
+  container.append(chartsHost, disksHost, egressHost, inventoryHost, agentUpdateHost, costHost);
 
   const onThemeChange = () => {
     if (state.lastSeries) {
@@ -90,6 +93,7 @@ export function mountHostDetailPage(container, hostID, { announce, copyToClipboa
       renderHostDetailHeader(headerHost, summary, Date.now(), { onRangeChange: handleRangeChange, onLayoutChange: handleLayoutChange, range: state.range, layout: state.layout });
       renderHostEgressCard(egressHost, hostID, summary.egress);
       renderAgentUpdatePanel(agentUpdateHost, summary.update, announce, copyToClipboard);
+      renderHostCostCard(costHost, summary.cost, summary.cost ? await loadDisplayCurrency(controller.signal) : null);
       if (summary.latest?.disks) {
         renderDisksTable(disksHost, summary.latest.disks);
       } else {
@@ -310,6 +314,43 @@ function renderAgentUpdatePanel(host, update, announce, copyToClipboard) {
     });
   }
   host.append(built.node);
+}
+
+/**
+ * renderHostCostCard builds the host detail "Cost" card (SPEC-v0.6 §1):
+ * the matched cloud-billing MTD/forecast plus the estimated network
+ * egress cost, rendered in the hub's display currency (SPEC-v0.6 §3).
+ * Renders nothing when the summary has no `cost` field (billing disabled).
+ * @param {HTMLElement} host
+ * @param {Object|null|undefined} cost a models.HostCost JSON object
+ * @param {Object|null|undefined} displayCurrency models.DisplayCurrencySettings
+ */
+function renderHostCostCard(host, cost, displayCurrency) {
+  clearChildren(host);
+  if (!cost) return;
+  const money = (v) => formatDisplayAmount(Number(v || 0), displayCurrency, { taxNote: false });
+
+  const card = el("div", { class: "cp-card cp-host-cost-card" });
+  card.append(el("h2", { text: "Cost" }));
+
+  if (cost.provider) {
+    if (cost.matched) {
+      card.append(el("p", { text: `Cloud billing (${cost.provider.toUpperCase()}): ${money(cost.cloud_mtd)} MTD · ${money(cost.cloud_forecast)} forecast` }));
+    } else {
+      card.append(el("p", { class: "cp-muted-small", text: `Cloud billing (${cost.provider.toUpperCase()}): account total only, not matched to this host.` }));
+    }
+  } else {
+    card.append(el("p", { class: "cp-muted-small", text: "No cloud billing match for this host." }));
+  }
+
+  if (cost.network_estimate?.plan_id) {
+    card.append(el("p", { text: `Network estimate (${cost.network_estimate.plan_name}): ${money(cost.network_estimate.mtd)} MTD · ${money(cost.network_estimate.projected)} projected` }));
+  } else {
+    card.append(el("p", { class: "cp-muted-small", text: "No pricing plan assigned for network cost estimation." }));
+  }
+
+  card.append(el("p", { class: "cp-muted-small", text: `Total: ${money(cost.total_mtd)} MTD · ${money(cost.total_forecast)} forecast. All amounts excl. tax.` }));
+  host.append(card);
 }
 
 /**

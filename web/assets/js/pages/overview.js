@@ -6,6 +6,8 @@
 // egress split, hub-override badges, update badges, buckets free tier,
 // 15s refresh + visibility pause + AbortController all preserved).
 import { getHosts, getEgress, getBuckets, ApiError } from "../core/api.js";
+import { formatDisplayAmount } from "../core/currency.js";
+import { loadDisplayCurrency } from "../core/display-currency.js";
 import {
   el,
   clearChildren,
@@ -115,11 +117,13 @@ export function mountOverviewPage(container, { announce }) {
 
   async function refresh() {
     try {
-      const [hostsResp, egressResp, bucketsResp] = await Promise.all([
+      const [hostsResp, egressResp, bucketsResp, displayCurrency] = await Promise.all([
         getHosts(controller.signal),
         getEgress(state.month, controller.signal),
         getBuckets(controller.signal),
+        loadDisplayCurrency(controller.signal),
       ]);
+      state.displayCurrency = displayCurrency;
       clearBanner();
 
       const nowMs = Date.now();
@@ -377,6 +381,7 @@ function buildTableRow(row, state) {
   if (visible("inbound")) tr.append(td(egressCell(row.egress, "in")));
   if (visible("load")) tr.append(td(el("span", { class: "cp-tabular", text: row.latest ? formatLoad(row.latest.load1) : "–" })));
   if (visible("containers")) tr.append(td(containersCell(row)));
+  if (visible("cost")) tr.append(td(costCell(row.cost, state.displayCurrency)));
   if (visible("agent")) tr.append(td(agentCell(row)));
   if (visible("lastSeen")) tr.append(td(el("span", { text: formatRelativeTimeFromUnixSeconds(row.last_seen, state.nowMs) })));
 
@@ -484,6 +489,24 @@ function containersCell(row) {
   wrap.append(icon("box"));
   wrap.append(el("span", { class: "cp-tabular", text: formatNumber(row.containers_running) }));
   return wrap;
+}
+
+/**
+ * costCell renders a host's combined cloud-billing + network-estimate
+ * MTD cost (SPEC-v0.6 §1's optional "Est. cost" column) in the hub's
+ * display currency (SPEC-v0.6 §3: USD, or KRW via the manual rate).
+ * The "excl. tax" note lives in the column header tooltip, not each cell.
+ * Dashes when the host has no cost data yet.
+ * @param {Object|null|undefined} cost models.HostCost
+ * @param {Object|null|undefined} displayCurrency models.DisplayCurrencySettings
+ */
+function costCell(cost, displayCurrency) {
+  if (!cost) return el("span", { class: "cp-muted-small", text: "–" });
+  return el("span", {
+    class: "cp-tabular",
+    text: formatDisplayAmount(Number(cost.total_mtd || 0), displayCurrency, { taxNote: false }),
+    attrs: { title: "Month-to-date estimate, excl. tax" },
+  });
 }
 
 function agentCell(row) {

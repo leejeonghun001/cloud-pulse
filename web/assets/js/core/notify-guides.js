@@ -80,7 +80,7 @@ export const CHANNEL_TYPES = [
     value: "webhook",
     label: "Webhook (generic)",
     fields: [
-      { key: "webhook_url", label: "Webhook URL", type: "password", placeholder: "https://hooks.example.com/…", secret: false, required: true },
+      { key: "url", label: "Webhook URL", type: "password", placeholder: "https://hooks.example.com/…", secret: false, required: true },
       { key: "include_image", label: "Include chart image (base64)", type: "checkbox", placeholder: "", secret: false, required: false },
     ],
     steps: [

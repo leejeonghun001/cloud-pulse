@@ -13,6 +13,9 @@
 @import "./pages/host.css";
 @import "./pages/settings.css";
 @import "./pages/alerts.css";
+@import "./pages/costs.css";
+@import "./pages/updates.css";
+@import "./pages/settings-billing.css";
 
 /* ------------------------------------------------------------------ */
 /* Legacy dashboard component classes (ported as-is from v0.3.2).      */
@@ -154,5 +157,9 @@
 
   .cp-agent-update-legacy-note {
     @apply border-t border-[rgb(var(--border))] pt-2 mt-1;
+  }
+
+  .cp-host-cost-card {
+    @apply gap-2;
   }
 }

@@ -15,6 +15,7 @@ import { mountAgentsSection } from "./agents.js";
 import { mountTrafficSection } from "./traffic.js";
 import { mountNotificationsSection } from "./notifications.js";
 import { mountAlertRulesSection } from "./alert-rules.js";
+import { mountBillingSection } from "./billing.js";
 
 /**
  * copyToClipboard copies text to the clipboard using the async
@@ -60,6 +61,7 @@ export const SECTIONS = [
   { id: "traffic", label: "Traffic limits", iconName: "gauge", mount: mountTrafficSection },
   { id: "notifications", label: "Notifications", iconName: "bell", mount: mountNotificationsSection },
   { id: "alert-rules", label: "Alert rules", iconName: "triangleAlert", mount: mountAlertRulesSection },
+  { id: "billing", label: "Billing", iconName: "cloud", mount: mountBillingSection },
 ];
 
 /** DEFAULT_SECTION is used when "#/settings" is visited with no

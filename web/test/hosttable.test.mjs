@@ -92,10 +92,13 @@ test("agentDotLevel: warning when update available, ok otherwise", () => {
   assert.equal(agentDotLevel(undefined), "ok");
 });
 
-test("defaultVisibleColumns includes every known column key", () => {
+test("defaultVisibleColumns includes every known column key except the opt-in 'cost' column", () => {
   const defaults = defaultVisibleColumns();
-  assert.equal(defaults.length, COLUMNS.length);
-  for (const c of COLUMNS) assert.ok(defaults.includes(c.key));
+  assert.equal(defaults.length, COLUMNS.length - 1);
+  for (const c of COLUMNS) {
+    if (c.key === "cost") assert.ok(!defaults.includes(c.key));
+    else assert.ok(defaults.includes(c.key));
+  }
 });
 
 test("normalizeVisibleColumns falls back to defaults for invalid/empty input", () => {

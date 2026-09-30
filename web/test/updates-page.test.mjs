@@ -1,0 +1,27 @@
+// updates-page.test.mjs — unit tests for the pure helpers exported by
+// assets/js/pages/updates.js (the #/updates remote-agent-update page).
+// Named distinctly from the pre-existing updates.test.mjs, which covers
+// core/updates.js's unrelated agent-self-update banner helpers.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { isTerminalJobState, PROGRESS_POLL_MS } from "../assets/js/pages/updates.js";
+
+test("isTerminalJobState: succeeded and failed are terminal", () => {
+  assert.equal(isTerminalJobState("succeeded"), true);
+  assert.equal(isTerminalJobState("failed"), true);
+});
+
+test("isTerminalJobState: queued and in_progress are not terminal", () => {
+  assert.equal(isTerminalJobState("queued"), false);
+  assert.equal(isTerminalJobState("in_progress"), false);
+});
+
+test("isTerminalJobState: unknown values are not terminal", () => {
+  assert.equal(isTerminalJobState("bogus"), false);
+  assert.equal(isTerminalJobState(""), false);
+  assert.equal(isTerminalJobState(undefined), false);
+});
+
+test("PROGRESS_POLL_MS matches SPEC-v0.6 §2's 5-second auto-refresh", () => {
+  assert.equal(PROGRESS_POLL_MS, 5000);
+});

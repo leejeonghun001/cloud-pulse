@@ -482,6 +482,168 @@ export function deleteNetworkConfig(signal) {
   return apiFetch("/api/v1/settings/network", { method: "DELETE", signal });
 }
 
+// ---------------------------------------------------------------------------
+// Cloud billing + network cost estimate (SPEC-v0.6 §1/§3).
+// ---------------------------------------------------------------------------
+
+/** getBilling fetches GET /api/v1/billing. Returns models.BillingView. */
+export function getBilling(signal) {
+  return apiFetch("/api/v1/billing", { signal });
+}
+
+/** refreshBilling calls POST /api/v1/billing/refresh (admin); throws
+ * RateLimitError if called within the 10-minute throttle window. */
+export function refreshBilling(signal) {
+  return apiFetch("/api/v1/billing/refresh", { method: "POST", signal });
+}
+
+/**
+ * setBillingInterval calls PUT /api/v1/settings/billing/interval
+ * (admin). interval must be "6h", "12h", or "24h".
+ * @param {"6h"|"12h"|"24h"} interval
+ */
+export function setBillingInterval(interval, signal) {
+  return apiFetch("/api/v1/settings/billing/interval", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ interval }),
+    signal,
+  });
+}
+
+/** getPricingPlans fetches GET /api/v1/billing/plans. Returns
+ * models.PricingPlan[]. */
+export function getPricingPlans(signal) {
+  return apiFetch("/api/v1/billing/plans", { signal });
+}
+
+/**
+ * createPricingPlan calls POST /api/v1/billing/plans (admin).
+ * @param {Object} plan a pricingPlanRequest-shaped object (see
+ *   internal/hub/pricingroutes.go's pricingPlanRequest)
+ */
+export function createPricingPlan(plan, signal) {
+  return apiFetch("/api/v1/billing/plans", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(plan),
+    signal,
+  });
+}
+
+/**
+ * updatePricingPlan calls PUT /api/v1/billing/plans/{id} (admin).
+ * @param {number} id
+ * @param {Object} plan
+ */
+export function updatePricingPlan(id, plan, signal) {
+  return apiFetch(`/api/v1/billing/plans/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(plan),
+    signal,
+  });
+}
+
+/** deletePricingPlan calls DELETE /api/v1/billing/plans/{id} (admin). */
+export function deletePricingPlan(id, signal) {
+  return apiFetch(`/api/v1/billing/plans/${encodeURIComponent(id)}`, { method: "DELETE", signal });
+}
+
+/** setHostPricing calls PUT /api/v1/hosts/{id}/pricing (admin);
+ * planID 0 clears the assignment, reverting to the provider default. */
+export function setHostPricing(hostID, planID, signal) {
+  return apiFetch(`/api/v1/hosts/${encodeURIComponent(hostID)}/pricing`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ plan_id: planID }),
+    signal,
+  });
+}
+
+/** getNetworkBilling fetches GET /api/v1/billing/network?month=. */
+export function getNetworkBilling(month, signal) {
+  const qs = month ? `?${new URLSearchParams({ month })}` : "";
+  return apiFetch(`/api/v1/billing/network${qs}`, { signal });
+}
+
+/** getDisplayCurrency fetches GET /api/v1/settings/billing/currency
+ * (admin). Returns models.DisplayCurrencySettings. */
+export function getDisplayCurrency(signal) {
+  return apiFetch("/api/v1/settings/billing/currency", { signal });
+}
+
+/**
+ * setDisplayCurrency calls PUT /api/v1/settings/billing/currency
+ * (admin). Selecting "KRW" without a positive krwPerUSD is rejected by
+ * the hub with 400 {code: "rate_required"}.
+ * @param {"USD"|"KRW"} currency
+ * @param {number} [krwPerUSD]
+ */
+export function setDisplayCurrency(currency, krwPerUSD, signal) {
+  return apiFetch("/api/v1/settings/billing/currency", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ currency, krw_per_usd: krwPerUSD || 0 }),
+    signal,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Remote agent updates (SPEC-v0.6 §2).
+// ---------------------------------------------------------------------------
+
+/** getUpdateJobs fetches GET /api/v1/agents/updates?batch= (admin).
+ * Omit batchID to list every job. Returns {jobs: models.UpdateJob[]}. */
+export function getUpdateJobs(batchID, signal) {
+  const qs = batchID ? `?${new URLSearchParams({ batch: batchID })}` : "";
+  return apiFetch(`/api/v1/agents/updates${qs}`, { signal });
+}
+
+/**
+ * createUpdateBatch calls POST /api/v1/agents/updates (admin). Returns
+ * models.UpdateBatch.
+ * @param {{hostIDs: string[], target: string, maxParallel?: number}} params
+ */
+export function createUpdateBatch({ hostIDs, target, maxParallel }, signal) {
+  return apiFetch("/api/v1/agents/updates", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ host_ids: hostIDs, target, max_parallel: maxParallel || 0 }),
+    signal,
+  });
+}
+
+/** retryUpdateJob calls POST /api/v1/agents/updates/{jobID}/retry
+ * (admin). Returns the newly created models.UpdateJob. */
+export function retryUpdateJob(jobID, signal) {
+  return apiFetch(`/api/v1/agents/updates/${encodeURIComponent(jobID)}/retry`, { method: "POST", signal });
+}
+
+/** cancelUpdateBatch calls POST /api/v1/agents/updates/{batchID}/cancel
+ * (admin). Returns {canceled: number}. */
+export function cancelUpdateBatch(batchID, signal) {
+  return apiFetch(`/api/v1/agents/updates/${encodeURIComponent(batchID)}/cancel`, { method: "POST", signal });
+}
+
+// ---------------------------------------------------------------------------
+// Audit log (SPEC-v0.6 §3 개선 c).
+// ---------------------------------------------------------------------------
+
+/**
+ * getAuditEntries fetches GET /api/v1/audit with optional filters
+ * (admin). Returns models.AuditListView.
+ * @param {{entityType?: string, limit?: number, before?: number}} [params]
+ */
+export function getAuditEntries(params = {}, signal) {
+  const qs = new URLSearchParams();
+  if (params.entityType) qs.set("entity_type", params.entityType);
+  if (params.limit) qs.set("limit", String(params.limit));
+  if (params.before) qs.set("before", String(params.before));
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return apiFetch(`/api/v1/audit${suffix}`, { signal });
+}
+
 /**
  * withToastOnError wraps an async action, showing an error toast for
  * any thrown ApiError/RateLimitError that isn't already handled by the

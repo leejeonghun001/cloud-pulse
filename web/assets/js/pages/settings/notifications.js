@@ -22,6 +22,13 @@ import {
   ApiError,
 } from "../../core/api.js";
 import { CHANNEL_TYPES, channelTypeByValue, validateChannelConfig, defaultChannelName } from "../../core/notify-guides.js";
+import { diagnosisViewModel, diagnosisSummaryText } from "../../core/diagnosis-view.js";
+import {
+  checklistByValue,
+  loadChecklistProgress,
+  saveChecklistProgress,
+  checklistCompletionCount,
+} from "../../core/notify-checklists.js";
 
 const CHANNEL_TYPE_ICONS = { discord: "zap", telegram: "send", whatsapp: "smartphone", webhook: "webhook" };
 
@@ -112,9 +119,12 @@ function channelRow({ channel, signal, announce, onChanged }) {
   testBtn.addEventListener("click", async () => {
     testBtn.disabled = true;
     status.textContent = "Sending…";
+    status.title = "";
     try {
       const result = await testNotifyChannel(channel.id, signal);
-      status.textContent = result.ok ? "Test delivered." : `Test failed: ${result.error || "unknown error"}`;
+      status.textContent = result.ok ? "Test delivered." : `Test failed: ${diagnosisSummaryText(result.diagnosis)}`;
+      status.title = result.ok ? "" : result.diagnosis?.detail || "";
+      if (result.ok) recordChecklistTestSuccess(channel.type, channel.id);
       announce?.(status.textContent);
     } catch (err) {
       if (err?.name === "AbortError") return;
@@ -230,12 +240,21 @@ function openChannelDialog({ channel, signal, announce, onChanged }) {
   const errorsHost = el("div");
   formCol.append(errorsHost);
 
+  /** fieldInputs maps a Config field key to its rendered <input>, so a
+   * failed Send test's diagnosis can highlight (aria-invalid + focus)
+   * the specific field most likely at fault (SPEC-v0.6 §4). Rebuilt on
+   * every renderFields() call (e.g. after switching platform). */
+  let fieldInputs = {};
+
   function renderFields() {
     clearChildren(fieldsHost);
+    fieldInputs = {};
     const def = channelTypeByValue(draft.type);
     if (!def) return;
     for (const field of def.fields) {
-      fieldsHost.append(configFieldInput(field, draft, isEdit));
+      const { wrap, input } = configFieldInput(field, draft, isEdit);
+      if (input) fieldInputs[field.key] = input;
+      fieldsHost.append(wrap);
     }
   }
   renderFields();
@@ -249,6 +268,7 @@ function openChannelDialog({ channel, signal, announce, onChanged }) {
       list.append(el("li", { text: step }));
     }
     guideCol.append(list);
+    guideCol.append(checklistPanel(draft.type, isEdit ? channel.id : "draft"));
   }
   renderGuide();
 
@@ -266,13 +286,18 @@ function openChannelDialog({ channel, signal, announce, onChanged }) {
     }
     testBtn.disabled = true;
     clearChildren(testResultHost);
+    clearFieldHighlights(fieldInputs);
     testResultHost.append(el("p", { class: "cp-muted-small", text: "Sending test notification…" }));
     try {
       const result = isEdit && !hasUnsavedSecretChanges(channel, draft)
         ? await testNotifyChannel(channel.id, signal)
         : await testDraftNotifyChannel({ name: draft.name, type: draft.type, enabled: true, config: draft.config }, signal);
       clearChildren(testResultHost);
-      testResultHost.append(testResultBanner(result));
+      testResultHost.append(testResultBanner(result, draft.type, fieldInputs));
+      if (result.ok) {
+        recordChecklistTestSuccess(draft.type, isEdit ? channel.id : "draft");
+        renderGuide();
+      }
       announce?.(result.ok ? "Test notification delivered." : "Test notification failed.");
     } catch (err) {
       clearChildren(testResultHost);
@@ -335,6 +360,13 @@ function hasUnsavedSecretChanges(channel, draft) {
   return false;
 }
 
+/**
+ * configFieldInput builds one Config field's <label>+<input> pair.
+ * @returns {{wrap: HTMLElement, input: HTMLInputElement|null}} input is
+ *   null for a checkbox field (checkbox fields aren't diagnosis-
+ *   highlight targets in practice, and the caller's fieldInputs map
+ *   only needs text/password fields to support aria-invalid + focus).
+ */
 function configFieldInput(field, draft, isEdit) {
   const wrap = el("div", { class: "cp-field" });
   const inputID = `cp-channel-field-${field.key}`;
@@ -350,7 +382,7 @@ function configFieldInput(field, draft, isEdit) {
     checkboxWrap.append(checkbox, el("span", { text: field.label }));
     clearChildren(wrap);
     wrap.append(checkboxWrap);
-    return wrap;
+    return { wrap, input: null };
   }
 
   const existingValue = draft.config[field.key] || "";
@@ -368,12 +400,13 @@ function configFieldInput(field, draft, isEdit) {
   );
   input.addEventListener("input", () => {
     draft.config[field.key] = input.value;
+    input.removeAttribute("aria-invalid");
   });
   wrap.append(input);
   if (isSecretPreserved) {
     wrap.append(el("p", { class: "cp-muted-small", text: "Leave blank to keep the currently stored value." }));
   }
-  return wrap;
+  return { wrap, input };
 }
 
 function renderErrors(host, errors) {
@@ -389,16 +422,160 @@ function renderErrors(host, errors) {
   host.append(banner);
 }
 
+/**
+ * checklistPanel builds the "Real account verification checklist"
+ * shown below a platform's setup guide (SPEC-v0.6 §4): a checkbox per
+ * item, persisted to localStorage per (type, id), plus the last
+ * successful Send test time if one is recorded. Returns an empty,
+ * childless element for a channel type with no checklist (e.g.
+ * "webhook").
+ * @param {string} type
+ * @param {string|number} id "draft" for an unsaved channel
+ * @returns {HTMLElement}
+ */
+function checklistPanel(type, id) {
+  const wrap = el("div", { class: "cp-channel-checklist" });
+  const checklist = checklistByValue(type);
+  if (!checklist) return wrap;
+
+  let progress;
+  try {
+    progress = loadChecklistProgress(globalThis.localStorage, type, id);
+  } catch {
+    progress = { items: {}, lastTestSuccessAt: null };
+  }
+
+  const { checked, total } = checklistCompletionCount(type, progress);
+  wrap.append(el("h4", { class: "cp-channel-checklist-title", text: `Real account verification checklist (${checked}/${total})` }));
+
+  const list = el("ul", { class: "cp-channel-checklist-list", attrs: { role: "list" } });
+  for (const item of checklist.items) {
+    const li = el("li", { class: "cp-checkbox-field" });
+    const checkbox = /** @type {HTMLInputElement} */ (el("input", { attrs: { type: "checkbox", id: `cp-checklist-${type}-${id}-${item.id}` } }));
+    checkbox.checked = Boolean(progress.items[item.id]);
+    checkbox.addEventListener("change", () => {
+      progress.items[item.id] = checkbox.checked;
+      persistChecklist(type, id, progress);
+      const counts = checklistCompletionCount(type, progress);
+      titleEl.textContent = `Real account verification checklist (${counts.checked}/${counts.total})`;
+    });
+    li.append(checkbox, el("label", { attrs: { for: checkbox.id }, text: item.text }));
+    list.append(li);
+  }
+  wrap.append(list);
+
+  if (progress.lastTestSuccessAt) {
+    wrap.append(
+      el("p", {
+        class: "cp-muted-small",
+        text: `Last successful Send test: ${new Date(progress.lastTestSuccessAt).toLocaleString()}.`,
+      }),
+    );
+  }
+
+  const titleEl = wrap.firstChild;
+  return wrap;
+}
+
+/**
+ * persistChecklist best-effort saves progress to localStorage,
+ * silently no-opping if storage is unavailable (private mode,
+ * disabled storage) — matching this app's other localStorage usages.
+ */
+function persistChecklist(type, id, progress) {
+  try {
+    saveChecklistProgress(globalThis.localStorage, type, id, progress);
+  } catch {
+    // No persistence available for this session.
+  }
+}
+
+/**
+ * recordChecklistTestSuccess stamps the checklist's
+ * lastTestSuccessAt to now and persists it, called whenever a Send
+ * test for (type, id) succeeds.
+ */
+function recordChecklistTestSuccess(type, id) {
+  if (!checklistByValue(type)) return;
+  let progress;
+  try {
+    progress = loadChecklistProgress(globalThis.localStorage, type, id);
+  } catch {
+    return;
+  }
+  progress.lastTestSuccessAt = Date.now();
+  persistChecklist(type, id, progress);
+}
+
 function apiErrorDetails(err) {
   if (err instanceof ApiError && err.details) return err.details;
   return { form: describeError(err) };
 }
 
-function testResultBanner(result) {
+function testResultBanner(result, platform, fieldInputs) {
   const wrap = el("div", { class: `cp-alerts-test-result ${result.ok ? "cp-alerts-test-ok" : "cp-alerts-test-fail"}` });
-  wrap.append(icon(result.ok ? "circleCheck" : "circleX"));
-  wrap.append(el("span", { text: result.ok ? "Delivered successfully." : `Failed: ${result.error || "unknown error"}` }));
+  if (result.ok) {
+    wrap.append(icon("circleCheck"));
+    wrap.append(el("span", { text: result.delivery || "Delivered successfully." }));
+    return wrap;
+  }
+  wrap.append(diagnosisCard(result.diagnosis, platform, fieldInputs));
   return wrap;
+}
+
+/**
+ * diagnosisCard builds the red diagnosis card shown on a failed Send
+ * test (SPEC-v0.6 §4): title, detail, a hint on how to fix it, and an
+ * optional docs link — plus, when the diagnosis code maps to a
+ * specific Config field for this platform, marks that field
+ * `aria-invalid="true"` and focuses it so both sighted and
+ * screen-reader users are pointed at the input most likely at fault.
+ * The view-model decision (which code maps to which field) lives in
+ * the pure core/diagnosis-view.js helper, covered by node tests.
+ * @param {{code?: string, title?: string, detail?: string, hint?: string, docs_url?: string}|null|undefined} diagnosis
+ * @param {string} platform "discord"|"telegram"|"whatsapp"|"webhook"
+ * @param {Record<string, HTMLInputElement>} fieldInputs
+ * @returns {HTMLElement}
+ */
+function diagnosisCard(diagnosis, platform, fieldInputs) {
+  const vm = diagnosisViewModel(platform, diagnosis);
+
+  const card = el("div", { class: "cp-diagnosis-card", attrs: { role: "alert" } });
+  const head = el("div", { class: "cp-diagnosis-card-head" });
+  head.append(icon("circleX"));
+  head.append(el("strong", { text: vm.title }));
+  card.append(head);
+  if (vm.detail) card.append(el("p", { text: vm.detail }));
+  if (vm.hint) card.append(el("p", { class: "cp-muted-small", text: vm.hint }));
+  if (vm.docsUrl) {
+    card.append(
+      el("a", {
+        class: "cp-link",
+        attrs: { href: vm.docsUrl, target: "_blank", rel: "noopener noreferrer" },
+        text: "Documentation",
+      }),
+    );
+  }
+
+  const target = vm.fieldToHighlight && fieldInputs ? fieldInputs[vm.fieldToHighlight] : null;
+  if (target) {
+    target.setAttribute("aria-invalid", "true");
+    target.focus();
+  }
+  return card;
+}
+
+/**
+ * clearFieldHighlights removes any aria-invalid marking left over from
+ * a previous failed Send test, so a fresh attempt starts from a clean
+ * slate (e.g. after switching platform, or before showing a new
+ * result).
+ * @param {Record<string, HTMLInputElement>} fieldInputs
+ */
+function clearFieldHighlights(fieldInputs) {
+  for (const input of Object.values(fieldInputs || {})) {
+    input?.removeAttribute?.("aria-invalid");
+  }
 }
 
 function describeError(err) {

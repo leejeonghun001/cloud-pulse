@@ -84,10 +84,13 @@ test("validateChannelConfig: whatsapp rejects a 'to' with a leading + or punctua
   assert.ok(errors.to);
 });
 
-test("validateChannelConfig: webhook only requires webhook_url; checkbox field is never required", () => {
+test("validateChannelConfig: webhook uses backend-required url key; checkbox field is never required", () => {
   let errors = validateChannelConfig("webhook", {});
-  assert.ok(errors.webhook_url);
+  assert.ok(errors.url);
+  // internal/notify/webhook.go validates config["url"], not webhook_url.
   errors = validateChannelConfig("webhook", { webhook_url: "https://hooks.example.com/x" });
+  assert.ok(errors.url);
+  errors = validateChannelConfig("webhook", { url: "https://hooks.example.com/x" });
   assert.deepEqual(errors, {});
 });
 

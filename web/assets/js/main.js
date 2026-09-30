@@ -14,6 +14,8 @@ import { mountOverviewPage } from "./pages/overview.js";
 import { mountHostDetailPage } from "./pages/host.js";
 import { mountSettingsPage, copyToClipboard, SECTIONS as SETTINGS_SECTIONS } from "./pages/settings/index.js";
 import { mountAlertsPage } from "./pages/alerts.js";
+import { mountCostsPage } from "./pages/costs.js";
+import { mountUpdatesPage } from "./pages/updates.js";
 import { updateBanner, clearChildren } from "./ui/components.js";
 import {
   shouldShowUpdateBanner,
@@ -109,6 +111,20 @@ function routeAlerts() {
   mountPageWithAutoRefresh(handle);
 }
 
+function routeCosts() {
+  clearLoginRoot();
+  const container = shell.mainEl;
+  const handle = mountCostsPage(container, { announce });
+  mountPageWithAutoRefresh(handle);
+}
+
+function routeUpdates() {
+  clearLoginRoot();
+  const container = shell.mainEl;
+  const handle = mountUpdatesPage(container, { announce });
+  mountPageWithAutoRefresh(handle);
+}
+
 function routeSettings(match, query) {
   clearLoginRoot();
   const container = shell.mainEl;
@@ -159,6 +175,8 @@ function buildPaletteItems() {
   const items = [
     { id: "nav-overview", label: "Overview", group: "Pages", iconName: "house", onSelect: () => router.navigate("#/") },
     { id: "nav-alerts", label: "Alerts", group: "Pages", iconName: "bell", onSelect: () => router.navigate("#/alerts") },
+    { id: "nav-costs", label: "Costs", group: "Pages", iconName: "cloud", onSelect: () => router.navigate("#/costs") },
+    { id: "nav-updates", label: "Updates", group: "Pages", iconName: "refreshCw", onSelect: () => router.navigate("#/updates") },
     { id: "nav-settings", label: "Settings", group: "Pages", iconName: "settings", onSelect: () => router.navigate("#/settings") },
   ];
   for (const section of SETTINGS_SECTIONS) {
@@ -372,6 +390,8 @@ function bootstrap() {
   router.add(/^#\/host\/([^/?]+)$/, routeHostDetail);
   router.add(/^#\/settings(?:\/([^/?]+))?(?:\?.*)?$/, routeSettings);
   router.add(/^#\/alerts(?:\?.*)?$/, routeAlerts);
+  router.add(/^#\/costs(?:\?.*)?$/, routeCosts);
+  router.add(/^#\/updates(?:\?.*)?$/, routeUpdates);
   router.add(/^#\/$/, routeOverview);
   router.setNotFound(routeOverview);
 
