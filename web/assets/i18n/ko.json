@@ -63,7 +63,19 @@
     "unreachable_retry": "허브에 연결할 수 없습니다. 다시 시도해 주세요."
   },
   "overview": {
-    "title": "개요"
+    "title": "개요",
+    "column_system": "시스템",
+    "column_cpu": "CPU",
+    "column_memory": "메모리",
+    "column_disk": "디스크",
+    "column_net": "네트워크",
+    "column_outbound": "송신 (월간)",
+    "column_inbound": "수신 (월간)",
+    "column_load": "로드",
+    "column_containers": "컨테이너",
+    "column_cost": "예상 비용",
+    "column_agent": "에이전트",
+    "column_last_seen": "마지막 확인"
   },
   "host": {
     "title": "호스트",
@@ -76,7 +88,18 @@
     "docker_collection_failed_message": "에이전트가 Docker 소켓에는 접근했지만 마지막 수집 시도가 실패했습니다.",
     "docker_not_supported": "Docker 모니터링 미지원",
     "docker_not_supported_message": "이 호스트의 플랫폼에서는 아직 Docker 컨테이너 모니터링이 구현되어 있지 않습니다.",
-    "docker_status_unknown": "알 수 없는 Docker 상태"
+    "docker_status_unknown": "알 수 없는 Docker 상태",
+    "storage_section_title": "스토리지",
+    "storage_empty_title": "연결된 스토리지 계정이 없습니다",
+    "storage_empty_message": "설정 → 스토리지에서 Google Drive 또는 Dropbox 계정을 연결하면 여기서 사용량을 확인할 수 있습니다.",
+    "stale": "오래됨",
+    "storage_used_unlimited": "{amount} 사용 중 (무제한)",
+    "storage_usage_label": "{name} 스토리지 사용량",
+    "storage_trash": "휴지통: {amount}",
+    "storage_last_checked": "마지막 확인: {relative}",
+    "storage_never_checked": "아직 성공적으로 확인된 적이 없습니다.",
+    "chart_series_time": "시간",
+    "chart_series_requests": "요청"
   },
   "alerts": {
     "title": "알림",
@@ -133,7 +156,37 @@
   },
   "settings": {
     "title": "설정",
-    "subtitle": "허브, 네트워크 접근, 계정을 관리하세요."
+    "subtitle": "허브, 네트워크 접근, 계정을 관리하세요.",
+    "network_error_address_required": "주소를 입력하세요.",
+    "network_error_invalid_ip": "유효한 IP 주소가 아닙니다.",
+    "network_error_unspecified_or_multicast": "주소는 미지정 또는 멀티캐스트일 수 없습니다.",
+    "network_error_port_whole_number": "포트는 정수여야 합니다.",
+    "network_error_port_range": "포트는 1024에서 65535 사이여야 합니다.",
+    "network_error_entry_required": "항목을 입력하세요.",
+    "network_error_invalid_cidr": "유효한 CIDR이 아닙니다.",
+    "network_error_invalid_ip_or_cidr": "유효한 IP 또는 CIDR이 아닙니다.",
+    "network_error_prefix_range": "프리픽스 길이는 0에서 {max} 사이여야 합니다.",
+    "network_error_at_least_one_entry": "허용 목록 항목이 하나 이상 필요합니다.",
+    "network_error_star_alone": "\"*\"가 있으면 다른 항목과 함께 쓸 수 없습니다.",
+    "network_error_entry_with_reason": "\"{entry}\": {reason}",
+    "network_all_interfaces": "모든 인터페이스",
+    "network_no_addresses": "(주소 없음)",
+    "network_none": "(없음)",
+    "network_describe_config": "{listen} · 포트 {port} · 허용: {allow}",
+    "network_field_listen_mode": "수신 모드",
+    "network_field_addresses": "주소",
+    "network_field_port": "포트",
+    "network_field_allowlist": "허용 목록",
+    "network_custom": "사용자 지정",
+    "network_allow_suggestion": "{cidr} 허용 ({interfaceName})",
+    "network_countdown_expired": "만료됨",
+    "network_countdown_min_sec": "{m}분 {s}초",
+    "network_countdown_sec": "{s}초",
+    "network_error_would_lock_out": "이 허용 목록은 본인의 주소를 제외하게 되어 즉시 접근이 차단될 수 있으므로 변경이 적용되지 않았습니다.",
+    "network_error_bind_failed": "허브가 요청한 주소 중 어느 것에도 리스너를 열 수 없습니다. 주소/포트를 사용할 수 있는지 확인한 뒤 다시 시도하세요.",
+    "network_error_change_pending": "이미 확인 대기 중인 네트워크 변경이 있습니다. 다른 변경을 시작하기 전에 확인하거나 되돌리세요.",
+    "network_error_no_pending": "확인하거나 되돌릴 대기 중인 네트워크 변경이 없습니다.",
+    "network_error_change_failed": "네트워크 설정 변경에 실패했습니다."
   },
   "health": {
     "title": "상태"

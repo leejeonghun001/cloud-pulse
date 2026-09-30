@@ -63,7 +63,19 @@
     "unreachable_retry": "Unable to reach the hub. Try again."
   },
   "overview": {
-    "title": "Overview"
+    "title": "Overview",
+    "column_system": "System",
+    "column_cpu": "CPU",
+    "column_memory": "Memory",
+    "column_disk": "Disk",
+    "column_net": "Net",
+    "column_outbound": "Outbound (mo.)",
+    "column_inbound": "Inbound (mo.)",
+    "column_load": "Load",
+    "column_containers": "Containers",
+    "column_cost": "Est. cost",
+    "column_agent": "Agent",
+    "column_last_seen": "Last seen"
   },
   "host": {
     "title": "Host",
@@ -76,7 +88,18 @@
     "docker_collection_failed_message": "The agent reached the Docker socket but the last collection attempt failed.",
     "docker_not_supported": "Docker monitoring not supported",
     "docker_not_supported_message": "Docker container monitoring isn't implemented for this host's platform yet.",
-    "docker_status_unknown": "Docker status unknown"
+    "docker_status_unknown": "Docker status unknown",
+    "storage_section_title": "Storage",
+    "storage_empty_title": "No storage accounts connected",
+    "storage_empty_message": "Connect a Google Drive or Dropbox account from Settings → Storage to monitor its usage here.",
+    "stale": "Stale",
+    "storage_used_unlimited": "{amount} used (unlimited)",
+    "storage_usage_label": "{name} storage usage",
+    "storage_trash": "Trash: {amount}",
+    "storage_last_checked": "Last checked {relative}",
+    "storage_never_checked": "Never successfully checked yet.",
+    "chart_series_time": "Time",
+    "chart_series_requests": "Requests"
   },
   "alerts": {
     "title": "Alerts",
@@ -133,7 +156,37 @@
   },
   "settings": {
     "title": "Settings",
-    "subtitle": "Manage the hub, its network access, and your account."
+    "subtitle": "Manage the hub, its network access, and your account.",
+    "network_error_address_required": "Address is required.",
+    "network_error_invalid_ip": "Not a valid IP address.",
+    "network_error_unspecified_or_multicast": "Address must not be unspecified or multicast.",
+    "network_error_port_whole_number": "Port must be a whole number.",
+    "network_error_port_range": "Port must be between 1024 and 65535.",
+    "network_error_entry_required": "Entry is required.",
+    "network_error_invalid_cidr": "Not a valid CIDR.",
+    "network_error_invalid_ip_or_cidr": "Not a valid IP or CIDR.",
+    "network_error_prefix_range": "Prefix length must be between 0 and {max}.",
+    "network_error_at_least_one_entry": "At least one allowlist entry is required.",
+    "network_error_star_alone": "\"*\" must be the only entry when present.",
+    "network_error_entry_with_reason": "\"{entry}\": {reason}",
+    "network_all_interfaces": "All interfaces",
+    "network_no_addresses": "(no addresses)",
+    "network_none": "(none)",
+    "network_describe_config": "{listen} · port {port} · allow: {allow}",
+    "network_field_listen_mode": "Listen mode",
+    "network_field_addresses": "Addresses",
+    "network_field_port": "Port",
+    "network_field_allowlist": "Allowlist",
+    "network_custom": "Custom",
+    "network_allow_suggestion": "Allow {cidr} ({interfaceName})",
+    "network_countdown_expired": "expired",
+    "network_countdown_min_sec": "{m}m {s}s",
+    "network_countdown_sec": "{s}s",
+    "network_error_would_lock_out": "That allowlist would exclude your own address — you'd be locked out immediately, so the change was not applied.",
+    "network_error_bind_failed": "The hub couldn't open a listener on any of the requested addresses. Check that the address/port is available and try again.",
+    "network_error_change_pending": "A network change is already pending confirmation. Confirm or revert it before starting another change.",
+    "network_error_no_pending": "There is no pending network change to confirm or revert.",
+    "network_error_change_failed": "Network settings change failed."
   },
   "health": {
     "title": "Health"

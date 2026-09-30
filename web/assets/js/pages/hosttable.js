@@ -4,6 +4,7 @@
 // CPU/Memory/Disk bars. No DOM access here so these are covered by
 // node --test without a browser environment; DOM building lives in
 // pages/overview.js.
+import { t } from "../core/i18n.js";
 
 /**
  * @typedef {Object} ColumnDef
@@ -15,20 +16,23 @@
  *   dropdown can't hide (System).
  */
 
-/** COLUMNS is the full, ordered set of overview table columns. */
+/** COLUMNS is the full, ordered set of overview table columns. `label`
+ * is a getter so it re-resolves against the current language on every
+ * read, since this array is static top-level data evaluated once at
+ * import time. */
 export const COLUMNS = [
-  { key: "system", label: "System", sortable: true, alwaysVisible: true },
-  { key: "cpu", label: "CPU", sortable: true, alwaysVisible: false },
-  { key: "memory", label: "Memory", sortable: true, alwaysVisible: false },
-  { key: "disk", label: "Disk", sortable: true, alwaysVisible: false },
-  { key: "net", label: "Net", sortable: false, alwaysVisible: false },
-  { key: "outbound", label: "Outbound (mo.)", sortable: true, alwaysVisible: false },
-  { key: "inbound", label: "Inbound (mo.)", sortable: true, alwaysVisible: false },
-  { key: "load", label: "Load", sortable: true, alwaysVisible: false },
-  { key: "containers", label: "Containers", sortable: true, alwaysVisible: false },
-  { key: "cost", label: "Est. cost", sortable: true, alwaysVisible: false },
-  { key: "agent", label: "Agent", sortable: false, alwaysVisible: false },
-  { key: "lastSeen", label: "Last seen", sortable: true, alwaysVisible: false },
+  { key: "system", get label() { return t("overview.column_system"); }, sortable: true, alwaysVisible: true },
+  { key: "cpu", get label() { return t("overview.column_cpu"); }, sortable: true, alwaysVisible: false },
+  { key: "memory", get label() { return t("overview.column_memory"); }, sortable: true, alwaysVisible: false },
+  { key: "disk", get label() { return t("overview.column_disk"); }, sortable: true, alwaysVisible: false },
+  { key: "net", get label() { return t("overview.column_net"); }, sortable: false, alwaysVisible: false },
+  { key: "outbound", get label() { return t("overview.column_outbound"); }, sortable: true, alwaysVisible: false },
+  { key: "inbound", get label() { return t("overview.column_inbound"); }, sortable: true, alwaysVisible: false },
+  { key: "load", get label() { return t("overview.column_load"); }, sortable: true, alwaysVisible: false },
+  { key: "containers", get label() { return t("overview.column_containers"); }, sortable: true, alwaysVisible: false },
+  { key: "cost", get label() { return t("overview.column_cost"); }, sortable: true, alwaysVisible: false },
+  { key: "agent", get label() { return t("overview.column_agent"); }, sortable: false, alwaysVisible: false },
+  { key: "lastSeen", get label() { return t("overview.column_last_seen"); }, sortable: true, alwaysVisible: false },
 ];
 
 /** DEFAULT_VISIBLE_COLUMNS is the initial columns-dropdown selection:
