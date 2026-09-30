@@ -48,6 +48,8 @@ import {
   COLUMNS_STORAGE_KEY,
   VIEW_STORAGE_KEY,
 } from "./hosttable.js";
+import { t } from "../core/i18n.js";
+import { localizeApiError } from "../core/api.js";
 
 const AGENT_INSTALL_HINT =
   "curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scripts/install-agent.sh | sudo bash -s -- --hub-url <HUB_URL> --token <AGENT_TOKEN>";
@@ -74,8 +76,8 @@ export function mountOverviewPage(container, { announce }) {
   };
 
   clearChildren(container);
-  container.append(el("h1", { class: "cp-page-title", text: "Fleet overview" }));
-  container.append(el("p", { class: "cp-page-subtitle", text: "Updated every 15 seconds." }));
+  container.append(el("h1", { class: "cp-page-title", text: t("overview.page_title") }));
+  container.append(el("p", { class: "cp-page-subtitle", text: t("overview.page_subtitle") }));
 
   const bannerHost = el("div");
   const statCardsHost = el("div", { class: "cp-stat-cards" });
@@ -169,7 +171,7 @@ export function mountOverviewPage(container, { announce }) {
       clearChildren(storageAccountsHost);
       storageAccountsHost.append(buildStorageAccountsSection({ accounts: storageAccountsResp.accounts || [], nowMs }));
 
-      announce?.("Dashboard data refreshed.");
+      announce?.(t("overview.dashboard_refreshed"));
     } catch (err) {
       if (err?.name === "AbortError") return;
       showBanner(describeError(err));
@@ -200,15 +202,15 @@ function renderStatCards(host, hostsResp, bucketsResp, nowMs) {
 
   clearChildren(host);
   const cards = [
-    { icon: "server", label: "Hosts up", value: formatNumber(up.length), tone: "ok" },
-    { icon: "wifiOff", label: "Hosts down", value: formatNumber(down.length), tone: down.length > 0 ? "critical" : "ok" },
-    { icon: "cpu", label: "Avg CPU", value: formatPercent(avgCPU), tone: "neutral" },
-    { icon: "arrowUp", label: "Fleet outbound (mo.)", value: formatBytes(fleetEgressBytes), tone: "neutral" },
-    { icon: "arrowDown", label: "Fleet inbound (mo.)", value: formatBytes(fleetIngressBytes), tone: "neutral" },
-    { icon: "database", label: "Buckets tracked", value: formatNumber(bucketsResp.buckets.length), tone: "neutral" },
+    { icon: "server", label: t("overview.summary_hosts_up"), value: formatNumber(up.length), tone: "ok" },
+    { icon: "wifiOff", label: t("overview.summary_hosts_down"), value: formatNumber(down.length), tone: down.length > 0 ? "critical" : "ok" },
+    { icon: "cpu", label: t("overview.summary_avg_cpu"), value: formatPercent(avgCPU), tone: "neutral" },
+    { icon: "arrowUp", label: t("overview.summary_fleet_outbound"), value: formatBytes(fleetEgressBytes), tone: "neutral" },
+    { icon: "arrowDown", label: t("overview.summary_fleet_inbound"), value: formatBytes(fleetIngressBytes), tone: "neutral" },
+    { icon: "database", label: t("overview.summary_buckets_tracked"), value: formatNumber(bucketsResp.buckets.length), tone: "neutral" },
   ];
   if (outdated > 0) {
-    cards.push({ icon: "cloudUpload", label: "Agents outdated", value: formatNumber(outdated), tone: "warning" });
+    cards.push({ icon: "cloudUpload", label: t("overview.summary_agents_outdated"), value: formatNumber(outdated), tone: "warning" });
   }
 
   for (const c of cards) {
@@ -235,8 +237,8 @@ function renderSystemsCard(card, state, handlers) {
 
   const head = el("div", { class: "cp-systems-head" });
   const titleCol = el("div");
-  titleCol.append(el("h2", { id: "cp-systems-heading", text: "All Systems" }));
-  titleCol.append(el("p", { class: "cp-page-subtitle", text: `${state.hosts.length} host${state.hosts.length === 1 ? "" : "s"}` }));
+  titleCol.append(el("h2", { id: "cp-systems-heading", text: t("overview.all_systems_title") }));
+  titleCol.append(el("p", { class: "cp-page-subtitle", text: t("overview.host_count", { count: state.hosts.length }) }));
   head.append(titleCol);
 
   const controls = el("div", { class: "cp-systems-controls" });
@@ -247,7 +249,7 @@ function renderSystemsCard(card, state, handlers) {
   const filterInput = /** @type {HTMLInputElement} */ (
     el("input", {
       class: "cp-input",
-      attrs: { type: "search", placeholder: "Filter hosts…", "aria-label": "Filter hosts", value: state.filter },
+      attrs: { type: "search", placeholder: t("overview.filter_hosts_placeholder"), "aria-label": t("overview.filter_hosts_aria_label"), value: state.filter },
     })
   );
   filterInput.addEventListener("input", () => handlers.onFilterChange(filterInput.value));
@@ -265,8 +267,8 @@ function renderSystemsCard(card, state, handlers) {
   if (state.hosts.length === 0) {
     card.append(
       emptyState({
-        title: "Add your first agent",
-        message: "Install an agent on a host and point it at this hub:",
+        title: t("overview.empty_add_first_agent_title"),
+        message: t("overview.empty_add_first_agent_message"),
         code: AGENT_INSTALL_HINT,
         iconName: "server",
       }),
@@ -275,7 +277,7 @@ function renderSystemsCard(card, state, handlers) {
   }
 
   if (filtered.length === 0) {
-    card.append(el("p", { class: "cp-muted", text: `No hosts match "${state.filter}".` }));
+    card.append(el("p", { class: "cp-muted", text: t("overview.no_hosts_match_filter", { filter: state.filter }) }));
     return;
   }
 
@@ -290,15 +292,15 @@ function renderSystemsCard(card, state, handlers) {
 }
 
 function buildViewToggle(current, onChange) {
-  const group = el("div", { class: "cp-segmented cp-view-toggle", attrs: { role: "group", "aria-label": "View" } });
+  const group = el("div", { class: "cp-segmented cp-view-toggle", attrs: { role: "group", "aria-label": t("overview.view_toggle_aria_label") } });
   const tableBtn = el("button", {
     class: "cp-btn cp-segmented-btn cp-btn-icon",
-    attrs: { type: "button", "aria-pressed": current === "table" ? "true" : "false", "aria-label": "Table view", title: "Table view" },
+    attrs: { type: "button", "aria-pressed": current === "table" ? "true" : "false", "aria-label": t("overview.table_view"), title: t("overview.table_view") },
   });
   tableBtn.append(icon("table"));
   const gridBtn = el("button", {
     class: "cp-btn cp-segmented-btn cp-btn-icon",
-    attrs: { type: "button", "aria-pressed": current === "grid" ? "true" : "false", "aria-label": "Grid view", title: "Grid view" },
+    attrs: { type: "button", "aria-pressed": current === "grid" ? "true" : "false", "aria-label": t("overview.grid_view"), title: t("overview.grid_view") },
   });
   gridBtn.append(icon("layoutGrid"));
   tableBtn.addEventListener("click", () => onChange("table"));
@@ -309,7 +311,7 @@ function buildViewToggle(current, onChange) {
 
 function buildColumnsDropdown(visibleColumns, onChange) {
   const trigger = /** @type {HTMLButtonElement} */ (
-    el("button", { class: "cp-btn cp-btn-secondary cp-btn-icon", attrs: { type: "button", "aria-label": "Columns", title: "Columns" } })
+    el("button", { class: "cp-btn cp-btn-secondary cp-btn-icon", attrs: { type: "button", "aria-label": t("overview.columns"), title: t("overview.columns") } })
   );
   trigger.append(icon("columns3"));
 
@@ -318,7 +320,7 @@ function buildColumnsDropdown(visibleColumns, onChange) {
     align: "right",
     buildMenu: () => {
       const wrap = el("div");
-      wrap.append(el("div", { class: "cp-dropdown-heading", text: "Columns" }));
+      wrap.append(el("div", { class: "cp-dropdown-heading", text: t("overview.columns") }));
       for (const col of COLUMNS) {
         if (col.alwaysVisible) continue;
         const checked = visibleColumns.includes(col.key);
@@ -337,7 +339,7 @@ function buildColumnsDropdown(visibleColumns, onChange) {
         wrap.append(item);
       }
       wrap.append(dropdownSeparator());
-      const resetBtn = el("button", { class: "cp-dropdown-item", attrs: { type: "button" }, text: "Show all" });
+      const resetBtn = el("button", { class: "cp-dropdown-item", attrs: { type: "button" }, text: t("overview.show_all_columns") });
       resetBtn.addEventListener("click", () => onChange(COLUMNS.map((c) => c.key)));
       wrap.append(resetBtn);
       return wrap;
@@ -431,7 +433,7 @@ function systemCell(row) {
     wrap.append(
       el("span", {
         class: "cp-badge cp-badge-update",
-        text: "update",
+        text: t("overview.update_badge"),
         attrs: { title: updateInfo.label, "aria-label": updateInfo.label },
       }),
     );
@@ -446,7 +448,7 @@ function metricCell(percent) {
     progressBar({
       value: percent,
       max: 100,
-      label: "usage",
+      label: t("overview.usage_label"),
       levelClass: thresholdBarClass(percent),
       valueText: "",
     }),
@@ -474,13 +476,13 @@ function egressCell(egress, direction) {
   if (hubOverride) head.append(hubOverrideBadge());
   wrap.append(head);
   if (limitBytes === 0) {
-    wrap.append(el("span", { class: "cp-muted-small", text: "No limit" }));
+    wrap.append(el("span", { class: "cp-muted-small", text: t("overview.no_limit") }));
   } else {
     wrap.append(
       progressBar({
         value: bytes,
         max: limitBytes,
-        label: `${isOut ? "Outbound" : "Inbound"} usage`,
+        label: isOut ? t("host.egress_outbound_bar_label") : t("host.egress_inbound_bar_label"),
         levelClass: levelClassForBar(level),
         valueText: "",
       }),
@@ -514,7 +516,7 @@ function costCell(cost, displayCurrency) {
   return el("span", {
     class: "cp-tabular",
     text: formatDisplayAmount(Number(cost.total_mtd || 0), displayCurrency, { taxNote: false }),
-    attrs: { title: "Month-to-date estimate, excl. tax" },
+    attrs: { title: t("overview.cost_cell_title") },
   });
 }
 
@@ -533,7 +535,7 @@ function agentCell(row) {
   if (level === "warning") {
     const info = hostUpdateBadgeText(row.update);
     if (info) {
-      text.setAttribute("title", `${info.label}${row.update?.command ? ` — ${row.update.command}` : ""}`);
+      text.setAttribute("title", row.update?.command ? t("overview.agent_update_title_with_command", { label: info.label, command: row.update.command }) : info.label);
       text.setAttribute("tabindex", "0");
     }
   }
@@ -582,39 +584,39 @@ function hostGridCard(row, nowMs) {
   card.append(
     el("p", {
       class: "cp-host-card-meta",
-      text: `${row.host.os || "unknown"} / ${row.host.arch || "unknown"} · ${agentVersionText(row.host.agent_version)}`,
+      text: t("overview.grid_os_arch_agent", { os: row.host.os || t("overview.unknown"), arch: row.host.arch || t("overview.unknown"), agent: agentVersionText(row.host.agent_version) }),
     }),
   );
 
   if (!isUp) {
-    card.append(el("p", { class: "cp-host-card-offline-note", text: `Offline since ${formatRelativeTimeFromUnixSeconds(row.last_seen, nowMs)}` }));
+    card.append(el("p", { class: "cp-host-card-offline-note", text: t("overview.offline_since", { relative: formatRelativeTimeFromUnixSeconds(row.last_seen, nowMs) }) }));
   }
 
   if (row.latest) {
-    card.append(gridMetricRow("CPU", row.latest.cpu_percent));
-    card.append(gridMetricRow("Memory", row.latest.mem_used_percent, `${formatBytes(row.latest.mem_used)}/${formatBytes(row.latest.mem_total)}`));
-    card.append(gridMetricRow("Disk", row.latest.disk_used_percent, `${formatBytes(row.latest.disk_used)}/${formatBytes(row.latest.disk_total)}`));
+    card.append(gridMetricRow(t("overview.metric_cpu"), row.latest.cpu_percent));
+    card.append(gridMetricRow(t("overview.metric_memory"), row.latest.mem_used_percent, `${formatBytes(row.latest.mem_used)}/${formatBytes(row.latest.mem_total)}`));
+    card.append(gridMetricRow(t("overview.metric_disk"), row.latest.disk_used_percent, `${formatBytes(row.latest.disk_used)}/${formatBytes(row.latest.disk_total)}`));
 
     const netRow = el("div", { class: "cp-host-card-net" });
     netRow.append(
       el("span", { text: `↓ ${formatBitrate(row.latest.net_rx_bps)}` }),
       el("span", { text: `↑ ${formatBitrate(row.latest.net_tx_bps)}` }),
-      el("span", { text: `load ${formatLoad(row.latest.load1)}` }),
+      el("span", { text: t("overview.load_value", { value: formatLoad(row.latest.load1) }) }),
     );
     card.append(netRow);
     card.append(
       el("p", {
         class: "cp-host-card-uptime",
-        text: `Uptime ${formatDuration(row.latest.uptime_seconds)} · Last seen ${formatRelativeTimeFromUnixSeconds(row.last_seen, nowMs)}`,
+        text: t("overview.uptime_last_seen", { uptime: formatDuration(row.latest.uptime_seconds), relative: formatRelativeTimeFromUnixSeconds(row.last_seen, nowMs) }),
       }),
     );
   } else {
-    card.append(el("p", { class: "cp-host-card-meta", text: "No samples yet." }));
+    card.append(el("p", { class: "cp-host-card-meta", text: t("host.no_samples_yet") }));
   }
 
   const egressWrap = el("div", { class: "cp-egress-mini" });
-  egressWrap.append(gridEgressRow("↑ Outbound", row.egress, "out"));
-  egressWrap.append(gridEgressRow("↓ Inbound", row.egress, "in"));
+  egressWrap.append(gridEgressRow(t("host.egress_outbound_label"), row.egress, "out"));
+  egressWrap.append(gridEgressRow(t("host.egress_inbound_label"), row.egress, "in"));
   card.append(egressWrap);
 
   return card;
@@ -628,7 +630,7 @@ function gridMetricRow(label, percent, detail) {
     el("span", { class: "cp-metric-value", text: detail ? `${formatPercent(percent)} · ${detail}` : formatPercent(percent) }),
   );
   row.append(head);
-  row.append(progressBar({ value: percent, max: 100, label: `${label} usage`, levelClass: thresholdBarClass(percent), valueText: "" }));
+  row.append(progressBar({ value: percent, max: 100, label: t("host.metric_usage_label", { label }), levelClass: thresholdBarClass(percent), valueText: "" }));
   return row;
 }
 
@@ -647,10 +649,10 @@ function gridEgressRow(label, egress, direction) {
   head.append(labelGroup, egressLevelChip(level));
   wrap.append(head);
   if (limitBytes === 0) {
-    wrap.append(el("p", { class: "cp-egress-unlimited", text: `No limit · ${formatBytes(bytes)} used` }));
+    wrap.append(el("p", { class: "cp-egress-unlimited", text: t("host.egress_no_limit", { amount: formatBytes(bytes) }) }));
     return wrap;
   }
-  wrap.append(progressBar({ value: bytes, max: limitBytes, label: `${label} usage`, levelClass: levelClassForBar(level), valueText: `${formatBytes(bytes)} / ${formatBytes(limitBytes)}` }));
+  wrap.append(progressBar({ value: bytes, max: limitBytes, label: t("host.egress_usage_label", { label }), levelClass: levelClassForBar(level), valueText: `${formatBytes(bytes)} / ${formatBytes(limitBytes)}` }));
   return wrap;
 }
 
@@ -682,17 +684,17 @@ function mobileCard(row, nowMs) {
   if (row.latest) {
     const metrics = el("div", { class: "cp-systems-mobile-metrics" });
     metrics.append(
-      el("span", { text: `CPU ${formatPercent(row.latest.cpu_percent)}` }),
-      el("span", { text: `Mem ${formatPercent(row.latest.mem_used_percent)}` }),
-      el("span", { text: `Disk ${formatPercent(row.latest.disk_used_percent)}` }),
+      el("span", { text: t("overview.mobile_metric_cpu", { value: formatPercent(row.latest.cpu_percent) }) }),
+      el("span", { text: t("overview.mobile_metric_mem", { value: formatPercent(row.latest.mem_used_percent) }) }),
+      el("span", { text: t("overview.mobile_metric_disk", { value: formatPercent(row.latest.disk_used_percent) }) }),
     );
     card.append(metrics);
   }
-  card.append(el("p", { class: "cp-host-card-uptime", text: `Last seen ${formatRelativeTimeFromUnixSeconds(row.last_seen, nowMs)}` }));
+  card.append(el("p", { class: "cp-host-card-uptime", text: t("overview.last_seen", { relative: formatRelativeTimeFromUnixSeconds(row.last_seen, nowMs) }) }));
   return card;
 }
 
 function describeError(err) {
-  if (err instanceof ApiError) return `API error: ${err.message}`;
-  return "Unable to reach the hub API. Showing last known data.";
+  if (err instanceof ApiError) return t("overview.api_error_prefix", { message: localizeApiError(err) });
+  return t("overview.hub_unreachable_showing_last_known");
 }
