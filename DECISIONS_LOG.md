@@ -1595,3 +1595,70 @@ never rewrite history here, only add to it.
   not checked against the catalog (can't be, statically) and is not
   flagged as hard-coded either, a known gap accepted rather than
   chasing false negatives with more regex complexity.
+
+### D-089 — Upgrade rehearsal kit: `--from` matrix over real historical tags, and schema-derived (not hard-coded) preservation checks (2026-10-01)
+
+- **Context**: SPEC-v0.8 §3 "Part B 공통" adds a new migration
+  (`0007_v08.sql`) with two new tables; `scripts/hub-upgrade-check.sh`'s
+  post-upgrade check had a hard-coded `CANDIDATE_TABLES` allowlist that
+  a schema-adding release like this one would otherwise require editing
+  every time, and `scripts/test-hub-upgrade.sh`'s rehearsal only ever
+  exercised upgrading from v0.3.2 — the oldest supported source, but one
+  that predates alert rules, notification channels, remote-update jobs,
+  and storage accounts entirely, so a regression that only shows up
+  when *those* tables' data crosses an upgrade would never be caught.
+- **Decision**: `test-hub-upgrade.sh` gained a `--from <tag>` flag
+  (default `v0.3.2`, also supports `v0.7.0`) that builds and installs
+  the chosen tag from its own `git worktree` + its *own*
+  `install-hub.sh`, then seeds schema-appropriate data (v0.7.0 adds an
+  alert rule, a notification channel, a remote-update job, and a
+  storage account + snapshot on top of everything v0.3.2 seeds) before
+  rehearsing the same pre → update → apply-unit → restart → post →
+  negative-cases → rollback → dry-run sequence. CI's `hub-upgrade` job
+  became a 2-entry matrix (`fail-fast: false`) over both tags.
+  Separately, `hub-upgrade-check.sh`'s own `py_sqlite_snapshot` now
+  discovers every real table via `sqlite_master` (excluding only
+  `schema_migrations` and SQLite's own `sqlite_sequence` from row-count
+  tracking) instead of iterating a fixed `CANDIDATE_TABLES` list, and
+  the pre/post diff (extracted into its own testable
+  `py_sqlite_diff_snapshots` function) reports, as an informational
+  `NOTE:` line, whether newly-applied migrations came with new tables —
+  derived from the two snapshots' own table-list diff, never a
+  per-release name list. Every port this rehearsal binds (the sandboxed
+  hub's listener, the fake release server) is chosen via a bind-to-
+  `:0`-then-read-back helper at run time, not a fixed number, so the
+  `--from v0.3.2` and `--from v0.7.0` matrix legs (and any other
+  sandboxed-hub test script) never collide even run concurrently.
+  Separately (an unrelated latent bug this stage's own commits kept
+  tripping over while landing the above): `scripts/tests/
+  test_release_notes.py` and `test_prepublish_check.py`'s own
+  throwaway git-repo fixtures inherited this process's real `GIT_DIR`/
+  `GIT_INDEX_FILE` when invoked as part of `git commit` itself (this
+  repo's pre-commit hook runs `python3 -m unittest discover`) — an
+  inherited `GIT_DIR` silently overrides `git -C <fixture-dir>`/
+  `cwd=<fixture-dir>`'s directory choice, so every git call in both
+  fixtures was actually mutating *this repository's own* branch
+  history instead of the intended tempdir, repeatedly overwriting
+  whatever branch happened to be checked out with the fixtures' own
+  synthetic commits. Both files' git-invoking helpers now strip every
+  `GIT_*` variable from the subprocess environment before calling
+  `git`, so `-C`/`cwd=` is what actually takes effect regardless of how
+  the test process itself was invoked.
+- **Consequences**: A future migration that adds a table needs zero
+  changes to `hub-upgrade-check.sh`'s snapshot/diff logic to have that
+  table's rows covered by the row-count-non-decreasing check — only
+  `test-hub-upgrade.sh`'s own seed/assert functions need a new
+  version-specific case if that table's *data* should be exercised
+  specifically (as `seed_data_v070_extra`/`assert_v070_preservation`
+  do for v0.7.0's tables), which is intentionally left as a per-`--from`
+  opt-in rather than something the snapshot format tries to infer.
+  Adding a third supported `--from` tag means one more `case` arm in
+  `test-hub-upgrade.sh`'s tag-validation, seed dispatch, and assertion
+  dispatch, plus one more CI matrix entry — no changes to
+  `hub-upgrade-check.sh` itself unless that release's schema needs a
+  genuinely new *kind* of check beyond row-count/host/settings
+  preservation. Any future test fixture that shells out to `git`
+  against its own throwaway repository must isolate its subprocess
+  environment the same way (strip `GIT_*`, never rely on `-C`/`cwd=`
+  alone) — this is now the precedent to follow, not something to
+  rediscover per fixture.

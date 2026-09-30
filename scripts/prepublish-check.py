@@ -58,6 +58,7 @@ import hashlib
 import ipaddress
 import json
 import math
+import os
 import re
 import struct
 import subprocess
@@ -589,12 +590,31 @@ _TEXT_LIKELY_SUFFIXES = {
 }
 
 
+def _git_subprocess_env() -> dict[str, str]:
+    """Returns this process's own environment with every GIT_* variable
+    removed, so a git subprocess's repository discovery is governed
+    only by the cwd it is given, never by an inherited GIT_DIR/
+    GIT_INDEX_FILE/etc. Every git invocation in this module always
+    resolves its target repository via an explicit cwd=repo_root by
+    design; an inherited GIT_DIR (set by git itself when invoking a
+    hook, e.g. this repository's own pre-commit hook running this
+    script's own test suite, scripts/tests/test_prepublish_check.py,
+    each test builds its own throwaway repo_root) would otherwise
+    silently override that cwd-based discovery and operate on
+    whichever repository GIT_DIR actually points at instead.
+    """
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 def _git(repo_root: Path, *args: str) -> str:
+    # See _git_subprocess_env's docstring for why GIT_* must never be
+    # inherited here.
     result = subprocess.run(
         ["git", *args],
         cwd=repo_root,
         capture_output=True,
         text=True,
+        env=_git_subprocess_env(),
         check=True,
     )
     return result.stdout
@@ -693,6 +713,7 @@ def iter_history_added_lines(repo_root: Path) -> Iterator[tuple[str, str, int, s
         text=True,
         errors="surrogateescape",
         bufsize=1,
+        env=_git_subprocess_env(),
     )
     assert proc.stdout is not None
     current_commit = ""
@@ -747,6 +768,7 @@ def scan_history_large_and_binary_blobs(repo_root: Path) -> list[Finding]:
         cwd=repo_root,
         capture_output=True,
         text=True,
+        env=_git_subprocess_env(),
         check=True,
     )
     batch_check = subprocess.run(
@@ -755,6 +777,7 @@ def scan_history_large_and_binary_blobs(repo_root: Path) -> list[Finding]:
         input=rev_list.stdout,
         capture_output=True,
         text=True,
+        env=_git_subprocess_env(),
         check=True,
     )
     for line in batch_check.stdout.splitlines():

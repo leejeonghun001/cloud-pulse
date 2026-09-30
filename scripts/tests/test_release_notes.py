@@ -5,6 +5,7 @@ are hermetic and produce byte-identical, reviewable snapshot output.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -30,16 +31,35 @@ def run_git(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
         ["git", "-C", str(repo), *args],
         capture_output=True,
         text=True,
-        env={**_base_os_env(), **base_env},
+        env={**_isolated_git_env(), **base_env},
         check=True,
     )
     return result.stdout.strip()
 
 
-def _base_os_env() -> dict[str, str]:
-    import os
-
-    return dict(os.environ)
+def _isolated_git_env() -> dict[str, str]:
+    """Returns this process's own environment with every GIT_* variable
+    that could redirect git away from the `-C`-supplied fixture
+    directory removed first. When these tests run as part of a real
+    `git commit` (this repo's own pre-commit hook invokes `python3 -m
+    unittest discover -s scripts/tests`), git itself sets GIT_DIR/
+    GIT_INDEX_FILE in the hook's environment so the hook operates on
+    the *real* repository being committed to -- `git -C
+    <fixture-dir>` does NOT override an already-set GIT_DIR (a
+    documented git quirk: an explicit GIT_DIR always wins over -C's
+    directory-change), so every git call in this fixture would
+    otherwise silently operate on the real repository's history
+    instead of the intended throwaway tempdir, corrupting it. This
+    removes every such variable so `-C`'s directory choice is what
+    actually takes effect, regardless of how this test process itself
+    was invoked.
+    """
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("GIT_")
+        or key in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL")
+    }
 
 
 def commit(repo: Path, message: str, *, date: str, filename: str = "file.txt") -> str:
@@ -63,6 +83,7 @@ def run_release_notes(repo: Path, *args: str) -> subprocess.CompletedProcess[str
         ["bash", str(SCRIPT), *args, "--repo-dir", str(repo), "--repo-url", "https://example.invalid/owner/repo"],
         capture_output=True,
         text=True,
+        env=_isolated_git_env(),
         check=False,
     )
 

@@ -39,12 +39,31 @@ def load_script(filename: str, module_name: str) -> ModuleType:
 PC = load_script("prepublish-check.py", "cloud_pulse_prepublish_check_test")
 
 
+def _isolated_git_env() -> dict[str, str]:
+    """Returns this process's own environment with every GIT_* variable
+    removed. When these tests run as part of a real `git commit` (this
+    repo's own pre-commit hook invokes `python3 -m unittest discover -s
+    scripts/tests`), git itself sets GIT_DIR/GIT_INDEX_FILE in the
+    hook's environment so the hook operates on the real repository
+    being committed to -- an inherited GIT_DIR silently overrides
+    `cwd=`'s directory choice for git's repository discovery (a
+    documented git quirk), so every git call below would otherwise
+    operate on the real repository's history instead of the intended
+    throwaway TempGitRepo, corrupting it. Stripping every GIT_*
+    variable here makes `cwd=` the only thing that determines which
+    repository each call actually touches, regardless of how this
+    test process itself was invoked.
+    """
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 def _run_git(repo: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args],
         cwd=repo,
         capture_output=True,
         text=True,
+        env=_isolated_git_env(),
         check=True,
     )
     return result.stdout
