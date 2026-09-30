@@ -4,6 +4,7 @@
 import { el, progressBar, storageBadge, emptyState, errorBanner } from "../ui/components.js";
 import { formatBytes, formatNumber, formatRelativeTimeFromUnixSeconds } from "../core/format.js";
 import { createSparkline, SERIES_COLORS } from "./charts.js";
+import { t } from "../core/i18n.js";
 
 /**
  * buildBucketsSection renders the full object-storage section.
@@ -15,16 +16,15 @@ import { createSparkline, SERIES_COLORS } from "./charts.js";
  */
 export function buildBucketsSection({ buckets, collectors, nowMs }) {
   const section = el("section", { class: "cp-section", attrs: { "aria-labelledby": "cp-buckets-heading" } });
-  section.append(el("h2", { id: "cp-buckets-heading", text: "Object storage" }));
+  section.append(el("h2", { id: "cp-buckets-heading", text: t("buckets.title") }));
 
   const charts = [];
 
   if (buckets.length === 0) {
     section.append(
       emptyState({
-        title: "No buckets tracked",
-        message:
-          "Set CP_S3_BUCKETS (e.g. \"my-bucket:us-east-1\") and/or CP_R2_ACCOUNT_ID + CP_R2_API_TOKEN on the hub to start collecting object storage stats.",
+        title: t("buckets.empty_title"),
+        message: t("buckets.empty_message"),
       }),
     );
   } else {
@@ -68,34 +68,34 @@ function bucketCard(view, nowMs) {
 
   const grid = el("div", { class: "cp-bucket-stats-grid" });
   grid.append(
-    statPair("Stored", formatBytes(stats.size_bytes)),
-    statPair("Objects", formatNumber(stats.object_count)),
-    statPair("Class A ops (MTD)", formatNumber(stats.class_a_ops_mtd)),
-    statPair("Class B ops (MTD)", formatNumber(stats.class_b_ops_mtd)),
+    statPair(t("buckets.stat_stored"), formatBytes(stats.size_bytes)),
+    statPair(t("buckets.stat_objects"), formatNumber(stats.object_count)),
+    statPair(t("buckets.stat_class_a_ops"), formatNumber(stats.class_a_ops_mtd)),
+    statPair(t("buckets.stat_class_b_ops"), formatNumber(stats.class_b_ops_mtd)),
   );
   card.append(grid);
 
   if (stats.provider === "s3") {
     card.append(
-      el("p", { class: "cp-muted-small", text: `Egress (MTD): ${formatBytes(stats.egress_bytes_mtd)}` }),
+      el("p", { class: "cp-muted-small", text: t("buckets.egress_mtd", { amount: formatBytes(stats.egress_bytes_mtd) }) }),
     );
   }
 
   let chart = null;
   if (!stats.request_metrics_available) {
-    card.append(el("p", { class: "cp-hint", text: "Request metrics not enabled for this bucket." }));
+    card.append(el("p", { class: "cp-hint", text: t("buckets.request_metrics_not_enabled") }));
   } else {
     const windowMinutes = Math.max(stats.window_seconds / 60, 1);
     const reqPerMin = stats.requests_window / windowMinutes;
     card.append(
-      el("p", { class: "cp-muted-small", text: `Requests (last window): ${formatNumber(stats.requests_window)} (~${reqPerMin.toFixed(1)}/min)` }),
+      el("p", { class: "cp-muted-small", text: t("buckets.requests_last_window", { count: formatNumber(stats.requests_window), perMin: reqPerMin.toFixed(1) }) }),
     );
 
     if (view.history && view.history.length > 1) {
       const sparkWrap = el("div", {
         class: "cp-sparkline-wrap",
         attrs: {
-          "aria-label": `Requests per collection window over the last 24 hours for ${stats.bucket}`,
+          "aria-label": t("buckets.sparkline_aria_label", { bucket: stats.bucket }),
           role: "img",
         },
       });
@@ -118,7 +118,7 @@ function bucketCard(view, nowMs) {
   card.append(
     el("p", {
       class: "cp-muted-small",
-      text: `Collected ${formatRelativeTimeFromUnixSeconds(stats.collected_at, nowMs)}`,
+      text: t("buckets.collected_at", { relative: formatRelativeTimeFromUnixSeconds(stats.collected_at, nowMs) }),
     }),
   );
 
@@ -142,12 +142,12 @@ function statPair(label, value) {
  */
 function freeTierBars(stats, freeTier) {
   const wrap = el("div", { class: "cp-free-tier" });
-  wrap.append(el("h4", { text: "R2 free tier" }));
+  wrap.append(el("h4", { text: t("buckets.r2_free_tier") }));
   wrap.append(
     progressBar({
       value: stats.size_bytes,
       max: freeTier.storage_bytes,
-      label: "Free tier storage usage",
+      label: t("buckets.free_tier_storage_usage"),
       levelClass: barLevel(stats.size_bytes, freeTier.storage_bytes),
       valueText: `${formatBytes(stats.size_bytes)} / ${formatBytes(freeTier.storage_bytes)}`,
     }),
@@ -156,18 +156,18 @@ function freeTierBars(stats, freeTier) {
     progressBar({
       value: stats.class_a_ops_mtd,
       max: freeTier.class_a_ops,
-      label: "Free tier Class A operations usage",
+      label: t("buckets.free_tier_class_a_usage"),
       levelClass: barLevel(stats.class_a_ops_mtd, freeTier.class_a_ops),
-      valueText: `${formatNumber(stats.class_a_ops_mtd)} / ${formatNumber(freeTier.class_a_ops)} Class A`,
+      valueText: t("buckets.class_a_value", { used: formatNumber(stats.class_a_ops_mtd), max: formatNumber(freeTier.class_a_ops) }),
     }),
   );
   wrap.append(
     progressBar({
       value: stats.class_b_ops_mtd,
       max: freeTier.class_b_ops,
-      label: "Free tier Class B operations usage",
+      label: t("buckets.free_tier_class_b_usage"),
       levelClass: barLevel(stats.class_b_ops_mtd, freeTier.class_b_ops),
-      valueText: `${formatNumber(stats.class_b_ops_mtd)} / ${formatNumber(freeTier.class_b_ops)} Class B`,
+      valueText: t("buckets.class_b_value", { used: formatNumber(stats.class_b_ops_mtd), max: formatNumber(freeTier.class_b_ops) }),
     }),
   );
   return wrap;
@@ -191,10 +191,10 @@ function barLevel(value, max) {
  */
 function collectorStatusList(collectors, nowMs) {
   const wrap = el("div", { class: "cp-collector-status" });
-  wrap.append(el("h3", { text: "Collectors" }));
+  wrap.append(el("h3", { text: t("buckets.collectors_title") }));
 
   if (collectors.length === 0) {
-    wrap.append(el("p", { class: "cp-muted-small", text: "No cloud collectors configured." }));
+    wrap.append(el("p", { class: "cp-muted-small", text: t("buckets.no_collectors_configured") }));
     return wrap;
   }
 
@@ -205,7 +205,7 @@ function collectorStatusList(collectors, nowMs) {
     item.append(
       el("span", {
         class: "cp-muted-small",
-        text: c.enabled ? `Last run ${formatRelativeTimeFromUnixSeconds(c.last_run, nowMs)}` : "Disabled",
+        text: c.enabled ? t("buckets.last_run", { relative: formatRelativeTimeFromUnixSeconds(c.last_run, nowMs) }) : t("buckets.disabled"),
       }),
     );
     if (c.last_error) {

@@ -5,6 +5,7 @@
 // the other direction's total shown as secondary text).
 import { el, progressBar, egressLevelChip, levelClassForBar, hubOverrideBadge } from "../ui/components.js";
 import { formatBytes } from "../core/format.js";
+import { t } from "../core/i18n.js";
 
 /** DIRECTION_STORAGE_KEY is the localStorage key remembering the last
  * selected egress direction across page loads. */
@@ -76,23 +77,23 @@ export function setStoredDirection(dir) {
  */
 export function buildEgressSection({ month, direction, hosts, onMonthChange, onDirectionChange }) {
   const section = el("section", { class: "cp-section", attrs: { "aria-labelledby": "cp-egress-heading" } });
-  section.append(el("h2", { id: "cp-egress-heading", text: "Monthly egress" }));
+  section.append(el("h2", { id: "cp-egress-heading", text: t("egress.title") }));
 
   const topRow = el("div", { class: "cp-egress-top-row" });
 
   const segmented = el("div", {
     class: "cp-segmented",
-    attrs: { role: "group", "aria-label": "Egress direction" },
+    attrs: { role: "group", "aria-label": t("egress.direction_group_aria_label") },
   });
   const outBtn = el("button", {
     class: "cp-btn cp-segmented-btn",
     attrs: { type: "button", "aria-pressed": direction === "out" ? "true" : "false" },
-    text: "Outbound",
+    text: t("egress.outbound"),
   });
   const inBtn = el("button", {
     class: "cp-btn cp-segmented-btn",
     attrs: { type: "button", "aria-pressed": direction === "in" ? "true" : "false" },
-    text: "Inbound",
+    text: t("egress.inbound"),
   });
   outBtn.addEventListener("click", () => onDirectionChange("out"));
   inBtn.addEventListener("click", () => onDirectionChange("in"));
@@ -102,18 +103,18 @@ export function buildEgressSection({ month, direction, hosts, onMonthChange, onD
   const controls = el("div", { class: "cp-month-controls" });
   const prevBtn = el("button", {
     class: "cp-btn cp-btn-icon",
-    attrs: { type: "button", "aria-label": "Previous month" },
+    attrs: { type: "button", "aria-label": t("egress.previous_month") },
     text: "‹",
   });
   const nextBtn = el("button", {
     class: "cp-btn cp-btn-icon",
-    attrs: { type: "button", "aria-label": "Next month" },
+    attrs: { type: "button", "aria-label": t("egress.next_month") },
     text: "›",
   });
   const monthInput = /** @type {HTMLInputElement} */ (
     el("input", {
       class: "cp-input",
-      attrs: { type: "month", value: month, "aria-label": "Select month" },
+      attrs: { type: "month", value: month, "aria-label": t("egress.select_month") },
     })
   );
 
@@ -128,7 +129,7 @@ export function buildEgressSection({ month, direction, hosts, onMonthChange, onD
   section.append(topRow);
 
   if (hosts.length === 0) {
-    section.append(el("p", { class: "cp-muted", text: "No egress data recorded for this month." }));
+    section.append(el("p", { class: "cp-muted", text: t("egress.no_data_this_month") }));
     return section;
   }
 
@@ -157,7 +158,7 @@ function egressRow(entry, direction) {
   const level = isOut ? egress.level : egress.rx_level;
   const projectedBytes = isOut ? egress.projected_tx_bytes : egress.projected_rx_bytes;
   const hubOverride = (isOut ? egress.limit_source : egress.rx_limit_source) === "hub";
-  const otherLabel = isOut ? "Inbound" : "Outbound";
+  const otherLabel = isOut ? t("egress.inbound") : t("egress.outbound");
   const otherBytes = isOut ? egress.rx_bytes : egress.tx_bytes;
 
   const head = el("div", { class: "cp-egress-row-head" });
@@ -168,8 +169,8 @@ function egressRow(entry, direction) {
   row.append(head);
 
   if (limitBytes === 0) {
-    row.append(el("p", { class: "cp-egress-unlimited", text: `No limit · ${formatBytes(bytes)} used` }));
-    row.append(el("p", { class: "cp-muted-small", text: `${otherLabel}: ${formatBytes(otherBytes)}` }));
+    row.append(el("p", { class: "cp-egress-unlimited", text: t("host.egress_no_limit", { amount: formatBytes(bytes) }) }));
+    row.append(el("p", { class: "cp-muted-small", text: t("egress.other_direction_total", { label: otherLabel, amount: formatBytes(otherBytes) }) }));
     return row;
   }
 
@@ -177,7 +178,7 @@ function egressRow(entry, direction) {
     progressBar({
       value: bytes,
       max: limitBytes,
-      label: `${hostname} monthly ${isOut ? "outbound" : "inbound"} usage`,
+      label: isOut ? t("egress.host_monthly_outbound_usage", { hostname }) : t("egress.host_monthly_inbound_usage", { hostname }),
       levelClass: levelClassForBar(level),
       valueText: `${formatBytes(bytes)} / ${formatBytes(limitBytes)}`,
     }),
@@ -185,7 +186,7 @@ function egressRow(entry, direction) {
   row.append(
     el("p", {
       class: "cp-muted-small",
-      text: `${otherLabel}: ${formatBytes(otherBytes)} · Projected: ${formatBytes(projectedBytes)}`,
+      text: t("egress.other_direction_and_projected", { label: otherLabel, amount: formatBytes(otherBytes), projected: formatBytes(projectedBytes) }),
     }),
   );
   return row;
