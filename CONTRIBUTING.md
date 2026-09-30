@@ -68,6 +68,61 @@ Use Conventional Commits, for example `feat(alerting): add pager sender` or `fix
 - **Pricing plan / cloud billing provider:** builtin plans and provider CLIs are the exception to "small changes only" — see `CODING_CONVENTIONS.md`'s Exec rules and Audit logging sections before adding a new CLI-backed provider or a new builtin plan; any new admin-facing settings change (a rate, an interval, a plan edit) must call `(*Server).recordAudit` alongside its own `slog.Info` line.
 - **Privileged agent-side helper** (anything analogous to remote update's request/result file exchange): follow `CODING_CONVENTIONS.md`'s "Privileged-helper file handling" checklist exactly — `O_NOFOLLOW` (or the Windows reparse-point-rejecting equivalent), a size cap, full schema validation before trusting a field, and a root-owned (or otherwise more-privileged) directory for anything the unprivileged side must not be able to forge.
 
+## Adding or changing UI text / adding a language
+
+Every user-visible dashboard string goes through `t(key, params)` from
+`web/assets/js/core/i18n.js` — never a hard-coded string literal in
+`text:`/`textContent`/`innerText`/`title`/`aria-label`/`placeholder`/
+`alt`/`label:` (in an `el()`/`dropdownItem()`/`selectField()` call),
+`showToast({ message: ... })`, or `createDialog({ title, description })`.
+`scripts/check-i18n.mjs` enforces this (wired into `.githooks/pre-commit`
+and CI's `web` job) by scanning `web/assets/js/**` for exactly these
+patterns.
+
+**Adding/changing a string:**
+
+1. Add the key to **both** `web/assets/i18n/en.json` and
+   `web/assets/i18n/ko.json`, nested under the right namespace
+   (`common`, `nav`, `login`, `overview`, `host`, `alerts`, `costs`,
+   `rollout`, `settings`, `health`, `errors`, ...). Keep the two files'
+   key sets and `{placeholder}` sets identical — `check-i18n.mjs`
+   fails on any drift.
+2. Write natural Korean, not a machine-literal translation. Product
+   names and API/technical terms (`cloud-pulse`, `Discord`, `AWS`,
+   HTTP status names, etc.) stay in English in both catalogs.
+3. Use `t("namespace.key", { param: value })` at the call site.
+   `{name}`-style placeholders substitute from the `params` object; a
+   `count` param selects a `{one, other}` plural pair for simple
+   English/Korean plural handling (see `core/i18n.js`'s header comment).
+4. If the string is genuinely not user-visible (a `console.*` message,
+   an internal-only identifier the detector's heuristics mis-flagged),
+   add a reasoned entry to `scripts/i18n-lint.allow.json` instead of a
+   catalog key — every entry requires a non-empty `reason`.
+5. A file not yet converted to `t()` stays listed in
+   `scripts/i18n-lint.pending.json` (findings there don't fail the
+   lint); remove it from that list in the same commit that finishes
+   converting it — the lint fails if a listed file has zero findings,
+   forcing that cleanup rather than letting the list grow forever.
+
+**Adding a third language:** extend `SUPPORTED_LANGUAGES` and the
+`getLang`/`detectAutoLang`/`intlLocale` resolution in
+`web/assets/js/core/i18n.js`, add `web/assets/i18n/<lang>.json` with
+every key from `en.json`, add the option to the language selector
+(`web/assets/js/ui/language-select.js`), and extend `check-i18n.mjs`'s
+parity check and `scripts/ui-audit.mjs --langs` to include it. Chart
+PNGs (`internal/alerting/chart`) render text in a bitmap ASCII-only
+font and intentionally stay English regardless of `notify_language` —
+see DECISIONS_LOG.md.
+
+Server-rendered notification text (Discord/Telegram/WhatsApp message
+bodies, chart titles) is localized separately through the Go
+`internal/i18n` package (`T(lang, key, params)`, catalogs under
+`internal/i18n/catalog/*.json`), selected by the hub-wide
+`notify_language` setting (`en`/`ko`, default `en`) — independent of
+any signed-in admin's own dashboard language preference. Existing
+alert/notification message strings are migrated to it feature-by-
+feature, not all at once.
+
 ## Releasing (maintainers)
 
 Release notes are generated deterministically from Conventional Commits, never hand-written and never `--generate-notes`:

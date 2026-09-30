@@ -1486,3 +1486,112 @@ never rewrite history here, only add to it.
   protected identifiers (repository owner/name, Go module path), and
   strips PNG metadata chunks. Shots are declared in
   `scripts/capture-screenshots.json`.
+
+### D-086 — Dashboard i18n: a pure `t()` module + JSON catalogs, no build step, independent of the server-side notification-language package (2026-10-01)
+
+- **Context**: SPEC-v0.8 §3-3 asks for an English + Korean dashboard
+  with a per-user language preference, without adding a JS build
+  toolchain (i18next, ICU MessageFormat, etc.) — the project's
+  standing rule is vanilla ES modules, no Node.js needed to run the
+  hub, no CDN calls at runtime. Separately, hub-generated notification
+  text (Discord/Telegram/WhatsApp message bodies) needs its own
+  language setting that has nothing to do with which admin is
+  currently looking at the dashboard.
+- **Decision**: `web/assets/js/core/i18n.js` is a pure module:
+  `t(key, params)` looks up a dot-separated namespaced key
+  (`"nav.overview"`) in a catalog already loaded via `setCatalogs`/
+  `loadCatalogs`, substitutes `{name}`-style placeholders, and — for a
+  catalog leaf shaped `{one, other}` — picks a sub-key from a numeric
+  `params.count` (a deliberately simplified plural model; English's
+  one/other split is all this dashboard needs, and Korean has no
+  grammatical plural to speak of, so `ko.json` often repeats the same
+  text under both sub-keys). Fallback order is exactly: active language
+  → English → the bare key itself, mirrored identically in the
+  server-side `internal/i18n.T` so both layers degrade the same way.
+  Catalogs (`web/assets/i18n/en.json`/`ko.json`) are static JSON served
+  by the hub's existing embedded-`assets` mechanism (no new embed
+  pattern needed) and fetched once at boot in `main.js`, before the
+  first `router.start()` — so no page ever renders in the wrong
+  language and then flashes to the right one. Language preference
+  (`localStorage "cp_lang"`, `'auto'|'en'|'ko'`) is resolved from
+  `navigator.language` when `'auto'`, independently of `internal/i18n`'s
+  `notify_language` hub setting (Go package, embedded catalogs under
+  `internal/i18n/catalog/*.json`, `Lang`/`Parse`/`T`) — one is a
+  browser-local preference for whoever is signed in right now, the
+  other is hub-wide state controlling what a notified third party
+  (Discord channel, Telegram chat) sees, and conflating them would mean
+  an admin's personal language choice silently changing what gets
+  texted to on-call.
+- **Consequences**: Adding a UI string never requires a build step —
+  edit two JSON files and call `t()`. Adding a third dashboard language
+  touches `core/i18n.js` (the `SUPPORTED_LANGUAGES`/`intlLocale` list),
+  one new catalog file, and the language selector, without touching
+  `internal/i18n` at all (and vice versa for a third notification
+  language) — the two catalogs and their parity tests are intentionally
+  never unified into one file format, since their fallback and
+  placeholder conventions only need to *agree*, not *share code*, and
+  Go/JS have no natural shared module boundary here anyway.
+
+### D-087 — Text inside chart PNGs stays English regardless of `notify_language` (2026-10-01)
+
+- **Context**: SPEC-v0.8 §3-3 explicitly calls this out: alert/rollout
+  chart images attached to Discord/Telegram/WhatsApp notifications
+  (`internal/alerting/chart`) render axis labels, legends, and titles
+  with the Go standard library's `golang.org/x/image/font/basicfont`
+  (a fixed 7×13 bitmap face) baked into the binary — there is no
+  vendored Korean-glyph bitmap font, and adding a real scalable-font
+  renderer (freetype-style shaping, Hangul glyph coverage) is a
+  meaningfully larger dependency/complexity add than this feature
+  warrants.
+- **Decision**: Chart PNG text (axis labels, legends, per-series
+  titles) is always rendered in English, independent of the hub's
+  `notify_language` setting. Only the notification **message body**
+  surrounding the attached image (built via `internal/i18n.T`) is
+  localized. This is a permanent constraint of the current bitmap-font
+  renderer, not a temporary gap — revisiting it would require picking
+  and vendoring a real font-shaping stack first.
+- **Consequences**: A Korean-language notification's chart image still
+  reads "CPU %", "5m avg", etc. in English; this is called out in
+  `docs/notifications.md`/`docs/alerting.md` so it isn't mistaken for a
+  missed translation. If cloud-pulse ever vendors a proper text-shaping
+  library for another reason, revisit localizing chart text at that
+  point — not before, to avoid pulling in a heavyweight dependency for
+  this alone.
+
+### D-088 — Hard-coded UI string lint: regex-based (no AST dependency), an explicit allow-list + a shrinking "pending" list, not a big-bang conversion (2026-10-01)
+
+- **Context**: SPEC-v0.8 §3-3 needs to prevent new hard-coded UI
+  strings from creeping back in once `t()` exists, but the dashboard
+  had 50+ existing JS files with pre-existing literal strings — failing
+  the build on all of them at once (before any of those files are
+  actually converted) would make the lint impossible to land
+  incrementally, and pulling in a real JS AST parser conflicts with
+  this project's no-new-Node-deps convention for tooling.
+- **Decision**: `scripts/check-i18n.mjs` (CLI) + `scripts/check-i18n-
+  lib.mjs` (pure, unit-tested detector) scan `web/assets/js/**/*.js`
+  with targeted regexes for the small, closed set of patterns this
+  codebase's own UI helpers actually use for user-visible text
+  (`text:`/`label:`/`title:`/`message:`/`description:`/`alt:`/
+  `aria-label:`/`placeholder:` as an object-literal key, `.textContent`/
+  `.innerText` assignment, `confirm(`/`alert(` calls) — deliberately not
+  a general-purpose JS parser, since the goal is catching this
+  project's own conventions, not arbitrary JS. Two JSON files gate
+  enforcement: `scripts/i18n-lint.allow.json` (a reasoned exception per
+  finding — e.g. the "cloud-pulse" product name, a literal keyboard
+  shortcut label) and `scripts/i18n-lint.pending.json` (files not yet
+  converted; a finding there doesn't fail the build, but the lint
+  actively fails if a *pending* file has zero findings — forcing that
+  file's removal from the list the moment it's actually finished,
+  rather than letting the list grow monotonically and rot). The initial
+  pending list is every pre-existing file with a finding except the
+  three converted as the reference example (`main.js`, `pages/login.js`,
+  `ui/shell.js`). The same tool also checks `en.json`/`ko.json` key and
+  `{placeholder}` parity and that every literal `t('key')` call site
+  resolves against `en.json`.
+- **Consequences**: Feature stages converting a page to `t()` must
+  remove that file from `i18n-lint.pending.json` in the same commit —
+  the lint enforces this mechanically rather than relying on review
+  discipline. A dynamically-built key (`t(variable)`) is intentionally
+  not checked against the catalog (can't be, statically) and is not
+  flagged as hard-coded either, a known gap accepted rather than
+  chasing false negatives with more regex complexity.

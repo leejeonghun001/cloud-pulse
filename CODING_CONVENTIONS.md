@@ -48,6 +48,17 @@ is wrong, change the enforcement and this doc together, don't bypass it.
   `ENFORCED BY: pre-commit, CI (grep)`
 - **Conventional Commits** for every commit message.
   `ENFORCED BY: commit-msg hook, CI`
+- **Every user-visible dashboard string goes through `t(key, params)`**
+  (`web/assets/js/core/i18n.js`), with the key present in both
+  `web/assets/i18n/en.json` and `ko.json` (same key set, same
+  `{placeholder}` set) — never a hard-coded string literal in
+  `text:`/`textContent`/`innerText`/`title`/`aria-label`/`placeholder`/
+  `alt`/`label:` (in an `el()`/`dropdownItem()`/`selectField()` call),
+  `showToast({ message })`, or `createDialog({ title, description })`.
+  Product names and API/technical terms stay in English in every
+  catalog. A genuinely non-user-visible string can be allow-listed
+  (`scripts/i18n-lint.allow.json`, reason required) instead.
+  `ENFORCED BY: pre-commit, CI (scripts/check-i18n.mjs)`
 
 ## Clean Architecture & directory layout
 
