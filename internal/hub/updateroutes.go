@@ -32,6 +32,7 @@ const (
 // (SPEC-v0.6 §2): batch create/list, retry, cancel.
 func (s *Server) registerUpdateRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/agents/updates", s.requireAdmin(s.handleListUpdateJobs))
+	mux.HandleFunc("GET /api/v1/agents/updates/batches", s.requireUser(s.handleListUpdateBatches))
 	mux.HandleFunc("POST /api/v1/agents/updates", s.requireAdmin(s.handleCreateUpdateBatch))
 	mux.HandleFunc("POST /api/v1/agents/updates/{job_id}/retry", s.requireAdmin(s.handleRetryUpdateJob))
 	mux.HandleFunc("POST /api/v1/agents/updates/{batch_id}/cancel", s.requireAdmin(s.handleCancelUpdateBatch))
