@@ -38,12 +38,12 @@ func TestInventoryCollector_PortDedupe(t *testing.T) {
 		{Type: syscall.SOCK_STREAM, Status: "LISTEN", Laddr: gonet.Addr{IP: "0.0.0.0", Port: 8080}, Pid: 100},
 		{Type: syscall.SOCK_STREAM, Status: "LISTEN", Laddr: gonet.Addr{IP: "127.0.0.1", Port: 8090}, Pid: 200},
 		// Non-listening TCP (established outbound) must be excluded.
-		{Type: syscall.SOCK_STREAM, Status: "ESTABLISHED", Laddr: gonet.Addr{IP: "10.0.0.5", Port: 54321}, Raddr: gonet.Addr{IP: "1.2.3.4", Port: 443}},
+		{Type: syscall.SOCK_STREAM, Status: "ESTABLISHED", Laddr: gonet.Addr{IP: "10.0.0.5", Port: 54321}, Raddr: gonet.Addr{IP: "192.0.2.4", Port: 443}},
 		// Bound UDP (no remote address) must be included.
 		{Type: syscall.SOCK_DGRAM, Laddr: gonet.Addr{IP: "0.0.0.0", Port: 53}, Pid: 300},
 		// UDP with a remote address set (a "connected" UDP socket) must
 		// be excluded — it's not a service the host offers.
-		{Type: syscall.SOCK_DGRAM, Laddr: gonet.Addr{IP: "10.0.0.5", Port: 45000}, Raddr: gonet.Addr{IP: "8.8.8.8", Port: 53}},
+		{Type: syscall.SOCK_DGRAM, Laddr: gonet.Addr{IP: "10.0.0.5", Port: 45000}, Raddr: gonet.Addr{IP: "198.51.100.8", Port: 53}},
 	}, nil)
 
 	inv, err := c.Collect(context.Background(), time.Unix(1000, 0))

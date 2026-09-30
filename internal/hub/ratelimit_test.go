@@ -147,11 +147,11 @@ func TestRateLimiter_GlobalLockout(t *testing.T) {
 	// Distribute failures across many distinct IPs so no single IP's
 	// per-IP lockout triggers first, isolating the global threshold.
 	for i := 0; i < globalRateLimitMaxFailures+1; i++ {
-		ip := "203.0.114." + string(rune('A'+i%26)) + ":1"
+		ip := "198.51.100." + string(rune('A'+i%26)) + ":1"
 		rl.recordFailure(ip)
 	}
 
-	ok, retryAfter := rl.allow("203.0.115.1:1") // a fresh IP with no history
+	ok, retryAfter := rl.allow("198.51.100.1:1") // a fresh IP with no history
 	if ok {
 		t.Fatal("expected global lockout to block even a fresh client IP")
 	}
@@ -160,7 +160,7 @@ func TestRateLimiter_GlobalLockout(t *testing.T) {
 	}
 
 	clock.advance(globalRateLimitLockout + time.Second)
-	if ok, _ := rl.allow("203.0.115.1:1"); !ok {
+	if ok, _ := rl.allow("198.51.100.1:1"); !ok {
 		t.Error("expected allow after global lockout window elapsed")
 	}
 }

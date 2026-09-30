@@ -265,6 +265,46 @@ jobs:
       - name: CONTRIBUTING.md commands actually work (fresh clone, empty caches)
         run: bash scripts/test-contributing.sh
 
+  # prepublish (SPEC-v0.8 SS2): public-repository final-check scanner.
+  # This is the ONLY job block this stage (prepublish) owns in this
+  # file — every other job above/below is pre-existing and untouched.
+  # Tree-mode findings are always a hard failure; history-mode
+  # findings are checked against the committed .prepublish-baseline.json
+  # (a finding already recorded there is a warning, a new one still
+  # fails the job) — see scripts/prepublish-check.py's own module
+  # docstring and docs/maintainers.md for the full model.
+  prepublish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history — this job scans every ref)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run scripts/tests/test_prepublish_check.py
+        run: python3 -m unittest scripts.tests.test_prepublish_check -v
+
+      - name: Tree-mode scan (tracked files only) — must be 0 findings
+        run: python3 scripts/prepublish-check.py --tree-only
+
+      - name: Full scan (tree + history against the committed baseline)
+        run: python3 scripts/prepublish-check.py --report /tmp/prepublish-report.md
+
+      - name: Upload prepublish report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prepublish-report
+          path: /tmp/prepublish-report.md
+          if-no-files-found: warn
+          retention-days: 14
+
   ui-audit:
     runs-on: ubuntu-latest
     needs: test
@@ -728,3 +768,27 @@ jobs:
             e2e-diagnostics
           if-no-files-found: warn
           retention-days: 14
+
+  # hub-upgrade (SPEC-v0.8 SS1): local hub upgrade verification kit
+  # rehearsal. This is the ONLY job block this stage (upgrade-kit) owns
+  # in this file — every other job above is pre-existing/owned by
+  # other stages and left untouched. Needs full history (fetch-depth:
+  # 0) so the v0.3.2 tag used by scripts/test-hub-upgrade.sh's git
+  # worktree step is reachable.
+  hub-upgrade:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout (full history — needs the v0.3.2 tag)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Upgrade kit rehearsal (v0.3.2 sandbox -> v0.7.99-test -> rollback, no root/real network/port 8090)
+        run: bash scripts/test-hub-upgrade.sh
