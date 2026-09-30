@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -347,25 +346,6 @@ func checkCredentialsFilePermissions(path string) error {
 	return checkCredentialsFilePermissionsUnix(path)
 }
 
-// checkCredentialsFilePermissionsWindows implements the Windows half of
-// checkCredentialsFilePermissions. Defined here (not a separate
-// windows-only build-tagged file) since it contains no Windows-specific
-// API calls — only a path-prefix check against os.UserHomeDir(), which
-// resolves to %USERPROFILE% on Windows and is safe to compile-check on
-// every OS even though it only ever runs when runtime.GOOS == "windows".
-func checkCredentialsFilePermissionsWindows(path string) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("%s: could not resolve user profile directory to check credentials-file location: %w", path, err)
-	}
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return fmt.Errorf("%s: resolve absolute path: %w", path, err)
-	}
-	rel, err := filepath.Rel(home, absPath)
-	if err != nil || strings.HasPrefix(rel, "..") || rel == ".." {
-		return fmt.Errorf("%s: must be located inside your user profile directory (%s) on Windows, where NTFS ACLs default to owner-only access", path, home)
-	}
-	fmt.Fprintf(os.Stderr, "warning: cloud-pulse-hub notify verify: on Windows, only the credentials file's location (inside your user profile) is checked — its NTFS ACLs are not independently verified; ensure it is not shared with other accounts\n")
-	return nil
-}
+// checkCredentialsFilePermissionsWindows is implemented in the
+// Windows-only source file. Its canonical path resolution uses Windows APIs
+// before calling the platform-independent component containment helper.

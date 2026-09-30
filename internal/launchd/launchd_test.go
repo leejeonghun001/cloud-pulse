@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -245,6 +246,9 @@ func TestApply_RewritesDriftedPlist(t *testing.T) {
 }
 
 func TestApply_KickstartHook(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("launchctl fake is a POSIX shell script and Windows has no shebang execution")
+	}
 	dir := t.TempDir()
 	plistPath := filepath.Join(dir, "com.cloudpulse.agent.plist")
 	stale := Params{BinPath: "/usr/local/bin/cloud-pulse-agent", EnvFile: "/usr/local/etc/cloud-pulse/agent.env", LogPath: "/tmp/stale.log"}
@@ -283,9 +287,9 @@ func TestApply_MissingFile(t *testing.T) {
 
 // writeFakeLaunchctl writes a tiny shell script standing in for
 // launchctl: for "kickstart"/"bootstrap"/"bootout" it touches markerPath
-// and exits 0. Requires /bin/sh, present on every CI platform this
-// package's tests run on (Linux/macOS); Windows never runs this package's
-// tests since launchd is macOS-only in production use.
+// and exits 0. Requires /bin/sh, present on Linux and macOS CI. The sole
+// caller explicitly skips on Windows because Windows cannot execute shebang
+// scripts.
 func writeFakeLaunchctl(t *testing.T, dir, markerPath string) string {
 	t.Helper()
 	if _, err := exec.LookPath("sh"); err != nil {

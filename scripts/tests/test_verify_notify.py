@@ -163,6 +163,7 @@ class ArgumentValidationTests(unittest.TestCase):
 class CredentialsFileTests(unittest.TestCase):
     """--credentials-file permission checks and KEY=VALUE parsing."""
 
+    @unittest.skipIf(os.name == "nt", "Windows does not provide Unix permission bits")
     def test_rejects_world_readable_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "creds"

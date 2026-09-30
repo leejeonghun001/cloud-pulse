@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -76,6 +77,9 @@ func TestLoadNotifyVerifyCredentials_EnvOnly(t *testing.T) {
 }
 
 func TestLoadNotifyVerifyCredentials_RejectsGroupReadablePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not provide Unix group permission bits")
+	}
 	t.Parallel()
 	dir := t.TempDir()
 	path := writeCredentialsFile(t, dir, "CP_VERIFY_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/1/x\n", 0o640)
@@ -87,6 +91,9 @@ func TestLoadNotifyVerifyCredentials_RejectsGroupReadablePermissions(t *testing.
 }
 
 func TestLoadNotifyVerifyCredentials_RejectsWorldWritablePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not provide Unix world permission bits")
+	}
 	t.Parallel()
 	dir := t.TempDir()
 	path := writeCredentialsFile(t, dir, "CP_VERIFY_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/1/x\n", 0o602)

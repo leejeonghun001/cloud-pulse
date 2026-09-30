@@ -177,10 +177,23 @@ class VerifyResult:
 def _check_credentials_file_permissions(path: Path) -> None:
     """Reject a credentials file not owned by, and private to, the caller.
 
-    Raises CredentialsFilePermissionError if path is not owned by the
-    current effective user, or if its mode grants any permission to
-    group/other (i.e. anything beyond 0600).
+    Windows has no POSIX owner/mode bits, so it instead requires a canonical
+    path inside the current profile, where default NTFS ACLs are owner-only.
+    Other platforms require current-user ownership and no group/other bits.
     """
+    if os.name == "nt":
+        profile = os.path.normcase(os.path.realpath(os.path.expanduser("~")))
+        candidate = os.path.normcase(os.path.realpath(os.path.abspath(path)))
+        try:
+            inside_profile = os.path.commonpath((profile, candidate)) == profile
+        except ValueError:  # Different drive volumes cannot share a parent.
+            inside_profile = False
+        if not inside_profile:
+            raise CredentialsFilePermissionError(
+                f"{path}: must be located inside your user profile directory ({profile}) on Windows"
+            )
+        return
+
     stat_result = path.stat()
     if stat_result.st_uid != os.geteuid():
         raise CredentialsFilePermissionError(f"{path}: not owned by the current user")
