@@ -62,6 +62,23 @@ function Assert-FileContains {
     }
 }
 
+function Assert-CallOrder {
+    param([string]$Description, [string]$Path, [string]$First, [string]$Second)
+    $lines = if (Test-Path $Path) { @(Get-Content -Path $Path) } else { @() }
+    $firstIndex = -1
+    $secondIndex = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($firstIndex -lt 0 -and $lines[$i].Contains($First)) { $firstIndex = $i }
+        if ($secondIndex -lt 0 -and $lines[$i].Contains($Second)) { $secondIndex = $i }
+    }
+    if ($firstIndex -ge 0 -and $secondIndex -ge 0 -and $firstIndex -lt $secondIndex) {
+        Write-Pass $Description
+    }
+    else {
+        Write-Fail "$Description (first=$firstIndex second=$secondIndex)"
+    }
+}
+
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 Push-Location $RepoRoot
 try {
@@ -153,7 +170,7 @@ try {
 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ScArgs)
 $logPath = $env:CP_TEST_SC_LOG
 $statePath = $env:CP_TEST_SC_STATE
-Add-Content -Path $logPath -Value ($ScArgs -join ' ')
+Add-Content -Path $logPath -Value ('sc ' + ($ScArgs -join ' '))
 switch ($ScArgs[0]) {
     'create' {
         New-Item -ItemType File -Path (Join-Path $statePath $ScArgs[1]) -Force | Out-Null
@@ -173,8 +190,16 @@ switch ($ScArgs[0]) {
 }
 '@ | Set-Content -Path $scShimPath
 
+        $icaclsShimPath = Join-Path $tmpRoot 'fake-icacls.ps1'
+        @'
+param([Parameter(ValueFromRemainingArguments = $true)][string[]]$IcaclsArgs)
+Add-Content -Path $env:CP_TEST_CALL_LOG -Value ('icacls ' + ($IcaclsArgs -join ' '))
+exit 0
+'@ | Set-Content -Path $icaclsShimPath
+
         $env:CP_TEST_SC_LOG = $scLog
         $env:CP_TEST_SC_STATE = $scState
+        $env:CP_TEST_CALL_LOG = $scLog
         New-Item -ItemType File -Path $scLog -Force | Out-Null
 
         $sandbox = Join-Path $tmpRoot 'sandbox'
@@ -244,8 +269,10 @@ switch ($ScArgs[0]) {
         Assert-FileContains 'agent.env contains CP_HUB_URL' $envFile "CP_HUB_URL=http://127.0.0.1:$port"
         Assert-FileContains 'agent.env contains CP_AGENT_TOKEN' $envFile 'CP_AGENT_TOKEN=a-fake-agent-token-not-a-real-secret-0123456789'
 
-        Assert-FileContains 'sc.exe shim was invoked with create' $scLog 'create cloud-pulse-agent'
-        Assert-FileContains 'sc.exe shim was invoked with start' $scLog 'start cloud-pulse-agent'
+        Assert-FileContains 'sc.exe shim was invoked with create' $scLog 'sc create cloud-pulse-agent'
+        Assert-FileContains 'sc.exe shim was invoked with start' $scLog 'sc start cloud-pulse-agent'
+        Assert-CallOrder 'service SID is granted only after service creation' $scLog `
+            'sc create cloud-pulse-agent' 'icacls NT SERVICE\cloud-pulse-agent'
 
         # -----------------------------------------------------------------
         # Reinstall (upgrade) — should restart, not recreate

@@ -651,6 +651,42 @@ jobs:
           echo "remote-update job did not reach 'succeeded' within 180s" >&2
           exit 1
 
+      - name: "[linux] collect agent diagnostics on failure"
+        if: failure() && matrix.os == 'ubuntu-latest'
+        run: |
+          set -euo pipefail
+          mkdir -p e2e-diagnostics
+          sudo journalctl -u cloud-pulse-agent -u cloud-pulse-agent-update.service -u cloud-pulse-agent-update.path --no-pager 2>&1 | tee e2e-diagnostics/journal.log >/dev/null || true
+          if sudo test -f /etc/cloud-pulse/agent.env; then
+            sudo sed -E 's/^CP_AGENT_TOKEN=.*/CP_AGENT_TOKEN=<redacted>/' /etc/cloud-pulse/agent.env | tee e2e-diagnostics/agent.env >/dev/null
+          fi
+          sudo find /var/lib/cloud-pulse-agent /var/lib/cloud-pulse-agent-update -maxdepth 2 -type f -print -exec cat {} \; 2>&1 | tee e2e-diagnostics/update-files.log >/dev/null || true
+
+      - name: "[darwin] collect agent diagnostics on failure"
+        if: failure() && matrix.os == 'macos-latest'
+        run: |
+          set -euo pipefail
+          mkdir -p e2e-diagnostics
+          sudo sh -c 'cat /Library/Logs/cloud-pulse-agent*.log' 2>&1 | tee e2e-diagnostics/agent.log >/dev/null || true
+          sudo launchctl print system/com.cloudpulse.agent 2>&1 | tee e2e-diagnostics/launchctl-agent.log >/dev/null || true
+          sudo launchctl print system/com.cloudpulse.agent-update 2>&1 | tee e2e-diagnostics/launchctl-updater.log >/dev/null || true
+          if sudo test -f /usr/local/etc/cloud-pulse/agent.env; then
+            sudo sed -E 's/^CP_AGENT_TOKEN=.*/CP_AGENT_TOKEN=<redacted>/' /usr/local/etc/cloud-pulse/agent.env | tee e2e-diagnostics/agent.env >/dev/null
+          fi
+          sudo find '/Library/Application Support/cloud-pulse-agent' '/Library/Application Support/cloud-pulse-agent-update' -maxdepth 2 -type f -print -exec cat {} \; 2>&1 | tee e2e-diagnostics/update-files.log >/dev/null || true
+
+      - name: "[windows] collect agent diagnostics on failure"
+        if: failure() && matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path e2e-diagnostics | Out-Null
+          Get-Service -Name cloud-pulse-agent,cloud-pulse-agent-updater -ErrorAction SilentlyContinue | Format-List * | Out-File e2e-diagnostics/services.txt
+          Get-WinEvent -LogName System -MaxEvents 300 | Where-Object { $_.ProviderName -match 'Service Control Manager|cloud-pulse' } | Format-List * | Out-File e2e-diagnostics/events.txt
+          $envPath = Join-Path $env:ProgramData 'cloud-pulse\agent.env'
+          if (Test-Path $envPath) { (Get-Content $envPath) -replace '^CP_AGENT_TOKEN=.*$', 'CP_AGENT_TOKEN=<redacted>' | Set-Content e2e-diagnostics/agent.env }
+          Get-ChildItem (Join-Path $env:ProgramData 'cloud-pulse-agent'),(Join-Path $env:ProgramData 'cloud-pulse-agent-update') -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object { "--- $($_.FullName) ---"; Get-Content $_.FullName -ErrorAction SilentlyContinue } | Out-File e2e-diagnostics/update-files.txt
+          Get-ChildItem (Join-Path $env:ProgramData 'cloud-pulse') -Filter '*.log' -ErrorAction SilentlyContinue | ForEach-Object { "--- $($_.FullName) ---"; Get-Content $_.FullName -ErrorAction SilentlyContinue } | Out-File e2e-diagnostics/agent-logs.txt
+
       # ---------------------------------------------------------------
       # Uninstall --purge (platform-specific), then clean up shared
       # background processes (hub, asset server).
@@ -684,5 +720,6 @@ jobs:
             hub.log
             dist-ci1
             dist-ci2
+            e2e-diagnostics
           if-no-files-found: warn
           retention-days: 14

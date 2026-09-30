@@ -10,7 +10,6 @@ const wantUpdatePathUnit = `[Unit]
 Description=Watch for cloud-pulse-agent remote update requests
 
 [Path]
-PathModified=/var/lib/cloud-pulse-agent/update-request.json
 PathExists=/var/lib/cloud-pulse-agent/update-request.json
 Unit=cloud-pulse-agent-update.service
 
@@ -23,6 +22,7 @@ Description=Apply a hub-requested cloud-pulse-agent update
 
 [Service]
 Type=oneshot
+EnvironmentFile=/etc/cloud-pulse/agent.env
 ExecStart=/usr/local/bin/cloud-pulse-agent update --from-request /var/lib/cloud-pulse-agent/update-request.json --result-dir /var/lib/cloud-pulse-agent-update
 `
 
@@ -31,6 +31,7 @@ func testUpdateUnitParams() UpdateUnitParams {
 		BinPath:     "/usr/local/bin/cloud-pulse-agent",
 		RequestPath: "/var/lib/cloud-pulse-agent/update-request.json",
 		ResultDir:   "/var/lib/cloud-pulse-agent-update",
+		EnvFile:     "/etc/cloud-pulse/agent.env",
 	}
 }
 
@@ -87,8 +88,9 @@ func TestRenderUpdateUnits_ValidatesRequiredFields(t *testing.T) {
 	}{
 		{"missing bin-path", UpdateUnitParams{RequestPath: "/var/lib/cloud-pulse-agent/update-request.json", ResultDir: "/var/lib/cloud-pulse-agent-update"}},
 		{"missing request-path", UpdateUnitParams{BinPath: "/usr/local/bin/cloud-pulse-agent", ResultDir: "/var/lib/cloud-pulse-agent-update"}},
-		{"missing result-dir", UpdateUnitParams{BinPath: "/usr/local/bin/cloud-pulse-agent", RequestPath: "/var/lib/cloud-pulse-agent/update-request.json"}},
-		{"relative bin-path", UpdateUnitParams{BinPath: "cloud-pulse-agent", RequestPath: "/var/lib/cloud-pulse-agent/update-request.json", ResultDir: "/var/lib/cloud-pulse-agent-update"}},
+		{"missing result-dir", UpdateUnitParams{BinPath: "/usr/local/bin/cloud-pulse-agent", RequestPath: "/var/lib/cloud-pulse-agent/update-request.json", EnvFile: "/etc/cloud-pulse/agent.env"}},
+		{"missing env-file", UpdateUnitParams{BinPath: "/usr/local/bin/cloud-pulse-agent", RequestPath: "/var/lib/cloud-pulse-agent/update-request.json", ResultDir: "/var/lib/cloud-pulse-agent-update"}},
+		{"relative bin-path", UpdateUnitParams{BinPath: "cloud-pulse-agent", RequestPath: "/var/lib/cloud-pulse-agent/update-request.json", ResultDir: "/var/lib/cloud-pulse-agent-update", EnvFile: "/etc/cloud-pulse/agent.env"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -136,7 +138,7 @@ func TestParseUpdateUnitParams_RejectsMismatchedPaths(t *testing.T) {
 
 func TestParseUpdateUnitParams_RejectsMissingFields(t *testing.T) {
 	if _, err := ParseUpdateUnitParams("[Unit]\n", "[Unit]\n[Service]\nType=oneshot\n"); err == nil {
-		t.Error("ParseUpdateUnitParams: expected an error for a unit with no PathModified=/ExecStart=")
+		t.Error("ParseUpdateUnitParams: expected an error for a unit with no PathExists=/ExecStart=")
 	}
 }
 

@@ -100,6 +100,10 @@ type Result struct {
 	Updated bool
 	// Restarted reports whether a service restart was performed.
 	Restarted bool
+	// RestartFailed records that replacement succeeded but the requested
+	// service restart failed. Direct updates remain successful (the binary is
+	// installed), while request mode reports this to the hub as a failed job.
+	RestartFailed bool
 	// Message is a human-readable summary suitable for printing
 	// directly to the user.
 	Message string
@@ -249,6 +253,7 @@ func Run(ctx context.Context, o Options) (Result, error) {
 		// A restart failure does not undo the already-successful
 		// binary replacement; report it but don't treat Run as
 		// failed overall (the new binary is correctly installed).
+		result.RestartFailed = true
 		result.Message = fmt.Sprintf("%s: %s -> %s installed; restart failed: %v", o.Binary, o.Current, latest, err)
 		return result, nil
 	}

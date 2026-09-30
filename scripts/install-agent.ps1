@@ -68,7 +68,10 @@
 
 .NOTES
     Environment overrides (mirroring install-agent.sh):
-      CP_RELEASE_BASE_URL   Override the asset download base URL.
+      CP_RELEASE_BASE_URL   Override and persist the asset download base URL
+                            for mirrors/air-gapped remote updates.
+      CP_UPDATE_LATEST_URL  Override and persist the latest-release URL for
+                            mirrors/air-gapped remote updates.
       CP_SC                 Override the sc.exe-equivalent binary path
                              (test hook; a shim implementing
                              create/delete/start/stop/query).
@@ -246,7 +249,9 @@ function Write-AgentEnvFile {
         [string]$ResolvedHubUrl,
         [string]$ResolvedToken,
         [string]$ResolvedHostId,
-        [bool]$ResolvedRemoteUpdate
+        [bool]$ResolvedRemoteUpdate,
+        [string]$ExistingReleaseBaseUrl,
+        [string]$ExistingUpdateLatestUrl
     )
 
     $lines = @(
@@ -258,6 +263,10 @@ function Write-AgentEnvFile {
         $lines += "CP_HOST_ID=$ResolvedHostId"
     }
     $lines += "CP_REMOTE_UPDATE=$(if ($ResolvedRemoteUpdate) { 'on' } else { 'off' })"
+    $releaseBaseUrl = if ($env:CP_RELEASE_BASE_URL) { $env:CP_RELEASE_BASE_URL } else { $ExistingReleaseBaseUrl }
+    $updateLatestUrl = if ($env:CP_UPDATE_LATEST_URL) { $env:CP_UPDATE_LATEST_URL } else { $ExistingUpdateLatestUrl }
+    if ($releaseBaseUrl) { $lines += "CP_RELEASE_BASE_URL=$releaseBaseUrl" }
+    if ($updateLatestUrl) { $lines += "CP_UPDATE_LATEST_URL=$updateLatestUrl" }
 
     $dir = Split-Path -Parent $EnvFilePath
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
@@ -281,10 +290,17 @@ function Set-CloudPulseAcl {
         return
     }
     $icacls = if ($env:CP_ICACLS) { $env:CP_ICACLS } else { 'icacls.exe' }
-    & $icacls $Path /inheritance:r | Out-Null
-    & $icacls $Path /grant:r 'SYSTEM:(OI)(CI)F' | Out-Null
-    & $icacls $Path /grant:r 'BUILTIN\Administrators:(OI)(CI)F' | Out-Null
-    & $icacls $Path /grant:r "${ServiceSid}:(OI)(CI)$ServiceRights" | Out-Null
+    $inheritance = if (Test-Path -Path $Path -PathType Container) { '(OI)(CI)' } else { '' }
+    $commands = @(
+        ,@($Path, '/inheritance:r')
+        ,@($Path, '/grant:r', "SYSTEM:${inheritance}F")
+        ,@($Path, '/grant:r', "BUILTIN\Administrators:${inheritance}F")
+        ,@($Path, '/grant:r', "${ServiceSid}:${inheritance}$ServiceRights")
+    )
+    foreach ($aclArgs in $commands) {
+        & $icacls @aclArgs | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "icacls failed for $Path (exit code $LASTEXITCODE)" }
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -357,20 +373,30 @@ function Invoke-InstallFlow {
         Copy-Item -Path $assetPath -Destination $paths.BinPath -Force
         Write-Log "installed binary to $($paths.BinPath)"
 
-        $resolvedToken = Resolve-AgentToken
-        if (-not $HubUrl) {
-            throw '-HubUrl is required on first install'
+        $existing = @{}
+        if (Test-Path $paths.EnvFile) {
+            foreach ($line in Get-Content -Path $paths.EnvFile) {
+                if ($line -match '^([A-Za-z_][A-Za-z0-9_]*)=(.*)$') { $existing[$matches[1]] = $matches[2] }
+            }
         }
+        if (-not $HubUrl -and $existing.ContainsKey('CP_HUB_URL')) { $HubUrl = $existing['CP_HUB_URL'] }
+        if (-not $HubUrl) { throw '-HubUrl is required on first install' }
+        if (-not $Token -and -not $TokenFile -and $existing.ContainsKey('CP_AGENT_TOKEN')) {
+            $resolvedToken = $existing['CP_AGENT_TOKEN']
+        }
+        else {
+            $resolvedToken = Resolve-AgentToken
+        }
+        if (-not $RemoteUpdate -and $existing['CP_REMOTE_UPDATE'] -eq 'on') { $RemoteUpdate = $true }
         New-Item -ItemType Directory -Path $paths.RequestDir -Force -ErrorAction SilentlyContinue | Out-Null
         New-Item -ItemType Directory -Path $paths.ResultDir -Force -ErrorAction SilentlyContinue | Out-Null
 
         Write-AgentEnvFile -EnvFilePath $paths.EnvFile -ResolvedHubUrl $HubUrl -ResolvedToken $resolvedToken `
-            -ResolvedHostId $HostId -ResolvedRemoteUpdate ([bool]$RemoteUpdate)
+            -ResolvedHostId $HostId -ResolvedRemoteUpdate ([bool]$RemoteUpdate) `
+            -ExistingReleaseBaseUrl $existing['CP_RELEASE_BASE_URL'] -ExistingUpdateLatestUrl $existing['CP_UPDATE_LATEST_URL']
 
-        Set-CloudPulseAcl -Path $paths.DataDir -ServiceSid 'NT SERVICE\cloud-pulse-agent' -ServiceRights 'R'
-        Set-CloudPulseAcl -Path $paths.RequestDir -ServiceSid 'NT SERVICE\cloud-pulse-agent' -ServiceRights 'M'
-        Set-CloudPulseAcl -Path $paths.ResultDir -ServiceSid 'NT SERVICE\cloud-pulse-agent' -ServiceRights 'R'
-
+        # The virtual service SID resolves only after sc.exe has created its
+        # service. Register both stopped services first, then grant ACLs.
         $binArgs = "`"$($paths.BinPath)`" --env-file `"$($paths.EnvFile)`""
         if (Test-ServiceInstalled -Name $CpServiceName) {
             Write-Log "service $CpServiceName already registered; restarting"
@@ -380,16 +406,24 @@ function Invoke-InstallFlow {
             Install-CloudPulseService -Name $CpServiceName -DisplayName 'cloud-pulse-agent' `
                 -BinaryPathWithArgs $binArgs -StartAccount 'NT SERVICE\cloud-pulse-agent'
         }
-        Start-CloudPulseService -Name $CpServiceName
-
         if ($RemoteUpdate) {
             $updaterArgs = "`"$($paths.BinPath)`" service run-updater --env-file `"$($paths.EnvFile)`""
-            if (-not (Test-ServiceInstalled -Name $CpUpdaterServiceName)) {
+            if (Test-ServiceInstalled -Name $CpUpdaterServiceName) {
+                Stop-CloudPulseService -Name $CpUpdaterServiceName
+            }
+            else {
                 Install-CloudPulseService -Name $CpUpdaterServiceName -DisplayName 'cloud-pulse-agent-updater' `
                     -BinaryPathWithArgs $updaterArgs -StartAccount 'LocalSystem'
             }
-            Start-CloudPulseService -Name $CpUpdaterServiceName
         }
+
+        Set-CloudPulseAcl -Path $paths.DataDir -ServiceSid 'NT SERVICE\cloud-pulse-agent' -ServiceRights 'R'
+        Set-CloudPulseAcl -Path $paths.EnvFile -ServiceSid 'NT SERVICE\cloud-pulse-agent' -ServiceRights 'R'
+        Set-CloudPulseAcl -Path $paths.RequestDir -ServiceSid 'NT SERVICE\cloud-pulse-agent' -ServiceRights 'M'
+        Set-CloudPulseAcl -Path $paths.ResultDir -ServiceSid 'NT SERVICE\cloud-pulse-agent' -ServiceRights 'R'
+
+        Start-CloudPulseService -Name $CpServiceName
+        if ($RemoteUpdate) { Start-CloudPulseService -Name $CpUpdaterServiceName }
 
         Write-Log 'cloud-pulse-agent installed successfully.'
         Write-Host "  Hub URL:      $HubUrl"

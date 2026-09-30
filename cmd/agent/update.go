@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/leejeonghun001/cloud-pulse/internal/config"
 	"github.com/leejeonghun001/cloud-pulse/internal/selfupdate"
 	"github.com/leejeonghun001/cloud-pulse/internal/version"
 )
@@ -42,6 +43,7 @@ func runUpdate(args []string) int {
 	noRestartFlag := fs.Bool("no-restart", false, "install the update but do not attempt to restart the service")
 	fromRequestFlag := fs.String("from-request", "", "read a hub-delivered update request file (SPEC-v0.6 §2) and apply it; incompatible with --check/--version/--no-restart")
 	resultDirFlag := fs.String("result-dir", defaultRemoteUpdateResultDir, "root-owned directory --from-request writes its result.json into")
+	envFileFlag := fs.String("env-file", "", "read CP_UPDATE_LATEST_URL/CP_RELEASE_BASE_URL from this KEY=VALUE file")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: cloud-pulse-agent update [--check] [--version vX.Y.Z] [--no-restart]")
 		fmt.Fprintln(os.Stderr, "       cloud-pulse-agent update --from-request FILE [--result-dir DIR]")
@@ -56,7 +58,13 @@ func runUpdate(args []string) int {
 			fmt.Fprintln(os.Stderr, "cloud-pulse-agent: update: --from-request cannot be combined with --check/--version/--no-restart")
 			return 1
 		}
-		return runUpdateFromRequest(*fromRequestFlag, *resultDirFlag)
+		return runUpdateFromRequest(*fromRequestFlag, *resultDirFlag, *envFileFlag)
+	}
+
+	source, err := updateSourceFromEnvFile(*envFileFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cloud-pulse-agent: update: %v\n", err)
+		return 1
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), updateTimeout)
@@ -68,7 +76,7 @@ func runUpdate(args []string) int {
 		Target:    *versionFlag,
 		CheckOnly: *checkFlag,
 		NoRestart: *noRestartFlag,
-		Source:    selfupdate.SourceFromEnv(os.LookupEnv),
+		Source:    source,
 		Stdout:    os.Stdout,
 	})
 	if err != nil {
@@ -93,7 +101,13 @@ func runUpdate(args []string) int {
 // (see selfupdate.RunFromRequest's doc comment), so the systemd oneshot
 // service that invokes this is expected to treat any exit code as
 // "ran," not "succeeded."
-func runUpdateFromRequest(requestPath, resultDir string) int {
+func runUpdateFromRequest(requestPath, resultDir, envFile string) int {
+	source, err := updateSourceFromEnvFile(envFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cloud-pulse-agent: update --from-request: %v\n", err)
+		return 1
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), updateTimeout)
 	defer cancel()
 
@@ -102,7 +116,7 @@ func runUpdateFromRequest(requestPath, resultDir string) int {
 		ResultDir:   resultDir,
 		Binary:      updateBinaryName,
 		Current:     version.Version,
-		Source:      selfupdate.SourceFromEnv(os.LookupEnv),
+		Source:      source,
 		Stdout:      os.Stdout,
 	})
 	if err != nil {
@@ -116,4 +130,23 @@ func runUpdateFromRequest(requestPath, resultDir string) int {
 
 	fmt.Println(result.Message)
 	return 0
+}
+
+// updateSourceFromEnvFile returns the self-update feed selected by the
+// process environment or, for launchd/Windows helper invocations, the
+// root-owned agent.env file. It deliberately reads only source variables;
+// update requests never carry a URL or checksum source.
+func updateSourceFromEnvFile(envFile string) (selfupdate.Source, error) {
+	if envFile == "" {
+		return selfupdate.SourceFromEnv(os.LookupEnv), nil
+	}
+	content, err := os.ReadFile(envFile)
+	if err != nil {
+		return selfupdate.Source{}, fmt.Errorf("read env file: %w", err)
+	}
+	lookup, err := config.LookupFuncFromEnvFile(string(content))
+	if err != nil {
+		return selfupdate.Source{}, fmt.Errorf("parse env file: %w", err)
+	}
+	return selfupdate.SourceFromEnv(lookup), nil
 }

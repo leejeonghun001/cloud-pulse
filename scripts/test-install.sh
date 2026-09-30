@@ -662,6 +662,21 @@ test_agent_darwin_sandbox_install() {
   else
     echo "SKIP: plutil not available on this host; skipping darwin plist lint"
   fi
+  assert_exit0 "forced fallback main plist parses with python plistlib" \
+    python3 -c 'import plistlib,sys; plistlib.loads(open(sys.argv[1], "rb").read())' "$plist_file"
+  local binary_plist="${TMP_ROOT}/darwin-binary-rendered.plist"
+  if go run ./cmd/agent plist print --bin-path "$bin" --env-file "$env_file" --user _cloudpulse \
+      --log-path "${sandbox}/Library/Logs/cloud-pulse-agent.log" > "$binary_plist"; then
+    assert_exit0 "binary-rendered main plist parses with python plistlib" \
+      python3 -c 'import plistlib,sys; plistlib.loads(open(sys.argv[1], "rb").read())' "$binary_plist"
+    if cmp -s "$binary_plist" "$plist_file"; then
+      pass "forced fallback main plist is byte-identical to binary rendering"
+    else
+      fail "forced fallback main plist is byte-identical to binary rendering"
+    fi
+  else
+    fail "native agent binary renders darwin plist for fallback drift test"
+  fi
 
   assert_file_exists "darwin dscl hook was invoked (user/group creation)" "${hooks}/dscl.log"
   assert_file_contains "darwin dscl hook created private _cloudpulse group" "${hooks}/dscl.log" "-create /Groups/_cloudpulse"
@@ -754,7 +769,10 @@ test_agent_darwin_sandbox_remote_update() {
 
   assert_file_exists "darwin update plist created" "$update_plist"
   assert_file_contains "darwin update plist has WatchPaths" "$update_plist" "WatchPaths"
+  assert_file_contains "darwin update plist passes its agent.env to update helper" "$update_plist" "--env-file"
   assert_file_contains "darwin update plist references --from-request" "$update_plist" "--from-request"
+  assert_exit0 "darwin update plist parses with python plistlib" \
+    python3 -c 'import plistlib,sys; plistlib.loads(open(sys.argv[1], "rb").read())' "$update_plist"
   assert_file_exists "darwin update request dir created" "$request_dir"
   assert_file_exists "darwin update result dir created" "$result_dir"
   assert_file_contains "darwin launchctl hook bootstrapped the update plist" "${hooks}/launchctl.log" "agent-update"
@@ -964,7 +982,7 @@ test_agent_remote_update_flag() {
   local update_service_unit="${sandbox}/etc/systemd/system/cloud-pulse-agent-update.service"
 
   local out
-  out="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$sandbox" \
+  out="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_UPDATE_LATEST_URL="http://127.0.0.1:${SERVER_PORT}/latest" CP_INSTALL_ROOT="$sandbox" \
     timeout 60 bash scripts/install-agent.sh --hub-url "http://127.0.0.1:${SERVER_PORT}" --token "$HUB_TOKEN" --remote-update 2>&1)" || {
     fail "install-agent.sh --remote-update sandbox install exited 0"
     echo "$out" >&2
@@ -974,9 +992,13 @@ test_agent_remote_update_flag() {
 
   assert_file_contains "agent unit has StateDirectory=cloud-pulse-agent after --remote-update" "$unit_file" "StateDirectory=cloud-pulse-agent"
   assert_file_contains "agent.env has CP_REMOTE_UPDATE=on after --remote-update" "$env_file" "CP_REMOTE_UPDATE=on"
+  assert_file_contains "agent.env persists explicit release mirror for helper" "$env_file" "CP_RELEASE_BASE_URL=http://127.0.0.1:${SERVER_PORT}"
+  assert_file_contains "agent.env persists explicit latest URL for helper" "$env_file" "CP_UPDATE_LATEST_URL=http://127.0.0.1:${SERVER_PORT}/latest"
   assert_file_exists "cloud-pulse-agent-update.path installed after --remote-update" "$update_path_unit"
   assert_file_exists "cloud-pulse-agent-update.service installed after --remote-update" "$update_service_unit"
-  assert_file_contains "update .path unit watches the request file" "$update_path_unit" "update-request.json"
+  assert_file_contains "update .path unit activates on request existence after atomic rename" "$update_path_unit" "PathExists="
+  assert_not_contains "update .path unit does not rely on PathModified" "$(cat "$update_path_unit")" "PathModified="
+  assert_file_contains "update .service unit receives root-owned agent.env" "$update_service_unit" "EnvironmentFile=${env_file}"
   assert_file_contains "update .service unit invokes update --from-request" "$update_service_unit" "update --from-request"
 
   # Reinstall without --remote-update must preserve everything.
@@ -1357,7 +1379,6 @@ test_systemd_unit_render_drift() {
       echo "Description=Watch for cloud-pulse-agent remote update requests"
       echo
       echo "[Path]"
-      echo "PathModified=/var/lib/cloud-pulse-agent/update-request.json"
       echo "PathExists=/var/lib/cloud-pulse-agent/update-request.json"
       echo "Unit=cloud-pulse-agent-update.service"
       echo
@@ -1372,6 +1393,7 @@ test_systemd_unit_render_drift() {
       echo
       echo "[Service]"
       echo "Type=oneshot"
+      echo "EnvironmentFile=${update_apply_env_file}"
       echo "ExecStart=/usr/local/bin/cloud-pulse-agent update --from-request /var/lib/cloud-pulse-agent/update-request.json --result-dir /var/lib/cloud-pulse-agent-update"
     } > "${TMP_ROOT}/update-service-heredoc.unit"
     assert_exit0 "cloud-pulse-agent-update.service: systemd-unit apply == install-agent.sh heredoc (diff)" \

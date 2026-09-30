@@ -156,6 +156,12 @@ func RunFromRequest(ctx context.Context, o FromRequestOptions) (Result, error) {
 	if err := writeResultFileAtomic(o.ResultDir, resultFile); err != nil {
 		return result, fmt.Errorf("selfupdate: from-request: write result file: %w", err)
 	}
+	// PathExists= activates on the atomic request-file rename. Consume the
+	// successfully parsed request only after its outcome is durable so the
+	// condition is re-armed and cannot repeatedly rerun one completed job.
+	if err := os.Remove(o.RequestPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return result, fmt.Errorf("selfupdate: from-request: remove consumed request file: %w", err)
+	}
 	return result, nil
 }
 
@@ -233,6 +239,12 @@ func runFromValidatedRequest(ctx context.Context, o FromRequestOptions, req Upda
 		newVersion = o.Current
 	}
 
+	if result.RestartFailed {
+		return result, UpdateResultFile{
+			JobID: req.JobID, State: ResultFailed, Version: newVersion,
+			ErrorCode: ReasonRestartFailed, Error: result.Message,
+		}
+	}
 	if !result.Updated && !result.UpdateAvailable {
 		return result, UpdateResultFile{JobID: req.JobID, State: ResultSucceeded, Version: newVersion, ErrorCode: ReasonAlreadyUpToDate}
 	}

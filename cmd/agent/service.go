@@ -83,7 +83,7 @@ func runService(args []string) int {
 	case "status":
 		return runServiceStatus()
 	case "run-updater":
-		return runServiceRunUpdater(*requestDir, *resultDir)
+		return runServiceRunUpdater(*requestDir, *resultDir, *envFile)
 	default:
 		fmt.Fprintf(os.Stderr, "cloud-pulse-agent: service: unknown subcommand %q\n", args[0])
 		printServiceUsage(false)
@@ -189,10 +189,15 @@ func runServiceStatus() int {
 // environment (envFile, if given, else the real process environment),
 // matching every other platform's security model documented in
 // internal/selfupdate/fromrequest.go's package doc comment.
-func runServiceRunUpdater(requestDir, resultDir string) int {
+func runServiceRunUpdater(requestDir, resultDir, envFile string) int {
 	requestPath := filepath.Join(requestDir, "update-request.json")
+	source, err := updateSourceFromEnvFile(envFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cloud-pulse-agent: service run-updater: %v\n", err)
+		return 1
+	}
 
-	err := agent.RunAsService("cloud-pulse-agent-updater", func(ctx context.Context) error {
+	err = agent.RunAsService("cloud-pulse-agent-updater", func(ctx context.Context) error {
 		return agent.RunUpdaterLoop(ctx, agent.UpdaterOptions{
 			RequestExists: func() bool {
 				_, statErr := os.Stat(requestPath)
@@ -204,7 +209,7 @@ func runServiceRunUpdater(requestDir, resultDir string) int {
 					ResultDir:   resultDir,
 					Binary:      updateBinaryName,
 					Current:     version.Version,
-					Source:      selfupdate.SourceFromEnv(os.LookupEnv),
+					Source:      source,
 				})
 				return runErr
 			},

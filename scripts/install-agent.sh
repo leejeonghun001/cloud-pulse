@@ -88,6 +88,11 @@
 #   CP_RELEASE_BASE_URL   Override the base URL assets are downloaded
 #                         from (default: GitHub release URLs). Assets are
 #                         expected at "$CP_RELEASE_BASE_URL/<asset-name>".
+#                         When explicitly set, it is persisted in agent.env
+#                         for remote-update helpers (mirrors/air-gapped).
+#   CP_UPDATE_LATEST_URL  Override the latest-release URL. When explicitly
+#                         set, it is persisted alongside CP_RELEASE_BASE_URL
+#                         for remote-update helpers (mirrors/air-gapped).
 #   CP_INSTALL_ROOT       Sandbox mode. When set, every system path this
 #                         script touches (binary prefix, /etc/cloud-pulse,
 #                         /etc/systemd/system) is prefixed with this
@@ -243,6 +248,30 @@ require_cmd() {
   fi
 }
 
+# run_with_timeout SECONDS CMD... — use GNU timeout when available, then
+# Homebrew coreutils' gtimeout. Stock macOS provides neither, so run the
+# command directly rather than making a supported macOS install fail merely
+# because a diagnostic/rendering timeout utility is absent. All callers still
+# receive the command's real exit status.
+run_with_timeout() {
+  local seconds="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$seconds" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$seconds" "$@"
+  else
+    "$@"
+  fi
+}
+
+xml_escape() {
+  # All caller values are installer-controlled paths/labels, but XML escaping
+  # keeps fallback plists valid and byte-identical to internal/launchd.Render
+  # when a sandbox prefix includes XML-significant characters.
+  printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g' -e "s/'/\&apos;/g"
+}
+
 fetch() {
   local url="$1" out="$2"
   if command -v curl >/dev/null 2>&1; then
@@ -391,7 +420,7 @@ probe_existing_version() {
     return
   fi
   local out
-  out="$(timeout 10 "$bin_path" -version 2>/dev/null || true)"
+  out="$(run_with_timeout 10 "$bin_path" -version 2>/dev/null || true)"
   # First word of the first line.
   printf '%s\n' "$out" | head -n1 | awk '{print $1}'
 }
@@ -1148,6 +1177,21 @@ resolve_remote_update_value() {
   env_get_existing CP_REMOTE_UPDATE
 }
 
+# persist_update_source_override KEY VALUE FILE — CP_RELEASE_BASE_URL and
+# CP_UPDATE_LATEST_URL are deliberately persisted only when explicitly set
+# in the installer environment. This supports mirrors/air-gapped installs
+# without overwriting an existing source on a later ordinary reinstall.
+persist_update_source_override() {
+  local key="$1" value="$2" path="$3" tmp_path="${TMP_DIR}/agent.env.source"
+  if [ -z "$value" ]; then
+    return
+  fi
+  validate_env_value "$value" "$key"
+  awk -v key="$key" 'index($0, key "=") != 1 { print }' "$path" > "$tmp_path"
+  printf '%s=%s\n' "$key" "$value" >> "$tmp_path"
+  mv "$tmp_path" "$path"
+  log "persisted ${key} in ${ENV_FILE} for privileged update helpers"
+}
 
 write_env_file() {
   local hub_url token host_id interval provider egress_limit net_exclude time_sync send_jitter log_level log_format docker remote_update
@@ -1171,6 +1215,8 @@ write_env_file() {
   mkdir -p "$ETC_DIR"
   local tmp_env="${TMP_DIR}/agent.env"
   rewrite_agent_env "$tmp_env" "$hub_url" "$token" "$host_id" "$interval" "$provider" "$egress_limit" "$net_exclude" "$time_sync" "$send_jitter" "$log_level" "$log_format" "$docker" "$remote_update"
+  persist_update_source_override CP_RELEASE_BASE_URL "${CP_RELEASE_BASE_URL:-}" "$tmp_env"
+  persist_update_source_override CP_UPDATE_LATEST_URL "${CP_UPDATE_LATEST_URL:-}" "$tmp_env"
 
   install -m 0640 "$tmp_env" "$ENV_FILE"
   local env_group
@@ -1245,37 +1291,52 @@ render_plist_via_binary() {
   if [ ! -x "$BIN_PATH" ]; then
     return 1
   fi
-  timeout 10 "$BIN_PATH" plist print --bin-path "$BIN_PATH" --env-file "$ENV_FILE" \
-    --user "$CP_DARWIN_USER" --log-path "$LOG_PATH" >"$out_path" 2>/dev/null
+  local stderr_path="${TMP_DIR}/plist-print.stderr" summary
+  if run_with_timeout 10 "$BIN_PATH" plist print --bin-path "$BIN_PATH" --env-file "$ENV_FILE" \
+    --user "$CP_DARWIN_USER" --log-path "$LOG_PATH" >"$out_path" 2>"$stderr_path"; then
+    return 0
+  fi
+  summary="$(tr '\n' ' ' < "$stderr_path" | cut -c1-300)"
+  if [ -z "$summary" ]; then
+    summary="command exited non-zero without stderr"
+  fi
+  log "plist renderer '${BIN_PATH} plist print' failed; using fallback: ${summary}"
+  return 1
 }
 
 # render_plist_fallback OUT_PATH — bash heredoc fallback kept
 # byte-identical to internal/launchd.Render's output.
 render_plist_fallback() {
   local out_path="$1"
+  local label bin_path env_file user log_path
+  label="$(xml_escape "$CP_LAUNCHD_LABEL")"
+  bin_path="$(xml_escape "$BIN_PATH")"
+  env_file="$(xml_escape "$ENV_FILE")"
+  user="$(xml_escape "$CP_DARWIN_USER")"
+  log_path="$(xml_escape "$LOG_PATH")"
   {
     echo '<?xml version="1.0" encoding="UTF-8"?>'
     echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
     echo '<plist version="1.0">'
     echo '<dict>'
     echo '    <key>Label</key>'
-    echo "    <string>${CP_LAUNCHD_LABEL}</string>"
+    echo "    <string>${label}</string>"
     echo '    <key>ProgramArguments</key>'
     echo '    <array>'
-    echo "        <string>${BIN_PATH}</string>"
+    echo "        <string>${bin_path}</string>"
     echo '        <string>--env-file</string>'
-    echo "        <string>${ENV_FILE}</string>"
+    echo "        <string>${env_file}</string>"
     echo '    </array>'
     echo '    <key>UserName</key>'
-    echo "    <string>${CP_DARWIN_USER}</string>"
+    echo "    <string>${user}</string>"
     echo '    <key>KeepAlive</key>'
     echo '    <true/>'
     echo '    <key>RunAtLoad</key>'
     echo '    <true/>'
     echo '    <key>StandardOutPath</key>'
-    echo "    <string>${LOG_PATH}</string>"
+    echo "    <string>${log_path}</string>"
     echo '    <key>StandardErrorPath</key>'
-    echo "    <string>${LOG_PATH}</string>"
+    echo "    <string>${log_path}</string>"
     echo '</dict>'
     echo '</plist>'
   } > "$out_path"
@@ -1305,7 +1366,7 @@ install_update_units() {
 
   mkdir -p "$SYSTEMD_DIR" "$UPDATE_STATE_DIR" "$UPDATE_RESULT_DIR"
 
-  if [ -x "$BIN_PATH" ] && timeout 15 "$BIN_PATH" systemd-unit apply \
+  if [ -x "$BIN_PATH" ] && run_with_timeout 15 "$BIN_PATH" systemd-unit apply \
       --unit-path "$UNIT_FILE" \
       --update-path-unit-path "$UPDATE_PATH_UNIT_FILE" \
       --update-service-unit-path "$UPDATE_SERVICE_UNIT_FILE" \
@@ -1334,25 +1395,33 @@ install_update_plist() {
   chmod 0755 "$UPDATE_RESULT_DIR"
 
   local tmp_plist="${TMP_DIR}/${CP_LAUNCHD_UPDATE_LABEL}.plist"
+  local label bin_path env_file request_file result_dir
+  label="$(xml_escape "$CP_LAUNCHD_UPDATE_LABEL")"
+  bin_path="$(xml_escape "$BIN_PATH")"
+  env_file="$(xml_escape "$ENV_FILE")"
+  request_file="$(xml_escape "$UPDATE_REQUEST_FILE")"
+  result_dir="$(xml_escape "$UPDATE_RESULT_DIR")"
   {
     echo '<?xml version="1.0" encoding="UTF-8"?>'
     echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
     echo '<plist version="1.0">'
     echo '<dict>'
     echo '    <key>Label</key>'
-    echo "    <string>${CP_LAUNCHD_UPDATE_LABEL}</string>"
+    echo "    <string>${label}</string>"
     echo '    <key>ProgramArguments</key>'
     echo '    <array>'
-    echo "        <string>${BIN_PATH}</string>"
+    echo "        <string>${bin_path}</string>"
     echo '        <string>update</string>'
+    echo '        <string>--env-file</string>'
+    echo "        <string>${env_file}</string>"
     echo '        <string>--from-request</string>'
-    echo "        <string>${UPDATE_REQUEST_FILE}</string>"
+    echo "        <string>${request_file}</string>"
     echo '        <string>--result-dir</string>'
-    echo "        <string>${UPDATE_RESULT_DIR}</string>"
+    echo "        <string>${result_dir}</string>"
     echo '    </array>'
     echo '    <key>WatchPaths</key>'
     echo '    <array>'
-    echo "        <string>${UPDATE_REQUEST_FILE}</string>"
+    echo "        <string>${request_file}</string>"
     echo '    </array>'
     echo '</dict>'
     echo '</plist>'
@@ -1374,7 +1443,6 @@ install_update_units_fallback() {
     echo "Description=Watch for cloud-pulse-agent remote update requests"
     echo
     echo "[Path]"
-    echo "PathModified=${UPDATE_REQUEST_FILE}"
     echo "PathExists=${UPDATE_REQUEST_FILE}"
     echo "Unit=cloud-pulse-agent-update.service"
     echo
@@ -1387,6 +1455,7 @@ install_update_units_fallback() {
     echo
     echo "[Service]"
     echo "Type=oneshot"
+    echo "EnvironmentFile=${ENV_FILE}"
     echo "ExecStart=${BIN_PATH} update --from-request ${UPDATE_REQUEST_FILE} --result-dir ${UPDATE_RESULT_DIR}"
   } > "$tmp_service_unit"
   install -m 0644 "$tmp_path_unit" "$UPDATE_PATH_UNIT_FILE"
@@ -1487,7 +1556,7 @@ render_unit_via_binary() {
   if [ "$OPT_REMOTE_UPDATE" -eq 1 ]; then
     extra_args+=(--remote-update)
   fi
-  timeout 10 "$BIN_PATH" systemd-unit print --bin-path "$BIN_PATH" --env-file "$ENV_FILE" \
+  run_with_timeout 10 "$BIN_PATH" systemd-unit print --bin-path "$BIN_PATH" --env-file "$ENV_FILE" \
     --user "$CP_SERVICE_USER" --group "$CP_SERVICE_GROUP" "${extra_args[@]}" >"$out_path" 2>/dev/null
 }
 
@@ -1566,7 +1635,7 @@ verify_unit() {
     sed "s#^ExecStart=.*#ExecStart=${BIN_PATH}#" "$UNIT_FILE" > "$verify_target"
   fi
 
-  if timeout 30 systemd-analyze verify "$verify_target" 2>&1 | tee "${TMP_DIR}/systemd-analyze.log"; then
+  if run_with_timeout 30 systemd-analyze verify "$verify_target" 2>&1 | tee "${TMP_DIR}/systemd-analyze.log"; then
     log "systemd-analyze verify: OK"
   else
     if grep -qiE 'unknown (lvalue|section)|failed to parse|invalid syntax' "${TMP_DIR}/systemd-analyze.log"; then
@@ -1587,7 +1656,7 @@ verify_plist() {
     log "plutil not available; skipping plist verification"
     return
   fi
-  if timeout 10 plutil -lint "$PLIST_PATH" >"${TMP_DIR}/plutil.log" 2>&1; then
+  if run_with_timeout 10 plutil -lint "$PLIST_PATH" >"${TMP_DIR}/plutil.log" 2>&1; then
     log "plutil -lint: OK"
   else
     err "plutil -lint reported a fatal plist syntax error:"
@@ -1693,7 +1762,7 @@ start_service_darwin() {
 run_sanity_checks() {
   if [ -x "$BIN_PATH" ]; then
     log "running sanity check: ${BIN_PATH} -once"
-    if timeout 20 "$BIN_PATH" -once >/dev/null 2>"${TMP_DIR}/once.log"; then
+    if run_with_timeout 20 "$BIN_PATH" -once >/dev/null 2>"${TMP_DIR}/once.log"; then
       log "sanity check ok"
     else
       log "warning: '${BIN_PATH} -once' failed (non-fatal):"
@@ -1703,7 +1772,7 @@ run_sanity_checks() {
 
   if command -v curl >/dev/null 2>&1 && [ -n "$RESOLVED_HUB_URL" ]; then
     log "checking hub reachability: ${RESOLVED_HUB_URL}/healthz"
-    if timeout 10 curl -fsS "${RESOLVED_HUB_URL%/}/healthz" >/dev/null 2>&1; then
+    if run_with_timeout 10 curl -fsS "${RESOLVED_HUB_URL%/}/healthz" >/dev/null 2>&1; then
       log "hub healthz ok"
     else
       log "warning: could not reach ${RESOLVED_HUB_URL%/}/healthz (non-fatal; check --hub-url and network/firewall)"

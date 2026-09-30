@@ -88,6 +88,9 @@ func TestRunFromRequest_Success(t *testing.T) {
 	}
 
 	rf := readResultFixture(t, resultDir)
+	if _, statErr := os.Stat(reqPath); !os.IsNotExist(statErr) {
+		t.Errorf("completed request file still exists (stat err = %v), want removed to re-arm PathExists=", statErr)
+	}
 	if rf.JobID != 42 {
 		t.Errorf("result JobID = %d, want 42", rf.JobID)
 	}
@@ -195,6 +198,9 @@ func TestRunFromRequest_VerifyFailure(t *testing.T) {
 	}
 
 	rf := readResultFixture(t, resultDir)
+	if _, statErr := os.Stat(reqPath); !os.IsNotExist(statErr) {
+		t.Errorf("failed-but-reported request file still exists (stat err = %v), want removed to avoid path-unit loops", statErr)
+	}
 	if rf.State != ResultFailed {
 		t.Errorf("result State = %q, want %q", rf.State, ResultFailed)
 	}
@@ -607,6 +613,73 @@ func TestRunFromRequest_AcceptsDarwinAndWindowsHosts(t *testing.T) {
 			}
 			if !strings.Contains(string(data), `"succeeded"`) {
 				t.Errorf("result.json for GOOS=%s = %s, want state=succeeded (already up to date)", goos, data)
+			}
+		})
+	}
+}
+
+func TestRunFromRequest_ParsedFailuresWriteResultAndConsumeRequest(t *testing.T) {
+	t.Parallel()
+
+	newSource := func(t *testing.T) Source {
+		t.Helper()
+		_, source := newFakeReleaseServer(t, "v0.6.1", "cloud-pulse-agent", testGOOS, testGOARCH, []byte("new binary"))
+		return source
+	}
+
+	tests := []struct {
+		name    string
+		source  func(t *testing.T) Source
+		restart func(context.Context, string) (bool, string, error)
+	}{
+		{
+			name: "source misconfiguration",
+			source: func(*testing.T) Source {
+				return Source{AssetBaseURL: "://not-a-url"}
+			},
+			restart: noRestart,
+		},
+		{
+			name:   "restart failure",
+			source: newSource,
+			restart: func(context.Context, string) (bool, string, error) {
+				return false, "", errors.New("simulated restart failure")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			execPath := filepath.Join(t.TempDir(), "cloud-pulse-agent")
+			if err := os.WriteFile(execPath, []byte("old binary"), 0o755); err != nil { //nolint:gosec // test fixture
+				t.Fatalf("write fake binary: %v", err)
+			}
+			reqPath := writeRequestFixture(t, dir, marshalRequest(t, UpdateRequestFile{JobID: 72, Target: "v0.6.1"}))
+			resultDir := filepath.Join(dir, "result")
+
+			_, err := RunFromRequest(context.Background(), FromRequestOptions{
+				HostGOOS:    "linux",
+				RequestPath: reqPath,
+				ResultDir:   resultDir,
+				Binary:      "cloud-pulse-agent",
+				Current:     "v0.6.0",
+				GOOS:        testGOOS,
+				GOARCH:      testGOARCH,
+				ExecPath:    execPath,
+				Source:      tt.source(t),
+				Verify:      injectedVerify(&[]string{}),
+				Restart:     tt.restart,
+			})
+			if err != nil {
+				t.Fatalf("RunFromRequest returned process-level error instead of an outcome file: %v", err)
+			}
+			rf := readResultFixture(t, resultDir)
+			if rf.State != ResultFailed || rf.JobID != 72 {
+				t.Errorf("result = %+v, want failed job 72", rf)
+			}
+			if _, statErr := os.Stat(reqPath); !os.IsNotExist(statErr) {
+				t.Errorf("reported request remains at %s (stat err = %v), want removed", reqPath, statErr)
 			}
 		})
 	}

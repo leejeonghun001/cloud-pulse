@@ -408,6 +408,9 @@ func TestRun_RestartFailure_StillReportsUpdated(t *testing.T) {
 	if result.Restarted {
 		t.Error("result.Restarted = true; want false when restart injection failed")
 	}
+	if !result.RestartFailed {
+		t.Error("result.RestartFailed = false; want true when restart injection failed")
+	}
 	if !strings.Contains(result.Message, "restart failed") {
 		t.Errorf("result.Message = %q; want it to mention restart failure", result.Message)
 	}

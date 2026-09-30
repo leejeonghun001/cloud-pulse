@@ -188,6 +188,7 @@ func applyUpdateUnitsIfEnabled(unitPath, pathUnitPath, serviceUnitPath, requestP
 		BinPath:     params.BinPath,
 		RequestPath: requestPath,
 		ResultDir:   resultDir,
+		EnvFile:     params.EnvFile,
 	}, os.Stdout)
 }
 

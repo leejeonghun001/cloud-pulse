@@ -87,6 +87,8 @@ only session-based sign-in works.
 | `CP_LOG_LEVEL` | `info` | `debug\|info\|warn\|error` |
 | `CP_LOG_FORMAT` | `text` | `text\|json` |
 | `CP_REMOTE_UPDATE` | `off` | `off\|on` — opts this agent in to hub-triggered remote updates; the hub can never turn this on remotely |
+| `CP_UPDATE_LATEST_URL` | *(unset)* | Override the latest-release URL. When explicitly supplied to an agent installer, it is persisted in `agent.env` so Linux/macOS/Windows privileged remote-update helpers use the same mirror. |
+| `CP_RELEASE_BASE_URL` | *(unset)* | Override the asset + `checksums.txt` base URL. When explicitly supplied to an agent installer, it is persisted in `agent.env` for mirrors/air-gapped remote updates. |
 | `CP_CLOUD_METADATA` | `auto` | `auto\|off` — detects `HostInfo.CloudInstanceID` via DMI/AWS IMDSv2/OCI instance metadata |
 
 ## Agent CLI flags (`cloud-pulse-agent`)
@@ -102,7 +104,7 @@ only session-based sign-in works.
 
 | Command | Purpose | Platforms |
 |---|---|---|
-| `cloud-pulse-agent update [--check] [--version vX.Y.Z] [--no-restart] [--from-request FILE --result-dir DIR]` | Self-update, or apply a hub-delivered remote-update request | all |
+| `cloud-pulse-agent update [--check] [--version vX.Y.Z] [--no-restart] [--env-file FILE] [--from-request FILE --result-dir DIR]` | Self-update, or apply a hub-delivered remote-update request; privileged macOS/Windows helpers use `--env-file` to read the installed mirror source | all |
 | `cloud-pulse-agent systemd-unit print\|apply ...` | Render/apply the systemd unit | Linux |
 | `cloud-pulse-agent plist print\|apply ...` (alias `launchd`) | Render/apply the launchd plist | macOS |
 | `cloud-pulse-agent service install\|uninstall\|start\|stop\|status [--env-file] [--bin-path]` | Windows service control | Windows |

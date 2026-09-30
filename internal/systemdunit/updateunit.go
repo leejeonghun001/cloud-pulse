@@ -35,6 +35,10 @@ type UpdateUnitParams struct {
 	// directory `update --from-request` writes into, e.g.
 	// "/var/lib/cloud-pulse-agent-update". Required.
 	ResultDir string
+	// EnvFile is the root-owned agent KEY=VALUE file made available to the
+	// root helper via EnvironmentFile= so mirror/air-gapped update sources
+	// remain identical to the unprivileged agent's source. Required.
+	EnvFile string
 }
 
 func validateUpdateUnitParams(p UpdateUnitParams) error {
@@ -47,6 +51,9 @@ func validateUpdateUnitParams(p UpdateUnitParams) error {
 	if p.ResultDir == "" {
 		return errors.New("result-dir is required")
 	}
+	if p.EnvFile == "" {
+		return errors.New("env-file is required")
+	}
 	if err := validatePathValue("bin-path", p.BinPath); err != nil {
 		return err
 	}
@@ -56,11 +63,14 @@ func validateUpdateUnitParams(p UpdateUnitParams) error {
 	if err := validatePathValue("result-dir", p.ResultDir); err != nil {
 		return err
 	}
+	if err := validatePathValue("env-file", p.EnvFile); err != nil {
+		return err
+	}
 	return nil
 }
 
 // RenderUpdatePath renders cloud-pulse-agent-update.path: a systemd
-// path unit that watches PathModified=RequestPath and triggers
+// path unit that watches PathExists=RequestPath and triggers
 // cloud-pulse-agent-update.service whenever the unprivileged agent
 // process (re)writes its request file (SPEC-v0.6 §2 step 4).
 // PathExists is also set so a request file already present when the
@@ -75,7 +85,9 @@ func RenderUpdatePath(p UpdateUnitParams) (string, error) {
 	writeLine(&b, "Description=Watch for cloud-pulse-agent remote update requests")
 	writeLine(&b, "")
 	writeLine(&b, "[Path]")
-	writeLine(&b, "PathModified="+p.RequestPath)
+	// Request delivery is an atomic rename, not an in-place write. PathExists=
+	// observes the resulting existence transition; the helper removes the parsed
+	// request after producing a result, re-arming this condition without loops.
 	writeLine(&b, "PathExists="+p.RequestPath)
 	writeLine(&b, "Unit="+UpdateServiceUnitName)
 	writeLine(&b, "")
@@ -104,6 +116,7 @@ func RenderUpdateService(p UpdateUnitParams) (string, error) {
 	writeLine(&b, "")
 	writeLine(&b, "[Service]")
 	writeLine(&b, "Type=oneshot")
+	writeLine(&b, "EnvironmentFile="+p.EnvFile)
 	writeLine(&b, fmt.Sprintf("ExecStart=%s update --from-request %s --result-dir %s", p.BinPath, p.RequestPath, p.ResultDir))
 	return b.String(), nil
 }
@@ -183,9 +196,9 @@ func writeUnitIfChanged(path, content string, out interface{ Write([]byte) (int,
 // ParseUpdateUnitParams extracts UpdateUnitParams from an already
 // rendered cloud-pulse-agent-update.path/.service pair's text, for a
 // future drift-detection Apply pass (mirroring ParseExisting's role for
-// the main hub/agent units). Only RequestPath (from the .path unit's
-// PathModified=) and BinPath+ResultDir (parsed from the .service
-// unit's ExecStart= line) are recovered; a malformed or hand-edited
+// the main hub/agent units). RequestPath (from the .path unit's
+// PathExists=) and BinPath+ResultDir+EnvFile (parsed from the .service
+// unit) are recovered; a malformed or hand-edited
 // unit returns an error rather than a best-effort partial result, the
 // same defensive stance ParseExisting takes.
 func ParseUpdateUnitParams(pathUnitText, serviceUnitText string) (UpdateUnitParams, error) {
@@ -193,16 +206,20 @@ func ParseUpdateUnitParams(pathUnitText, serviceUnitText string) (UpdateUnitPara
 
 	for _, rawLine := range strings.Split(pathUnitText, "\n") {
 		line := strings.TrimSpace(rawLine)
-		if strings.HasPrefix(line, "PathModified=") {
-			p.RequestPath = strings.TrimSpace(strings.TrimPrefix(line, "PathModified="))
+		if strings.HasPrefix(line, "PathExists=") {
+			p.RequestPath = strings.TrimSpace(strings.TrimPrefix(line, "PathExists="))
 		}
 	}
 	if p.RequestPath == "" {
-		return UpdateUnitParams{}, errors.New("systemdunit: parse update units: missing PathModified= in path unit")
+		return UpdateUnitParams{}, errors.New("systemdunit: parse update units: missing PathExists= in path unit")
 	}
 
 	for _, rawLine := range strings.Split(serviceUnitText, "\n") {
 		line := strings.TrimSpace(rawLine)
+		if strings.HasPrefix(line, "EnvironmentFile=") {
+			p.EnvFile = strings.TrimSpace(strings.TrimPrefix(line, "EnvironmentFile="))
+			continue
+		}
 		if !strings.HasPrefix(line, "ExecStart=") {
 			continue
 		}
@@ -215,7 +232,7 @@ func ParseUpdateUnitParams(pathUnitText, serviceUnitText string) (UpdateUnitPara
 					// Already captured via the .path unit above;
 					// cross-check for consistency.
 					if fields[i+1] != p.RequestPath {
-						return UpdateUnitParams{}, fmt.Errorf("systemdunit: parse update units: service --from-request %q does not match path unit's PathModified= %q", fields[i+1], p.RequestPath)
+						return UpdateUnitParams{}, fmt.Errorf("systemdunit: parse update units: service --from-request %q does not match path unit's PathExists= %q", fields[i+1], p.RequestPath)
 					}
 				}
 			case "--result-dir":
