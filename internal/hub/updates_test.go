@@ -167,8 +167,8 @@ func TestDecideAgentUpdate(t *testing.T) {
 			goos:          "linux",
 			wantAvailable: true,
 			wantLatest:    "v0.3.0",
-			wantSelf:      false, // v0.3.0-rc.1 < v0.3.0 == SelfUpdateSince
-			wantCommand:   legacyInstallCommand,
+			wantSelf:      true,
+			wantCommand:   "sudo cloud-pulse-agent update",
 		},
 		{
 			name:         "unparsable_agent_version_no_info",

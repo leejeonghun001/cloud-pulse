@@ -48,11 +48,15 @@ func TestRemoteUpdateCapable_PerPlatformVersionGate(t *testing.T) {
 		want         bool
 	}{
 		{"linux v0.6.0 capable", "linux", "linux", "v0.6.0", true, true},
+		{"linux v0.6.0 beta capable", "linux", "linux", "v0.6.0-beta", true, true},
 		{"linux v0.5.9 too old", "linux", "linux", "v0.5.9", true, false},
-		{"darwin v0.7.0 capable", "darwin", "darwin", "v0.7.0", true, true},
-		{"darwin v0.6.0 too old (pre-v0.7.0 macOS never existed, but gate still enforces)", "darwin", "darwin", "v0.6.0", true, false},
-		{"windows v0.7.0 capable", "windows", "windows", "v0.7.0", true, true},
+		{"darwin v0.7.0 CI build capable", "darwin", "darwin", "v0.7.0-ci.1", true, true},
+		{"darwin v0.7.0 release candidate capable", "darwin", "darwin", "v0.7.0-rc.1", true, true},
+		{"darwin v0.6.9 too old", "darwin", "darwin", "v0.6.9", true, false},
+		{"windows v0.7.0 CI build capable", "windows", "windows", "v0.7.0-ci.1", true, true},
+		{"windows v0.7.0 release candidate capable", "windows", "windows", "v0.7.0-rc.1", true, true},
 		{"windows v0.6.9 too old", "windows", "windows", "v0.6.9", true, false},
+		{"development build preserves legacy eligibility", "linux", "linux", "dev", true, true},
 		{"not supported at all", "linux", "linux", "v0.6.0", false, false},
 		{"unknown platform refused", "plan9", "plan9", "v9.9.9", true, false},
 		{"empty platform falls back to OS=linux", "", "linux", "v0.6.0", true, true},

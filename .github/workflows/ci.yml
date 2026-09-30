@@ -402,7 +402,7 @@ jobs:
           cache: true
 
       # ---------------------------------------------------------------
-      # Build v0.7.0-ci1 (initial install) and v0.7.0-ci2 (remote-update
+      # Build v0.7.0-ci.1 (initial install) and v0.7.0-ci.2 (remote-update
       # target) release assets for this runner's own OS/arch, served by
       # a local HTTP server standing in for GitHub Releases — never
       # real network, matching this project's release-asset trust
@@ -417,22 +417,22 @@ jobs:
             windows-latest) echo "goos=windows" >> "$GITHUB_OUTPUT"; echo "goarch=amd64" >> "$GITHUB_OUTPUT" ;;
           esac
 
-      - name: Build v0.7.0-ci1 assets
+      - name: Build v0.7.0-ci.1 assets
         env:
           TARGETS: "${{ steps.target.outputs.goos }}/${{ steps.target.outputs.goarch }}"
           ALLOW_ANY_VERSION: "1"
-        run: bash scripts/build-release.sh v0.7.0-ci1 dist-ci1
+        run: bash scripts/build-release.sh v0.7.0-ci.1 dist-ci1
 
-      - name: Build v0.7.0-ci2 assets (remote-update target)
+      - name: Build v0.7.0-ci.2 assets (remote-update target)
         env:
           TARGETS: "${{ steps.target.outputs.goos }}/${{ steps.target.outputs.goarch }}"
           ALLOW_ANY_VERSION: "1"
-        run: bash scripts/build-release.sh v0.7.0-ci2 dist-ci2
+        run: bash scripts/build-release.sh v0.7.0-ci.2 dist-ci2
 
       - name: Build hub binary (runs on this same runner to receive reports)
         run: go build -o hub-bin/cloud-pulse-hub${{ matrix.os == 'windows-latest' && '.exe' || '' }} ./cmd/hub
 
-      - name: Serve release assets over local HTTP (ci1 initially; swapped to ci2 for the remote-update step)
+      - name: Serve release assets over local HTTP (ci.1 initially; swapped to ci.2 for the remote-update step)
         id: assets
         run: |
           mkdir -p asset-root
@@ -498,7 +498,7 @@ jobs:
             bash scripts/install-agent.sh --install --yes \
             --hub-url http://127.0.0.1:18490 \
             --token agent-e2e-ci-fake-agent-token-0123456789 \
-            --version v0.7.0-ci1 --remote-update
+            --version v0.7.0-ci.1 --remote-update
           sleep 3
           sudo systemctl is-active cloud-pulse-agent.service
 
@@ -527,7 +527,7 @@ jobs:
             bash scripts/install-agent.sh --install --yes \
             --hub-url http://127.0.0.1:18490 \
             --token agent-e2e-ci-fake-agent-token-0123456789 \
-            --version v0.7.0-ci1 --remote-update
+            --version v0.7.0-ci.1 --remote-update
           sleep 3
           sudo launchctl print system/com.cloudpulse.agent | grep -q 'state = running'
           uid="$(sudo dscl . -read /Users/_cloudpulse UniqueID | awk '/^UniqueID: / { print $2 }')"
@@ -578,7 +578,7 @@ jobs:
           & ./scripts/install-agent.ps1 -Install -Yes `
             -HubUrl http://127.0.0.1:18490 `
             -Token agent-e2e-ci-fake-agent-token-0123456789 `
-            -Version v0.7.0-ci2 -RemoteUpdate
+            -Version v0.7.0-ci.1 -RemoteUpdate
           Start-Sleep -Seconds 3
           $svc = Get-Service -Name cloud-pulse-agent
           if ($svc.Status -ne 'Running') { throw "cloud-pulse-agent service is $($svc.Status), want Running" }
@@ -597,11 +597,11 @@ jobs:
           throw "no agent report arrived within 40s"
 
       # ---------------------------------------------------------------
-      # Common: swap the asset server to serve v0.7.0-ci2 (the update
+      # Common: swap the asset server to serve v0.7.0-ci.2 (the update
       # target), then drive a remote-update batch through the hub API
       # exactly as an admin would from the dashboard.
       # ---------------------------------------------------------------
-      - name: Swap asset server to serve v0.7.0-ci2
+      - name: Swap asset server to serve v0.7.0-ci.2
         run: |
           if [ -f asset-server.pid ]; then
             kill "$(cat asset-server.pid)" 2>/dev/null || true
@@ -619,7 +619,7 @@ jobs:
           done
           exit 1
 
-      - name: Create a remote-update batch targeting v0.7.0-ci2
+      - name: Create a remote-update batch targeting v0.7.0-ci.2
         id: batch
         run: |
           host_id="$(curl -fsS -H "Authorization: Bearer ${{ steps.session.outputs.token }}" \
@@ -628,27 +628,32 @@ jobs:
           batch_id="$(curl -fsS -X POST http://127.0.0.1:18490/api/v1/agents/updates \
             -H "Authorization: Bearer ${{ steps.session.outputs.token }}" \
             -H 'Content-Type: application/json' \
-            -d "{\"host_ids\":[\"${host_id}\"],\"target\":\"v0.7.0-ci2\"}" | \
+            -d "{\"host_ids\":[\"${host_id}\"],\"target\":\"v0.7.0-ci.2\"}" | \
             python3 -c 'import json,sys; print(json.load(sys.stdin)["batch_id"])')"
           echo "batch_id=$batch_id" >> "$GITHUB_OUTPUT"
 
       - name: Wait for the remote-update job to succeed
         run: |
+          previous_job=""
           for _ in $(seq 1 90); do
-            state="$(curl -fsS -H "Authorization: Bearer ${{ steps.session.outputs.token }}" \
+            job="$(curl -fsS -H "Authorization: Bearer ${{ steps.session.outputs.token }}" \
               "http://127.0.0.1:18490/api/v1/agents/updates?batch=${{ steps.batch.outputs.batch_id }}" | \
-              python3 -c 'import json,sys; d=json.load(sys.stdin); jobs=d["jobs"]; print(jobs[0]["state"] if jobs else "")')"
-            echo "job state: ${state:-<none>}"
+              python3 -c 'import json,sys; d=json.load(sys.stdin); jobs=d["jobs"]; print(json.dumps({k: jobs[0].get(k, "") for k in ("state", "reason", "error")}) if jobs else "{}")')"
+            if [ "$job" != "$previous_job" ]; then
+              echo "job: ${job}"
+              previous_job="$job"
+            fi
+            state="$(printf '%s' "$job" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("state", ""))')"
             if [ "$state" = "succeeded" ]; then
               exit 0
             fi
             if [ "$state" = "failed" ]; then
-              echo "remote-update job failed" >&2
+              echo "remote-update job failed: ${job}" >&2
               exit 1
             fi
             sleep 2
           done
-          echo "remote-update job did not reach 'succeeded' within 180s" >&2
+          echo "remote-update job did not reach 'succeeded' within 180s; last job: ${previous_job:-<none>}" >&2
           exit 1
 
       - name: "[linux] collect agent diagnostics on failure"

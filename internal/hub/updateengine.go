@@ -249,12 +249,23 @@ func remoteUpdateCapable(host models.HostInfo) bool {
 	}
 	switch platform {
 	case "", "linux":
-		return !version.IsNewer(remoteUpdateMinAgentVersion, host.AgentVersion) // AgentVersion >= min
+		return remoteUpdateVersionEligible(host.AgentVersion, remoteUpdateMinAgentVersion)
 	case "darwin", "windows":
-		return !version.IsNewer(remoteUpdateMinAgentVersionOtherPlatforms, host.AgentVersion) // AgentVersion >= min
+		return remoteUpdateVersionEligible(host.AgentVersion, remoteUpdateMinAgentVersionOtherPlatforms)
 	default:
 		return false
 	}
+}
+
+// remoteUpdateVersionEligible preserves the prior development-build behavior:
+// a local, unparsable version (for example "dev") is eligible and can still
+// surface the more useful not_enabled result. Parseable release tags use the
+// inclusive prerelease floor so v0.7.0-ci.1 and v0.7.0-rc.1 satisfy v0.7.0.
+func remoteUpdateVersionEligible(agentVersion, minimum string) bool {
+	if _, ok := version.Parse(agentVersion); !ok {
+		return true
+	}
+	return version.AtLeastIncludingPrerelease(agentVersion, minimum)
 }
 
 // handleAgentUpdateStatus applies an agent-reported models.AgentUpdateStatus

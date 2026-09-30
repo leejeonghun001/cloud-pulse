@@ -138,6 +138,9 @@ function Get-InstallPaths {
         EnvFile    = Join-Path $dataDir 'agent.env'
         RequestDir = Join-Path $programDataRoot 'cloud-pulse-agent'
         ResultDir  = Join-Path $programDataRoot 'cloud-pulse-agent-update'
+        LogDir     = Join-Path $dataDir 'logs'
+        AgentLog   = Join-Path $dataDir 'logs\agent.log'
+        UpdaterLog = Join-Path $dataDir 'logs\updater.log'
     }
 }
 
@@ -250,6 +253,7 @@ function Write-AgentEnvFile {
         [string]$ResolvedToken,
         [string]$ResolvedHostId,
         [bool]$ResolvedRemoteUpdate,
+        [string]$LogFile,
         [string]$ExistingReleaseBaseUrl,
         [string]$ExistingUpdateLatestUrl
     )
@@ -263,6 +267,7 @@ function Write-AgentEnvFile {
         $lines += "CP_HOST_ID=$ResolvedHostId"
     }
     $lines += "CP_REMOTE_UPDATE=$(if ($ResolvedRemoteUpdate) { 'on' } else { 'off' })"
+    if ($LogFile) { $lines += "CP_LOG_FILE=$LogFile" }
     $releaseBaseUrl = if ($env:CP_RELEASE_BASE_URL) { $env:CP_RELEASE_BASE_URL } else { $ExistingReleaseBaseUrl }
     $updateLatestUrl = if ($env:CP_UPDATE_LATEST_URL) { $env:CP_UPDATE_LATEST_URL } else { $ExistingUpdateLatestUrl }
     if ($releaseBaseUrl) { $lines += "CP_RELEASE_BASE_URL=$releaseBaseUrl" }
@@ -390,9 +395,10 @@ function Invoke-InstallFlow {
         if (-not $RemoteUpdate -and $existing['CP_REMOTE_UPDATE'] -eq 'on') { $RemoteUpdate = $true }
         New-Item -ItemType Directory -Path $paths.RequestDir -Force -ErrorAction SilentlyContinue | Out-Null
         New-Item -ItemType Directory -Path $paths.ResultDir -Force -ErrorAction SilentlyContinue | Out-Null
+        New-Item -ItemType Directory -Path $paths.LogDir -Force -ErrorAction SilentlyContinue | Out-Null
 
         Write-AgentEnvFile -EnvFilePath $paths.EnvFile -ResolvedHubUrl $HubUrl -ResolvedToken $resolvedToken `
-            -ResolvedHostId $HostId -ResolvedRemoteUpdate ([bool]$RemoteUpdate) `
+            -ResolvedHostId $HostId -ResolvedRemoteUpdate ([bool]$RemoteUpdate) -LogFile $paths.AgentLog `
             -ExistingReleaseBaseUrl $existing['CP_RELEASE_BASE_URL'] -ExistingUpdateLatestUrl $existing['CP_UPDATE_LATEST_URL']
 
         # The virtual service SID resolves only after sc.exe has created its
@@ -407,7 +413,7 @@ function Invoke-InstallFlow {
                 -BinaryPathWithArgs $binArgs -StartAccount 'NT SERVICE\cloud-pulse-agent'
         }
         if ($RemoteUpdate) {
-            $updaterArgs = "`"$($paths.BinPath)`" service run-updater --env-file `"$($paths.EnvFile)`""
+            $updaterArgs = "`"$($paths.BinPath)`" service run-updater --env-file `"$($paths.EnvFile)`" --log-file `"$($paths.UpdaterLog)`""
             if (Test-ServiceInstalled -Name $CpUpdaterServiceName) {
                 Stop-CloudPulseService -Name $CpUpdaterServiceName
             }
@@ -421,6 +427,7 @@ function Invoke-InstallFlow {
         Set-CloudPulseAcl -Path $paths.EnvFile -ServiceSid 'NT SERVICE\cloud-pulse-agent' -ServiceRights 'R'
         Set-CloudPulseAcl -Path $paths.RequestDir -ServiceSid 'NT SERVICE\cloud-pulse-agent' -ServiceRights 'M'
         Set-CloudPulseAcl -Path $paths.ResultDir -ServiceSid 'NT SERVICE\cloud-pulse-agent' -ServiceRights 'R'
+        Set-CloudPulseAcl -Path $paths.LogDir -ServiceSid 'NT SERVICE\cloud-pulse-agent' -ServiceRights 'M'
 
         Start-CloudPulseService -Name $CpServiceName
         if ($RemoteUpdate) { Start-CloudPulseService -Name $CpUpdaterServiceName }

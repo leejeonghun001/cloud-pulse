@@ -66,6 +66,7 @@ func runService(args []string) int {
 	binPath := fs.String("bin-path", "", "absolute path to the installed cloud-pulse-agent.exe (install only; default: this process's own path)")
 	requestDir := fs.String("request-dir", defaultWindowsRequestDir, "directory the run-updater service polls for update-request.json (run-updater only)")
 	resultDir := fs.String("result-dir", defaultWindowsResultDir, "root-owned-equivalent directory run-updater writes result.json into (run-updater only)")
+	logFile := fs.String("log-file", "", "append service diagnostics to this rotating log file (run-updater only)")
 	fs.Usage = func() { printServiceUsage(false) }
 	if err := fs.Parse(args[1:]); err != nil {
 		return 1
@@ -83,7 +84,7 @@ func runService(args []string) int {
 	case "status":
 		return runServiceStatus()
 	case "run-updater":
-		return runServiceRunUpdater(*requestDir, *resultDir, *envFile)
+		return runServiceRunUpdater(*requestDir, *resultDir, *envFile, *logFile)
 	default:
 		fmt.Fprintf(os.Stderr, "cloud-pulse-agent: service: unknown subcommand %q\n", args[0])
 		printServiceUsage(false)
@@ -189,11 +190,23 @@ func runServiceStatus() int {
 // environment (envFile, if given, else the real process environment),
 // matching every other platform's security model documented in
 // internal/selfupdate/fromrequest.go's package doc comment.
-func runServiceRunUpdater(requestDir, resultDir, envFile string) int {
+func runServiceRunUpdater(requestDir, resultDir, envFile, logFile string) int {
+	loggerOutput, err := newLogWriter(logFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cloud-pulse-agent: service run-updater: %v\n", err)
+		return 1
+	}
+	defer func() { _ = loggerOutput.Close() }()
+	logger, err := config.NewLogger(loggerOutput, "info", "text")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cloud-pulse-agent: service run-updater: %v\n", err)
+		return 1
+	}
+
 	requestPath := filepath.Join(requestDir, "update-request.json")
 	source, err := updateSourceFromEnvFile(envFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "cloud-pulse-agent: service run-updater: %v\n", err)
+		logger.Error("load update source", "error", err)
 		return 1
 	}
 
@@ -213,9 +226,11 @@ func runServiceRunUpdater(requestDir, resultDir, envFile string) int {
 				})
 				return runErr
 			},
+			Logger: logger,
 		})
-	}, nil)
+	}, logger)
 	if err != nil {
+		logger.Error("updater service exited", "error", err)
 		return 1
 	}
 	return 0

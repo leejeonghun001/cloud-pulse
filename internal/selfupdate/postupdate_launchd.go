@@ -71,13 +71,5 @@ func defaultPostUpdateDarwin(binary string) func(ctx context.Context, binPath, t
 // version.LaunchdManagedSince. An unparsable tag is conservatively
 // treated as not launchd-managed.
 func isLaunchdManaged(tag string) bool {
-	since, ok := version.Parse(version.LaunchdManagedSince)
-	if !ok {
-		return false
-	}
-	t, ok := version.Parse(tag)
-	if !ok {
-		return false
-	}
-	return version.Compare(t, since) >= 0
+	return version.AtLeastIncludingPrerelease(tag, version.LaunchdManagedSince)
 }

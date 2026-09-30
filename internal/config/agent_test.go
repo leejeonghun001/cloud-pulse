@@ -49,6 +49,9 @@ func TestLoadAgent_Valid(t *testing.T) {
 	if cfg.LogFormat != "text" {
 		t.Errorf("LogFormat = %q, want text", cfg.LogFormat)
 	}
+	if cfg.LogFile != "" {
+		t.Errorf("LogFile = %q, want empty", cfg.LogFile)
+	}
 }
 
 func TestLoadAgent_HubURL(t *testing.T) {
@@ -626,5 +629,18 @@ func TestLoadAgent_CloudMetadata(t *testing.T) {
 				t.Errorf("CloudMetadata = %q, want %q", cfg.CloudMetadata, tc.want)
 			}
 		})
+	}
+}
+
+func TestLoadAgent_LogFile(t *testing.T) {
+	t.Parallel()
+	env := validAgentEnv()
+	env["CP_LOG_FILE"] = `C:\ProgramData\cloud-pulse\logs\agent.log`
+	cfg, err := LoadAgent(mapLookup(env), "host")
+	if err != nil {
+		t.Fatalf("LoadAgent: %v", err)
+	}
+	if cfg.LogFile != env["CP_LOG_FILE"] {
+		t.Errorf("LogFile = %q, want %q", cfg.LogFile, env["CP_LOG_FILE"])
 	}
 }

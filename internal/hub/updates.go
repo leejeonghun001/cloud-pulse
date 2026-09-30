@@ -203,7 +203,7 @@ func decideAgentUpdate(agentVersion, hubVersion, latestKnown, agentGOOS string) 
 		return nil
 	}
 
-	selfUpdate := !version.IsNewer(version.SelfUpdateSince, agentVersion) // agentVersion >= SelfUpdateSince
+	selfUpdate := version.AtLeastIncludingPrerelease(agentVersion, version.SelfUpdateSince)
 	available := version.IsNewer(reference, agentVersion)
 
 	return &models.AgentUpdate{

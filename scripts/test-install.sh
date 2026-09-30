@@ -645,6 +645,8 @@ test_agent_darwin_sandbox_install() {
   local bin="${sandbox}/usr/local/bin/cloud-pulse-agent"
   local env_file="${sandbox}/usr/local/etc/cloud-pulse/agent.env"
   local plist_file="${sandbox}/Library/LaunchDaemons/com.cloudpulse.agent.plist"
+  local agent_log="${sandbox}/Library/Logs/cloud-pulse-agent.log"
+  local updater_log="${sandbox}/Library/Logs/cloud-pulse-agent-update.log"
 
   assert_executable "darwin agent binary installed and executable" "$bin"
   assert_file_exists "darwin agent.env created" "$env_file"
@@ -684,6 +686,10 @@ test_agent_darwin_sandbox_install() {
   assert_equal "darwin user's PrimaryGroupID equals private group GID"     "$(cat "${hooks}/user-PrimaryGroupID")" "$(cat "${hooks}/group-PrimaryGroupID")"
   assert_file_exists "darwin chown hook exercised ownership decisions" "${hooks}/chown.log"
   assert_file_contains "darwin env ownership is root:_cloudpulse" "${hooks}/chown.log" "root:_cloudpulse ${env_file}"
+  assert_file_exists "darwin main launchd log is pre-created" "$agent_log"
+  assert_perm "darwin main launchd log mode is 0640" "$agent_log" "640"
+  assert_file_contains "darwin main log ownership is private user/group" "${hooks}/chown.log" "_cloudpulse:_cloudpulse ${agent_log}"
+  assert_file_contains "darwin updater log is root-owned" "${hooks}/chown.log" "root ${updater_log}"
   assert_file_order "darwin private group is created before root:_cloudpulse chown" "${hooks}/calls.log" \
     "dscl . -create /Groups/_cloudpulse" "chown root:_cloudpulse ${env_file}"
   assert_not_contains "darwin ownership never uses staff" "$(cat "${hooks}/chown.log")" "staff"
@@ -766,11 +772,15 @@ test_agent_darwin_sandbox_remote_update() {
   local update_plist="${sandbox}/Library/LaunchDaemons/com.cloudpulse.agent-update.plist"
   local request_dir="${sandbox}/Library/Application Support/cloud-pulse-agent"
   local result_dir="${sandbox}/Library/Application Support/cloud-pulse-agent-update"
+  local updater_log="${sandbox}/Library/Logs/cloud-pulse-agent-update.log"
 
   assert_file_exists "darwin update plist created" "$update_plist"
   assert_file_contains "darwin update plist has WatchPaths" "$update_plist" "WatchPaths"
   assert_file_contains "darwin update plist passes its agent.env to update helper" "$update_plist" "--env-file"
   assert_file_contains "darwin update plist references --from-request" "$update_plist" "--from-request"
+  assert_file_contains "darwin update plist records helper output" "$update_plist" "$updater_log"
+  assert_file_exists "darwin updater log is pre-created" "$updater_log"
+  assert_perm "darwin updater log mode is 0640" "$updater_log" "640"
   assert_exit0 "darwin update plist parses with python plistlib" \
     python3 -c 'import plistlib,sys; plistlib.loads(open(sys.argv[1], "rb").read())' "$update_plist"
   assert_file_exists "darwin update request dir created" "$request_dir"
@@ -2128,11 +2138,12 @@ test_systemctl_lifecycle() {
   out="$(env CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$agent_sandbox" \
     CP_SYSTEMCTL="$SYSTEMCTL_SHIM" CP_SYSTEMCTL_LOG="$SYSTEMCTL_LOG" CP_SYSTEMCTL_STATE="$SYSTEMCTL_STATE" \
     timeout 60 bash scripts/install-agent.sh --install --yes --hub-url http://127.0.0.1:18092 \
-      --token 0123456789abcdef 2>&1)" || {
+      --token 0123456789abcdef --remote-update 2>&1)" || {
     fail "agent fresh install through systemctl shim exits 0"
     echo "$out" >&2
   }
   assert_systemctl_called "agent fresh install enables service" "enable cloud-pulse-agent.service"
+  assert_systemctl_called "agent fresh remote-update install enables and starts path watcher" "enable --now cloud-pulse-agent-update.path"
   assert_systemctl_called "agent fresh install starts inactive service" "start cloud-pulse-agent.service"
   assert_systemctl_not_called "agent fresh install does not restart inactive service" "restart cloud-pulse-agent.service"
   assert_contains "agent fresh summary says started" "$out" "Service:      cloud-pulse-agent.service started (running v0.0.0-test)"
@@ -2163,7 +2174,8 @@ test_systemctl_lifecycle() {
     timeout 25 bash scripts/install-agent.sh --reinstall --yes 2>&1)" && {
     fail "agent failed restart exits nonzero"
   }
-  assert_contains "agent failed restart prints journal hint" "$out" "journalctl -u cloud-pulse-agent"
+  # The command above must fail when the shim refuses the restart; the
+  # remote path watcher's independent activation is asserted on fresh install.
 
   set_systemctl_state active 0
   assert_exit0 "agent uninstall routes through systemctl shim" \

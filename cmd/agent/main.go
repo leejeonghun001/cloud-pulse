@@ -165,7 +165,13 @@ func runAgentWithContext(ctx context.Context, envFile string) error {
 		return err
 	}
 
-	logger, err := config.NewLogger(os.Stderr, cfg.LogLevel, cfg.LogFormat)
+	loggerOutput, err := newLogWriter(cfg.LogFile)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = loggerOutput.Close() }()
+
+	logger, err := config.NewLogger(loggerOutput, cfg.LogLevel, cfg.LogFormat)
 	if err != nil {
 		return err
 	}

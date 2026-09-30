@@ -286,15 +286,7 @@ func resolveTarget(ctx context.Context, o Options) (string, error) {
 // older than version.SelfUpdateSince, since a binary at that version has
 // no `update` subcommand to upgrade itself back with.
 func warnIfDowngradeBelowSelfUpdate(out io.Writer, target string) {
-	since, ok := version.Parse(version.SelfUpdateSince)
-	if !ok {
-		return
-	}
-	t, ok := version.Parse(target)
-	if !ok {
-		return
-	}
-	if version.Compare(t, since) < 0 {
+	if !version.AtLeastIncludingPrerelease(target, version.SelfUpdateSince) {
 		printf(out, "cloud-pulse: warning: %s predates %s and has no `update` subcommand; "+
 			"you will need to re-run the install script to upgrade again", target, version.SelfUpdateSince)
 	}
@@ -475,15 +467,7 @@ func defaultPostUpdateLinux(binary string) func(ctx context.Context, binPath, ta
 // version.UnitManagedSince. An unparsable tag is conservatively treated
 // as not unit-managed (defaultPostUpdateFor skips rather than guesses).
 func isUnitManaged(tag string) bool {
-	since, ok := version.Parse(version.UnitManagedSince)
-	if !ok {
-		return false
-	}
-	t, ok := version.Parse(tag)
-	if !ok {
-		return false
-	}
-	return version.Compare(t, since) >= 0
+	return version.AtLeastIncludingPrerelease(tag, version.UnitManagedSince)
 }
 
 // printf writes a formatted, newline-terminated progress message to out

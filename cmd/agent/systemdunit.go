@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -110,9 +111,9 @@ func runSystemdUnitPrint(args []string) int {
 // EnvironmentFile= path recorded in the existing unit) has
 // CP_REMOTE_UPDATE=on, this also creates/updates
 // cloud-pulse-agent-update.path/.service alongside the main unit
-// (SPEC-v0.6 §2) — enabling the .path unit for boot is left to the
-// caller (install-agent.sh / a future explicit enable step), matching
-// ApplyUpdateUnits' own division of responsibility.
+// (SPEC-v0.6 §2) — after reload it enables and starts the .path unit so
+// an already-present request is processed immediately. The lower-level
+// ApplyUpdateUnits renderer remains systemctl-free.
 func runSystemdUnitApply(args []string) int {
 	fs := flag.NewFlagSet("cloud-pulse-agent systemd-unit apply", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -139,7 +140,7 @@ func runSystemdUnitApply(args []string) int {
 		return 1
 	}
 
-	updateChanged, err := applyUpdateUnitsIfEnabled(*unitPath, *updatePathUnitPath, *updateServiceUnitPath, *requestPath, *resultDir)
+	updateChanged, remoteUpdateEnabled, err := applyUpdateUnitsIfEnabled(*unitPath, *updatePathUnitPath, *updateServiceUnitPath, *requestPath, *resultDir)
 	if err != nil {
 		// A failure here is a warning, not a hard error: the primary
 		// unit (mainChanged above) already applied successfully, and
@@ -155,6 +156,12 @@ func runSystemdUnitApply(args []string) int {
 			return 1
 		}
 	}
+	if remoteUpdateEnabled {
+		if err := enableAndStartUpdatePathUnit(ctx, runSystemctl); err != nil {
+			fmt.Fprintf(os.Stderr, "cloud-pulse-agent: systemd-unit apply: start remote-update path unit: %v\n", err)
+			return 1
+		}
+	}
 	return 0
 }
 
@@ -166,30 +173,31 @@ func runSystemdUnitApply(args []string) int {
 // CP_REMOTE_UPDATE is off/unset, or the env file cannot be read (e.g.
 // permission denied when this is invoked without root — the caller
 // treats this as a warning, never fatal).
-func applyUpdateUnitsIfEnabled(unitPath, pathUnitPath, serviceUnitPath, requestPath, resultDir string) (bool, error) {
+func applyUpdateUnitsIfEnabled(unitPath, pathUnitPath, serviceUnitPath, requestPath, resultDir string) (bool, bool, error) {
 	existing, err := os.ReadFile(unitPath) //nolint:gosec // unitPath is an operator-supplied systemd unit path, not user request input
 	if err != nil {
-		return false, nil //nolint:nilerr // missing/unreadable unit just means "nothing to do yet"
+		return false, false, nil //nolint:nilerr // missing/unreadable unit just means "nothing to do yet"
 	}
 	params, err := systemdunit.ParseExisting(string(existing))
 	if err != nil {
-		return false, fmt.Errorf("parse existing unit %s: %w", unitPath, err)
+		return false, false, fmt.Errorf("parse existing unit %s: %w", unitPath, err)
 	}
 
 	on, err := envFileHasRemoteUpdateOn(params.EnvFile)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if !on {
-		return false, nil
+		return false, false, nil
 	}
 
-	return systemdunit.ApplyUpdateUnits(pathUnitPath, serviceUnitPath, systemdunit.UpdateUnitParams{
+	changed, err := systemdunit.ApplyUpdateUnits(pathUnitPath, serviceUnitPath, systemdunit.UpdateUnitParams{
 		BinPath:     params.BinPath,
 		RequestPath: requestPath,
 		ResultDir:   resultDir,
 		EnvFile:     params.EnvFile,
 	}, os.Stdout)
+	return changed, true, err
 }
 
 // envFileHasRemoteUpdateOn reads envPath (an EnvironmentFile= target,
@@ -238,4 +246,15 @@ func splitNonEmpty(csv string) []string {
 		}
 	}
 	return out
+}
+
+// enableAndStartUpdatePathUnit enables the persistent boot-time link and
+// starts the watcher now. PathExists= then fires immediately for a request
+// file that arrived while the watcher was inactive.
+func enableAndStartUpdatePathUnit(ctx context.Context, run func(context.Context, string, ...string) error) error {
+	return run(ctx, "systemctl", "enable", "--now", systemdunit.UpdatePathUnitName)
+}
+
+func runSystemctl(ctx context.Context, name string, args ...string) error {
+	return exec.CommandContext(ctx, name, args...).Run() //nolint:gosec // fixed executable and arguments
 }

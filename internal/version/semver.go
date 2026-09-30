@@ -270,6 +270,30 @@ func compareIdentifier(a, b string) int {
 	}
 }
 
+// AtLeastIncludingPrerelease reports whether candidate is at least gate,
+// treating every valid prerelease of gate's numeric version as satisfying
+// the gate. A capability introduced in vX.Y.Z is present in CI builds such
+// as vX.Y.Z-ci.1 and release candidates such as vX.Y.Z-rc.1, even though
+// ordinary SemVer precedence places those tags below vX.Y.Z. Invalid tags
+// conservatively return false.
+func AtLeastIncludingPrerelease(candidate, gate string) bool {
+	c, ok := Parse(candidate)
+	if !ok {
+		return false
+	}
+	g, ok := Parse(gate)
+	if !ok {
+		return false
+	}
+	if g.Pre == "" {
+		// SemVer's numeric prerelease identifier 0 is lower than every
+		// valid non-empty prerelease identifier, and lower than the final
+		// release, so vX.Y.Z-0 is the inclusive capability floor.
+		g.Pre = "0"
+	}
+	return Compare(c, g) >= 0
+}
+
 // IsNewer reports whether candidate is a strictly newer version than
 // current. Both strings must parse via Parse; if either does not parse,
 // IsNewer returns false (an unparsable version is never considered "newer"

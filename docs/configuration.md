@@ -86,6 +86,7 @@ only session-based sign-in works.
 | `CP_DOCKER` | `auto` | `auto\|off\|<socket path/URL>` — see [storage.md](storage.md#docker--podman-inventory-privilege-tradeoff) |
 | `CP_LOG_LEVEL` | `info` | `debug\|info\|warn\|error` |
 | `CP_LOG_FORMAT` | `text` | `text\|json` |
+| `CP_LOG_FILE` | *(unset)* | Append agent logs to this rotating file (5 MiB current + `.1`); Windows installer sets `C:\\ProgramData\\cloud-pulse\\logs\\agent.log` because SCM does not retain stdout/stderr |
 | `CP_REMOTE_UPDATE` | `off` | `off\|on` — opts this agent in to hub-triggered remote updates; the hub can never turn this on remotely |
 | `CP_UPDATE_LATEST_URL` | *(unset)* | Override the latest-release URL. When explicitly supplied to an agent installer, it is persisted in `agent.env` so Linux/macOS/Windows privileged remote-update helpers use the same mirror. |
 | `CP_RELEASE_BASE_URL` | *(unset)* | Override the asset + `checksums.txt` base URL. When explicitly supplied to an agent installer, it is persisted in `agent.env` for mirrors/air-gapped remote updates. |

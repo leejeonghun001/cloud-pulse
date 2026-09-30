@@ -37,6 +37,9 @@ type Agent struct {
 	LogLevel string
 	// LogFormat is one of text|json.
 	LogFormat string
+	// LogFile, when non-empty, receives agent service logs. Windows
+	// installers set it because the SCM does not retain stdout/stderr.
+	LogFile string
 	// TimeSync is "hub" (default) or "local". "hub" synchronizes sample
 	// timestamps to the hub's wall clock via HubClock; "local" uses the
 	// agent's own clock unmodified.
@@ -124,6 +127,7 @@ func LoadAgent(l LookupFunc, hostname string) (Agent, error) {
 	cfg.NetExclude = splitList(getString(l, "CP_NET_EXCLUDE", defaultNetExclude))
 	cfg.LogLevel = getString(l, "CP_LOG_LEVEL", "info")
 	cfg.LogFormat = getString(l, "CP_LOG_FORMAT", "text")
+	cfg.LogFile = getString(l, "CP_LOG_FILE", "")
 
 	timeSync, err := loadTimeSync(l)
 	if err != nil {

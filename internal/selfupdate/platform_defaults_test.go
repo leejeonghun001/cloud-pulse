@@ -19,6 +19,7 @@ func TestIsLaunchdManaged(t *testing.T) {
 		want bool
 	}{
 		{"v0.6.0", false},
+		{"v0.7.0-rc.1", true},
 		{"v0.7.0", true},
 		{"v0.7.1", true},
 		{"v1.0.0", true},

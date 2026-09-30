@@ -101,6 +101,8 @@ present) and installs:
 | `/Library/Application Support/cloud-pulse-agent/` (update request) | _cloudpulse | 0750 |
 | `/Library/Application Support/cloud-pulse-agent-update/` (update result) | root | 0755 |
 | `/Library/LaunchDaemons/com.cloudpulse.agent.plist` | root | 0644 |
+| `/Library/Logs/cloud-pulse-agent.log` | _cloudpulse:_cloudpulse | 0640 |
+| `/Library/Logs/cloud-pulse-agent-update.log` | root | 0640 |
 
 The LaunchDaemon `com.cloudpulse.agent` runs as `_cloudpulse` with
 `KeepAlive`/`RunAtLoad`, logging to `/Library/Logs/cloud-pulse-agent.log`.
@@ -109,7 +111,8 @@ Because launchd has no `EnvironmentFile=` equivalent, the plist passes
 binary, which parses it itself (`internal/config.ParseEnvFile` — plain
 `KEY=VALUE`, no shell interpretation, CRLF-tolerant). Passing
 `--remote-update` additionally installs `com.cloudpulse.agent-update`
-(root, `WatchPaths` on the update-request file) — see
+(root, `WatchPaths` on the update-request file), which writes helper
+output to `/Library/Logs/cloud-pulse-agent-update.log` — see
 [remote-updates.md](remote-updates.md).
 
 Service control uses `launchctl bootstrap system <plist>` /
@@ -139,6 +142,8 @@ Paths and permissions:
 | `C:\ProgramData\cloud-pulse\agent.env` | SYSTEM/Administrators full; service SID read-only |
 | `C:\ProgramData\cloud-pulse-agent\` (update request) | service SID can write |
 | `C:\ProgramData\cloud-pulse-agent-update\` (update result) | SYSTEM/Administrators full; service SID read-only |
+| `C:\ProgramData\cloud-pulse\logs\agent.log` | rotating agent service log (5 MiB current + `.1`) |
+| `C:\ProgramData\cloud-pulse\logs\updater.log` | rotating LocalSystem updater log (5 MiB current + `.1`) |
 
 The agent runs as service `cloud-pulse-agent` under the virtual account
 `NT SERVICE\cloud-pulse-agent` (implemented on

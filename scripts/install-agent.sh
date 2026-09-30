@@ -215,6 +215,7 @@ UPDATE_RESULT_DIR=""
 PLIST_PATH=""
 UPDATE_PLIST_PATH=""
 LOG_PATH=""
+UPDATE_LOG_PATH=""
 
 ARCH=""
 OS_NAME=""
@@ -703,6 +704,7 @@ setup_paths_darwin() {
   UPDATE_REQUEST_FILE="${UPDATE_STATE_DIR}/update-request.json"
   UPDATE_RESULT_DIR="${root}/Library/Application Support/cloud-pulse-agent-update"
   LOG_PATH="${root}/Library/Logs/cloud-pulse-agent.log"
+  UPDATE_LOG_PATH="${root}/Library/Logs/cloud-pulse-agent-update.log"
 }
 
 # ---------------------------------------------------------------------------
@@ -1213,6 +1215,11 @@ write_env_file() {
   remote_update="$(resolve_remote_update_value)"
 
   mkdir -p "$ETC_DIR"
+  if [ "$PLATFORM" = "darwin-launchd" ]; then
+    # launchd drops to _cloudpulse before the binary opens agent.env; every
+    # directory component must therefore be searchable by that user.
+    chmod 0755 "$(dirname "$(dirname "$ETC_DIR")")" "$(dirname "$ETC_DIR")" "$ETC_DIR"
+  fi
   local tmp_env="${TMP_DIR}/agent.env"
   rewrite_agent_env "$tmp_env" "$hub_url" "$token" "$host_id" "$interval" "$provider" "$egress_limit" "$net_exclude" "$time_sync" "$send_jitter" "$log_level" "$log_format" "$docker" "$remote_update"
   persist_update_source_override CP_RELEASE_BASE_URL "${CP_RELEASE_BASE_URL:-}" "$tmp_env"
@@ -1222,6 +1229,9 @@ write_env_file() {
   local env_group
   env_group="$(env_file_group)"
   darwin_chown "root:${env_group}" "$ENV_FILE"
+  if [ "$PLATFORM" = "darwin-launchd" ]; then
+    prepare_darwin_log_files
+  fi
   log "wrote ${ENV_FILE}"
   RESOLVED_HUB_URL="$hub_url"
 }
@@ -1237,6 +1247,21 @@ env_file_group() {
     return
   fi
   echo "$CP_SERVICE_GROUP"
+}
+
+# prepare_darwin_log_files pre-creates launchd's output files while the
+# installer is root. launchd opens StandardOutPath/StandardErrorPath after
+# applying UserName, so _cloudpulse cannot create a new file in root-owned
+# /Library/Logs; the root update helper receives its own root-owned log.
+prepare_darwin_log_files() {
+  if [ "$PLATFORM" != "darwin-launchd" ]; then
+    return
+  fi
+  mkdir -p "$(dirname "$LOG_PATH")"
+  touch "$LOG_PATH" "$UPDATE_LOG_PATH"
+  darwin_chown "${CP_DARWIN_USER}:${CP_DARWIN_GROUP}" "$LOG_PATH"
+  darwin_chown root "$UPDATE_LOG_PATH"
+  chmod 0640 "$LOG_PATH" "$UPDATE_LOG_PATH"
 }
 
 # ---------------------------------------------------------------------------
@@ -1395,12 +1420,13 @@ install_update_plist() {
   chmod 0755 "$UPDATE_RESULT_DIR"
 
   local tmp_plist="${TMP_DIR}/${CP_LAUNCHD_UPDATE_LABEL}.plist"
-  local label bin_path env_file request_file result_dir
+  local label bin_path env_file request_file result_dir update_log_path
   label="$(xml_escape "$CP_LAUNCHD_UPDATE_LABEL")"
   bin_path="$(xml_escape "$BIN_PATH")"
   env_file="$(xml_escape "$ENV_FILE")"
   request_file="$(xml_escape "$UPDATE_REQUEST_FILE")"
   result_dir="$(xml_escape "$UPDATE_RESULT_DIR")"
+  update_log_path="$(xml_escape "$UPDATE_LOG_PATH")"
   {
     echo '<?xml version="1.0" encoding="UTF-8"?>'
     echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
@@ -1423,6 +1449,10 @@ install_update_plist() {
     echo '    <array>'
     echo "        <string>${request_file}</string>"
     echo '    </array>'
+    echo '    <key>StandardOutPath</key>'
+    echo "    <string>${update_log_path}</string>"
+    echo '    <key>StandardErrorPath</key>'
+    echo "    <string>${update_log_path}</string>"
     echo '</dict>'
     echo '</plist>'
   } > "$tmp_plist"
@@ -1462,12 +1492,10 @@ install_update_units_fallback() {
   install -m 0644 "$tmp_service_unit" "$UPDATE_SERVICE_UNIT_FILE"
 }
 
-# enable_update_path_unit — enable (but never start; it only ever
-# triggers on demand) cloud-pulse-agent-update.path so it survives a
-# reboot, only when --remote-update is in effect. This is the "옵트인
-# 시에만 enable" half of SPEC-v0.6 §2 systemctl invocations start_service
-# doesn't already cover (start_service only knows about the main
-# cloud-pulse-agent.service).
+# enable_update_path_unit — enable and start cloud-pulse-agent-update.path
+# when --remote-update is in effect. PathExists= observes an already-present
+# request file immediately when the watcher starts, so enable --now prevents
+# a request delivered before reboot from remaining stranded in_progress.
 enable_update_path_unit() {
   if [ "$OPT_REMOTE_UPDATE" -ne 1 ]; then
     return
@@ -1477,11 +1505,11 @@ enable_update_path_unit() {
     return
   fi
   if [ "$IS_SANDBOX" -eq 1 ] && [ -z "${CP_SYSTEMCTL:-}" ]; then
-    log "sandbox: would run ${SYSTEMCTL} enable cloud-pulse-agent-update.path"
+    log "sandbox: would run ${SYSTEMCTL} enable --now cloud-pulse-agent-update.path"
     return
   fi
-  "$SYSTEMCTL" enable cloud-pulse-agent-update.path
-  log "enabled cloud-pulse-agent-update.path (SPEC-v0.6 §2 remote update)"
+  "$SYSTEMCTL" enable --now cloud-pulse-agent-update.path
+  log "enabled and started cloud-pulse-agent-update.path (SPEC-v0.6 §2 remote update)"
 }
 
 # enable_update_plist_darwin — bootstrap the update-helper LaunchDaemon

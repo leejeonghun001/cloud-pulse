@@ -177,6 +177,7 @@ func TestIsUnitManaged(t *testing.T) {
 		want bool
 	}{
 		{"v0.3.0", false},
+		{"v0.3.1-beta", true},
 		{"v0.3.1", true},
 		{"v0.3.2", true},
 		{"v1.0.0", true},
