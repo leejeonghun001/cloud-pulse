@@ -40,6 +40,9 @@ jobs:
       - name: Check gofmt
         run: test -z "$(gofmt -l .)"
 
+      - name: actionlint (GitHub Actions workflow lint)
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
   test:
     strategy:
       fail-fast: false
@@ -244,6 +247,9 @@ jobs:
       - name: Run web/test/ (Node built-in test runner)
         run: node --test web/test/*.test.mjs
 
+      - name: Check for hard-coded UI strings / i18n catalog parity (SPEC-v0.8 §3-3)
+        run: node scripts/check-i18n.mjs
+
   docs:
     runs-on: ubuntu-latest
     steps:
@@ -388,6 +394,7 @@ jobs:
             --password-file /tmp/ui-audit-pw.txt \
             --out /tmp/ui-audit-out \
             --allow scripts/ui-audit.allow.json \
+            --langs en,ko \
             --wait 800 \
             --timeout 480000
 

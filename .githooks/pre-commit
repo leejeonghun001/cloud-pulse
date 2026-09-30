@@ -504,6 +504,26 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 11) Hard-coded UI strings / i18n catalog parity (SPEC-v0.8 §3-3)
+# ---------------------------------------------------------------------------
+
+header "11) i18n (hard-coded UI strings, catalog parity)"
+if command -v node >/dev/null 2>&1; then
+  if [[ -f scripts/check-i18n.mjs ]]; then
+    if I18N_OUT="$(node scripts/check-i18n.mjs 2>&1)"; then
+      pass "check-i18n.mjs"
+    else
+      fail "check-i18n.mjs"
+      echo "$I18N_OUT" | sed 's/^/    /'
+    fi
+  else
+    skip "check-i18n.mjs (not present)"
+  fi
+else
+  skip "check-i18n.mjs (node not installed; optional)"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 
