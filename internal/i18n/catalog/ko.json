@@ -5,6 +5,7 @@
   "channel_health": {
     "test_ok": "{channel_name} 채널로 보낸 연결 확인이 성공했습니다.",
     "test_failed": "{channel_name} 채널 연결 확인이 실패했습니다: {detail}",
-    "channel_down": "알림 채널 \"{channel_name}\"에 문제가 있는 것으로 보입니다."
+    "channel_down": "알림 채널 \"{channel_name}\"에 문제가 있는 것으로 보입니다.",
+    "channel_recovered": "알림 채널 \"{channel_name}\"이 복구되었습니다."
   }
 }

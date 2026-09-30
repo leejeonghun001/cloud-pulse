@@ -298,7 +298,7 @@ func TestChannelFailureIncident_OpenNotifyRecoverLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetOpenChannelFailureIncident: %v", err)
 	}
-	if !ok || inc.NotifiedAt != 1100 || !inc.FallbackChannelID.Valid || inc.FallbackChannelID.Int64 != fallback.ID {
+	if !ok || inc.NotifiedAt != 1100 || inc.FallbackChannelID != fallback.ID {
 		t.Errorf("inc = %+v, ok = %v, want notified at 1100 via fallback %d", inc, ok, fallback.ID)
 	}
 

@@ -179,3 +179,29 @@ type ChannelHealthReport struct {
 	// mention, empty when BannerNeeded is false.
 	BannerChannelNames []string `json:"banner_channel_names,omitempty"`
 }
+
+// ChannelFailureIncident tracks one channel's currently-open (or most
+// recently closed) "failing" incident for the channel-failure fallback
+// notification's once-per-incident de-duplication (SPEC-v0.8 §3-2).
+// See internal/storage/migrations/0007_v08.sql's channel_failure_
+// incidents table (PK channel_id, one row per channel at a time) for
+// the persisted shape this mirrors.
+type ChannelFailureIncident struct {
+	ChannelID int64 `json:"channel_id"`
+	OpenedAt  int64 `json:"opened_at"`
+	// NotifiedAt is 0 until the fallback notification has actually
+	// been sent for this incident (e.g. because no healthy fallback
+	// channel existed yet — see FallbackChannelID).
+	NotifiedAt int64 `json:"notified_at"`
+	// FallbackChannelID is the channel that carried the "channel X is
+	// failing" notification, 0 if NotifiedAt is still 0.
+	FallbackChannelID int64 `json:"fallback_channel_id,omitempty"`
+	// RecoveredAt is 0 while the incident is still open.
+	RecoveredAt int64 `json:"recovered_at"`
+}
+
+// IsOpen reports whether the incident is still open (has not yet
+// recovered).
+func (i ChannelFailureIncident) IsOpen() bool {
+	return i.RecoveredAt == 0
+}

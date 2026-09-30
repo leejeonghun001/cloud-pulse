@@ -200,32 +200,26 @@ func scanSyntheticResult(scan func(dest ...any) error) (models.SyntheticResult, 
 
 // --- Failure incidents (fallback-notification de-duplication) ---
 
-// channelFailureIncident mirrors one channel_failure_incidents row.
-// Unexported: this table is an internal de-duplication mechanism for
-// the channel-failure fallback notifier, not part of the public
-// models.* API surface any handler returns directly.
-type channelFailureIncident struct {
-	ChannelID         int64
-	OpenedAt          int64
-	NotifiedAt        int64
-	FallbackChannelID sql.NullInt64
-	RecoveredAt       int64
-}
+// --- Failure incidents (fallback-notification de-duplication) ---
 
 // GetOpenChannelFailureIncident returns channelID's currently open
 // (RecoveredAt == 0) incident row, or (zero value, false, nil) if none
 // is open.
-func (db *DB) GetOpenChannelFailureIncident(ctx context.Context, channelID int64) (channelFailureIncident, bool, error) {
+func (db *DB) GetOpenChannelFailureIncident(ctx context.Context, channelID int64) (models.ChannelFailureIncident, bool, error) {
 	row := db.sql.QueryRowContext(ctx, `
 		SELECT channel_id, opened_at, notified_at, fallback_channel_id, recovered_at
 		FROM channel_failure_incidents WHERE channel_id = ? AND recovered_at = 0
 	`, channelID)
-	var inc channelFailureIncident
-	if err := row.Scan(&inc.ChannelID, &inc.OpenedAt, &inc.NotifiedAt, &inc.FallbackChannelID, &inc.RecoveredAt); err != nil {
+	var inc models.ChannelFailureIncident
+	var fallbackChannelID sql.NullInt64
+	if err := row.Scan(&inc.ChannelID, &inc.OpenedAt, &inc.NotifiedAt, &fallbackChannelID, &inc.RecoveredAt); err != nil {
 		if isNoRows(err) {
-			return channelFailureIncident{}, false, nil
+			return models.ChannelFailureIncident{}, false, nil
 		}
-		return channelFailureIncident{}, false, fmt.Errorf("storage: get open channel failure incident: %w", err)
+		return models.ChannelFailureIncident{}, false, fmt.Errorf("storage: get open channel failure incident: %w", err)
+	}
+	if fallbackChannelID.Valid {
+		inc.FallbackChannelID = fallbackChannelID.Int64
 	}
 	return inc, true, nil
 }

@@ -52,6 +52,11 @@ type fakeStore struct {
 	nextStorageAcctID int64
 	storageSnapshots  map[int64]models.StorageAccountSnapshot // key: accountID
 
+	channelHealthSettings map[int64]models.ChannelHealthSettings // key: channelID
+	syntheticResults      map[int64]models.SyntheticResult       // key: result ID
+	nextSyntheticID       int64
+	failureIncidents      map[int64]models.ChannelFailureIncident // key: channelID (only ever the latest, matching the real table's PK)
+
 	rollupErr   error
 	pruneErr    error
 	rollupCalls int
@@ -80,6 +85,10 @@ func newFakeStore() *fakeStore {
 		hostPricing:        make(map[string]models.HostPricing),
 		storageAccounts:    make(map[int64]models.StorageAccount),
 		storageSnapshots:   make(map[int64]models.StorageAccountSnapshot),
+
+		channelHealthSettings: make(map[int64]models.ChannelHealthSettings),
+		syntheticResults:      make(map[int64]models.SyntheticResult),
+		failureIncidents:      make(map[int64]models.ChannelFailureIncident),
 	}
 }
 
@@ -1109,4 +1118,126 @@ func (n *fakeNotifier) callCount() int {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return len(n.calls)
+}
+
+// --- Channel health (SPEC-v0.8 §3-2) ---
+
+func (f *fakeStore) GetChannelHealthSettings(_ context.Context, channelID int64) (models.ChannelHealthSettings, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.channelHealthSettings[channelID]
+	if !ok {
+		return models.ChannelHealthSettings{ChannelID: channelID}, nil
+	}
+	return s, nil
+}
+
+func (f *fakeStore) ListChannelHealthSettings(_ context.Context) ([]models.ChannelHealthSettings, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]models.ChannelHealthSettings, 0, len(f.channelHealthSettings))
+	for _, s := range f.channelHealthSettings {
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ChannelID < out[j].ChannelID })
+	return out, nil
+}
+
+func (f *fakeStore) SetChannelHealthSettings(_ context.Context, s models.ChannelHealthSettings) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if s.UpdatedAt == 0 {
+		s.UpdatedAt = time.Now().Unix()
+	}
+	f.channelHealthSettings[s.ChannelID] = s
+	return nil
+}
+
+func (f *fakeStore) UpdateChannelHealthSettingsLastRun(_ context.Context, channelID int64, lastRunAt int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.channelHealthSettings[channelID]
+	if !ok {
+		return nil
+	}
+	s.LastRunAt = lastRunAt
+	f.channelHealthSettings[channelID] = s
+	return nil
+}
+
+func (f *fakeStore) CreateSyntheticResult(_ context.Context, r models.SyntheticResult) (models.SyntheticResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextSyntheticID++
+	r.ID = f.nextSyntheticID
+	f.syntheticResults[r.ID] = r
+	return r, nil
+}
+
+func (f *fakeStore) UpdateSyntheticResult(_ context.Context, r models.SyntheticResult) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.syntheticResults[r.ID]; !ok {
+		return models.ErrNotFound
+	}
+	f.syntheticResults[r.ID] = r
+	return nil
+}
+
+func (f *fakeStore) ListSyntheticResults(_ context.Context, channelID int64, limit int) ([]models.SyntheticResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]models.SyntheticResult, 0)
+	for _, r := range f.syntheticResults {
+		if r.ChannelID == channelID && r.FinishedAt != 0 {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].StartedAt > out[j].StartedAt })
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (f *fakeStore) GetOpenChannelFailureIncident(_ context.Context, channelID int64) (models.ChannelFailureIncident, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	inc, ok := f.failureIncidents[channelID]
+	if !ok || !inc.IsOpen() {
+		return models.ChannelFailureIncident{}, false, nil
+	}
+	return inc, true, nil
+}
+
+func (f *fakeStore) OpenChannelFailureIncident(_ context.Context, channelID, openedAt int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failureIncidents[channelID] = models.ChannelFailureIncident{ChannelID: channelID, OpenedAt: openedAt}
+	return nil
+}
+
+func (f *fakeStore) MarkChannelFailureIncidentNotified(_ context.Context, channelID, notifiedAt, fallbackChannelID int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	inc, ok := f.failureIncidents[channelID]
+	if !ok || !inc.IsOpen() {
+		return nil
+	}
+	inc.NotifiedAt = notifiedAt
+	inc.FallbackChannelID = fallbackChannelID
+	f.failureIncidents[channelID] = inc
+	return nil
+}
+
+func (f *fakeStore) RecoverChannelFailureIncident(_ context.Context, channelID, recoveredAt int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	inc, ok := f.failureIncidents[channelID]
+	if !ok || !inc.IsOpen() {
+		return nil
+	}
+	inc.RecoveredAt = recoveredAt
+	f.failureIncidents[channelID] = inc
+	return nil
 }

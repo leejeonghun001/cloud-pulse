@@ -318,6 +318,49 @@ type Store interface {
 	// snap.AccountID, keyed on account_id (one row per account).
 	SetStorageAccountSnapshot(ctx context.Context, snap models.StorageAccountSnapshot) error
 
+	// --- Notification channel health (SPEC-v0.8 §3-2) ---
+
+	// GetChannelHealthSettings returns channelID's synthetic-test
+	// schedule, or a zero-value models.ChannelHealthSettings{ChannelID:
+	// channelID} (Enabled: false) with a nil error if no row exists.
+	GetChannelHealthSettings(ctx context.Context, channelID int64) (models.ChannelHealthSettings, error)
+	// ListChannelHealthSettings returns every channel's stored
+	// synthetic-test schedule, sorted by channel_id.
+	ListChannelHealthSettings(ctx context.Context) ([]models.ChannelHealthSettings, error)
+	// SetChannelHealthSettings upserts s's row for s.ChannelID.
+	SetChannelHealthSettings(ctx context.Context, s models.ChannelHealthSettings) error
+	// UpdateChannelHealthSettingsLastRun sets LastRunAt for channelID's
+	// existing row, a no-op if no row exists.
+	UpdateChannelHealthSettingsLastRun(ctx context.Context, channelID int64, lastRunAt int64) error
+
+	// CreateSyntheticResult inserts r, ignoring r.ID, and returns the
+	// row with its assigned ID populated.
+	CreateSyntheticResult(ctx context.Context, r models.SyntheticResult) (models.SyntheticResult, error)
+	// UpdateSyntheticResult replaces the stored result matching r.ID
+	// with r in full, or returns models.ErrNotFound if no result with
+	// that ID exists.
+	UpdateSyntheticResult(ctx context.Context, r models.SyntheticResult) error
+	// ListSyntheticResults returns up to limit of channelID's most
+	// recent completed synthetic test results, newest first. limit <= 0
+	// means no limit.
+	ListSyntheticResults(ctx context.Context, channelID int64, limit int) ([]models.SyntheticResult, error)
+
+	// GetOpenChannelFailureIncident returns channelID's currently open
+	// incident, or (zero value, false, nil) if none is open.
+	GetOpenChannelFailureIncident(ctx context.Context, channelID int64) (models.ChannelFailureIncident, bool, error)
+	// OpenChannelFailureIncident inserts a fresh open incident for
+	// channelID starting at openedAt. Callers must first check
+	// GetOpenChannelFailureIncident and only call this when none is
+	// already open.
+	OpenChannelFailureIncident(ctx context.Context, channelID, openedAt int64) error
+	// MarkChannelFailureIncidentNotified records that channelID's open
+	// incident's fallback notification was sent via fallbackChannelID
+	// at notifiedAt.
+	MarkChannelFailureIncidentNotified(ctx context.Context, channelID, notifiedAt, fallbackChannelID int64) error
+	// RecoverChannelFailureIncident closes channelID's open incident
+	// (if any). A no-op if no open incident exists.
+	RecoverChannelFailureIncident(ctx context.Context, channelID, recoveredAt int64) error
+
 	// Close releases any resources held by the store.
 	Close() error
 }
@@ -472,6 +515,15 @@ type Options struct {
 	// (owned by the "storage" v0.7.0 stage); cmd/hub/storage.go
 	// constructs the real one.
 	Storage *StorageRuntime
+	// ChannelHealth wires SPEC-v0.8 §3-2's notification channel health
+	// report: the weekly opt-in synthetic-test scheduler and the
+	// channel-failure fallback notifier. nil disables the background
+	// scheduler and fallback dispatch (RunChannelHealthLoop becomes a
+	// no-op); the read-only health report API still works against
+	// whatever data already exists. See channelhealthrun.go/
+	// channelhealthroutes.go (owned by the "health" v0.8.0 stage);
+	// cmd/hub/channelhealth.go constructs the real one.
+	ChannelHealth *ChannelHealthRuntime
 }
 
 func (o Options) now() time.Time {
@@ -679,6 +731,7 @@ func (s *Server) routes() *http.ServeMux {
 	s.registerPricingRoutes(mux)
 	s.registerStorageRoutes(mux)
 	s.registerI18nRoutes(mux)
+	s.registerChannelHealthRoutes(mux)
 
 	// No catch-all is registered for the bare pattern "/api/" or "/":
 	// doing so with no method restriction would make it match every
