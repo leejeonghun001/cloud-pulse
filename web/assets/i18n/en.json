@@ -72,7 +72,14 @@
     "title": "Alerts"
   },
   "costs": {
-    "title": "Costs"
+    "title": "Costs",
+    "no_successful_fetch_yet": "No successful fetch yet.",
+    "freshness_collected": "Collected",
+    "freshness_not_connected": "Not connected · last success",
+    "freshness_stale_suffix": "(stale)",
+    "freshness_line": "{prefix} {absolute} ({elapsed} ago){staleSuffix}.",
+    "last_known_mtd": "Last known MTD: {amount}",
+    "last_known_forecast": "Last known forecast: {amount}"
   },
   "rollout": {
     "title": "Rollout",
@@ -84,6 +91,18 @@
   },
   "health": {
     "title": "Health"
+  },
+  "password": {
+    "requirement_length": "At least {min} characters",
+    "requirement_not_blank": "Not just whitespace",
+    "requirement_not_default": "Not the default password (\"changeme\")",
+    "requirement_not_current": "Different from your current password",
+    "strength_weak": "Weak",
+    "strength_fair": "Fair",
+    "strength_good": "Good",
+    "strength_strong": "Strong",
+    "show_password": "Show password",
+    "hide_password": "Hide password"
   },
   "errors": {
     "generic": "Something went wrong. Please try again.",

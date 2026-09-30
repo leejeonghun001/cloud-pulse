@@ -2,6 +2,9 @@
 // assets/js/core/password-policy.js.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { setCatalogs, setLang } from "../assets/js/core/i18n.js";
 import {
   MIN_LENGTH,
   evaluateRequirements,
@@ -10,6 +13,27 @@ import {
   strengthLevel,
   strengthLabel,
 } from "../assets/js/core/password-policy.js";
+
+function withFakeLocalStorage(fn) {
+  const store = new Map();
+  const original = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  };
+  try {
+    return fn();
+  } finally {
+    globalThis.localStorage = original;
+  }
+}
+
+const assetsDir = fileURLToPath(new URL("../assets/i18n/", import.meta.url));
+setCatalogs({
+  en: JSON.parse(readFileSync(`${assetsDir}en.json`, "utf-8")),
+  ko: JSON.parse(readFileSync(`${assetsDir}ko.json`, "utf-8")),
+});
 
 test("evaluateRequirements: all unmet for empty password", () => {
   const reqs = evaluateRequirements("");
@@ -76,9 +100,20 @@ test("strengthLevel maps scores to level names", () => {
 });
 
 test("strengthLabel returns a human label for each non-empty level", () => {
-  assert.equal(strengthLabel("weak"), "Weak");
-  assert.equal(strengthLabel("fair"), "Fair");
-  assert.equal(strengthLabel("good"), "Good");
-  assert.equal(strengthLabel("strong"), "Strong");
-  assert.equal(strengthLabel("empty"), "");
+  withFakeLocalStorage(() => {
+    setLang("en");
+    assert.equal(strengthLabel("weak"), "Weak");
+    assert.equal(strengthLabel("fair"), "Fair");
+    assert.equal(strengthLabel("good"), "Good");
+    assert.equal(strengthLabel("strong"), "Strong");
+    assert.equal(strengthLabel("empty"), "");
+  });
+});
+
+test("strengthLabel renders Korean labels when lang is ko", () => {
+  withFakeLocalStorage(() => {
+    setLang("ko");
+    assert.equal(strengthLabel("weak"), "약함");
+    assert.equal(strengthLabel("strong"), "강함");
+  });
 });

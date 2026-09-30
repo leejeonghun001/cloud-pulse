@@ -72,7 +72,14 @@
     "title": "알림"
   },
   "costs": {
-    "title": "비용"
+    "title": "비용",
+    "no_successful_fetch_yet": "아직 성공적으로 조회된 내역이 없습니다.",
+    "freshness_collected": "수집 완료",
+    "freshness_not_connected": "연결 안 됨 · 마지막 성공",
+    "freshness_stale_suffix": "(오래됨)",
+    "freshness_line": "{prefix} {absolute} ({elapsed} 전){staleSuffix}.",
+    "last_known_mtd": "마지막으로 확인된 이번 달 비용: {amount}",
+    "last_known_forecast": "마지막으로 확인된 예상 비용: {amount}"
   },
   "rollout": {
     "title": "롤아웃",
@@ -84,6 +91,18 @@
   },
   "health": {
     "title": "상태"
+  },
+  "password": {
+    "requirement_length": "최소 {min}자 이상",
+    "requirement_not_blank": "공백만으로 이루어지지 않음",
+    "requirement_not_default": "기본 비밀번호(\"changeme\")가 아님",
+    "requirement_not_current": "현재 비밀번호와 다름",
+    "strength_weak": "약함",
+    "strength_fair": "보통",
+    "strength_good": "좋음",
+    "strength_strong": "강함",
+    "show_password": "비밀번호 표시",
+    "hide_password": "비밀번호 숨기기"
   },
   "errors": {
     "generic": "문제가 발생했습니다. 다시 시도해 주세요.",

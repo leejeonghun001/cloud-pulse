@@ -6,6 +6,7 @@
 import { el } from "./components.js";
 import { icon } from "./icons.js";
 import { evaluateRequirements, scoreStrength, strengthLevel, strengthLabel } from "../core/password-policy.js";
+import { t } from "../core/i18n.js";
 
 /**
  * passwordField builds a labeled password input with a show/hide
@@ -37,7 +38,7 @@ export function passwordField({ id, label, autocomplete = "current-password", re
   const toggleBtn = /** @type {HTMLButtonElement} */ (
     el("button", {
       class: "cp-input-group-btn",
-      attrs: { type: "button", "aria-label": "Show password", "aria-pressed": "false" },
+      attrs: { type: "button", "aria-label": t("password.show_password"), "aria-pressed": "false" },
     })
   );
   toggleBtn.append(icon("eye"));
@@ -46,7 +47,7 @@ export function passwordField({ id, label, autocomplete = "current-password", re
     const showing = input.type === "text";
     input.type = showing ? "password" : "text";
     toggleBtn.setAttribute("aria-pressed", showing ? "false" : "true");
-    toggleBtn.setAttribute("aria-label", showing ? "Show password" : "Hide password");
+    toggleBtn.setAttribute("aria-label", showing ? t("password.show_password") : t("password.hide_password"));
     clearIcon(toggleBtn);
     toggleBtn.append(icon(showing ? "eye" : "eyeOff"));
   });
