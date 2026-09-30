@@ -1,0 +1,81 @@
+/* rollout.css — #/rollout page (SPEC-v0.8 §3-1): summary cards,
+   version-distribution-by-OS stacked bars (pure CSS, with a text-
+   alternative table), and the outdated-host/batch-history sections.
+   The agent capability table and progress panel reuse cp-updates-*
+   from updates.css unchanged (see pages/rollout.js's doc comment on
+   absorbing the former #/updates page). */
+
+@layer components {
+  .cp-rollout-page {
+    @apply flex flex-col gap-6;
+  }
+
+  .cp-rollout-summary-cards {
+    @apply grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6;
+  }
+
+  .cp-rollout-summary-card {
+    @apply flex flex-col items-start gap-1 p-4;
+  }
+
+  .cp-rollout-summary-value {
+    @apply text-xl font-semibold text-[rgb(var(--text))] tabular-nums;
+  }
+
+  .cp-rollout-summary-label {
+    @apply text-xs text-[rgb(var(--muted))] uppercase tracking-wide;
+  }
+
+  .cp-rollout-distribution-chart {
+    @apply flex flex-col gap-3 mt-3;
+  }
+
+  .cp-rollout-distribution-row {
+    @apply flex items-center gap-3;
+  }
+
+  .cp-rollout-distribution-os-label {
+    @apply w-20 shrink-0 text-sm font-medium text-[rgb(var(--text))];
+  }
+
+  .cp-rollout-distribution-track {
+    @apply flex-1 flex h-6 rounded-md overflow-hidden bg-[rgb(var(--surface-raised))] border border-[rgb(var(--border))];
+  }
+
+  .cp-rollout-distribution-fill {
+    @apply h-full;
+  }
+
+  .cp-rollout-distribution-total {
+    @apply w-10 shrink-0 text-right tabular-nums;
+  }
+
+  .cp-rollout-distribution-table-wrap {
+    @apply mt-4;
+  }
+
+  /* A small fixed palette cycling across a bar's version segments —
+     not tied to any specific version, just a rotation so adjacent
+     segments are visually distinguishable. Colors chosen for AA
+     contrast against both light/dark surface backgrounds and against
+     each other. */
+  .cp-rollout-seg-0 {
+    @apply bg-cp-accent;
+  }
+  .cp-rollout-seg-1 {
+    @apply bg-emerald-500;
+  }
+  .cp-rollout-seg-2 {
+    @apply bg-amber-500;
+  }
+  .cp-rollout-seg-3 {
+    @apply bg-fuchsia-500;
+  }
+  .cp-rollout-seg-4 {
+    @apply bg-slate-400;
+  }
+
+  .cp-rollout-progress-host {
+    @apply flex flex-col gap-4;
+  }
+}
