@@ -559,6 +559,12 @@ type Server struct {
 	// updateengine.go's batchMaxParallel doc comment).
 	batchLimitsMu sync.Mutex
 	batchLimits   map[string]int
+
+	// fleetOutdatedTracker records, in-memory only, when each currently
+	// outdated host was first observed outdated (SPEC-v0.8 §3-1's
+	// "behind-for" display) — see fleetversionstracker.go's doc
+	// comment on why this has no persisted table.
+	fleetOutdatedTracker *fleetVersionTracker
 }
 
 // New constructs a Server. collectors and notifier may be empty/nil.
@@ -575,6 +581,8 @@ func New(opts Options, store Store, collectors []BucketCollector, notifier Notif
 		status:     make(map[string]models.CollectorStatus, len(collectors)),
 		limiter:    newRateLimiter(opts.Now),
 		agentConns: newAgentConnTracker(),
+
+		fleetOutdatedTracker: newFleetVersionTracker(),
 	}
 	for _, c := range collectors {
 		s.status[c.Name()] = models.CollectorStatus{Name: c.Name(), Enabled: true}
@@ -679,6 +687,7 @@ func (s *Server) routes() *http.ServeMux {
 	s.registerPricingRoutes(mux)
 	s.registerStorageRoutes(mux)
 	s.registerI18nRoutes(mux)
+	s.registerFleetVersionsRoute(mux)
 
 	// No catch-all is registered for the bare pattern "/api/" or "/":
 	// doing so with no method restriction would make it match every

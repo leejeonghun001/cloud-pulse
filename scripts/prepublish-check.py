@@ -58,6 +58,7 @@ import hashlib
 import ipaddress
 import json
 import math
+import os
 import re
 import struct
 import subprocess
@@ -589,12 +590,44 @@ _TEXT_LIKELY_SUFFIXES = {
 }
 
 
+def _sanitized_git_env() -> dict[str, str]:
+    """Returns os.environ with every GIT_* variable that would redirect
+    git's target repository/worktree away from an explicit cwd
+    argument removed (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE,
+    GIT_OBJECT_DIRECTORY, GIT_COMMON_DIR, GIT_CEILING_DIRECTORIES).
+
+    Git unconditionally sets GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE in
+    the environment of every hook it invokes (including pre-commit).
+    When this script itself runs as part of a pre-commit hook inside a
+    git worktree checkout (as every SPEC-v0.8 Part B feature-stage
+    checkout is), those inherited variables would silently redirect
+    every _git() call below away from the explicit repo_root argument
+    and onto the hook's own worktree instead — harmless for this
+    script's own read-only git usage (ls-files/log/rev-list/cat-file
+    only), but confirmed to break scripts/tests/test_prepublish_check.py
+    callers that pass a throwaway fixture directory as repo_root while
+    running from inside a hook. Scrubbed defensively here too so this
+    function behaves identically whether called for a real scan or a
+    test fixture.
+    """
+    leaking_keys = (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_COMMON_DIR",
+        "GIT_CEILING_DIRECTORIES",
+    )
+    return {k: v for k, v in os.environ.items() if k not in leaking_keys}
+
+
 def _git(repo_root: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args],
         cwd=repo_root,
         capture_output=True,
         text=True,
+        env=_sanitized_git_env(),
         check=True,
     )
     return result.stdout
@@ -693,6 +726,7 @@ def iter_history_added_lines(repo_root: Path) -> Iterator[tuple[str, str, int, s
         text=True,
         errors="surrogateescape",
         bufsize=1,
+        env=_sanitized_git_env(),
     )
     assert proc.stdout is not None
     current_commit = ""
@@ -747,6 +781,7 @@ def scan_history_large_and_binary_blobs(repo_root: Path) -> list[Finding]:
         cwd=repo_root,
         capture_output=True,
         text=True,
+        env=_sanitized_git_env(),
         check=True,
     )
     batch_check = subprocess.run(
@@ -755,6 +790,7 @@ def scan_history_large_and_binary_blobs(repo_root: Path) -> list[Finding]:
         input=rev_list.stdout,
         capture_output=True,
         text=True,
+        env=_sanitized_git_env(),
         check=True,
     )
     for line in batch_check.stdout.splitlines():

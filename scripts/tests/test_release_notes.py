@@ -39,7 +39,50 @@ def run_git(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
 def _base_os_env() -> dict[str, str]:
     import os
 
-    return dict(os.environ)
+    # Strip any GIT_* environment variables that redirect git's target
+    # repository/worktree away from the "-C repo" argument above
+    # (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY,
+    # GIT_COMMON_DIR, GIT_CEILING_DIRECTORIES). Git unconditionally sets
+    # GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE in the environment of every
+    # hook it invokes (including pre-commit) — when this repo itself is
+    # a git worktree (as every SPEC-v0.8 Part B feature-stage checkout
+    # is: `git worktree add ...`), those inherited variables point at
+    # THIS repository's own worktree gitdir/index, not at the throwaway
+    # fixture repo `-C str(repo)` is supposed to target. Without this
+    # scrub, running this test suite from inside a pre-commit hook
+    # silently redirects every "git commit"/"git tag" call below onto
+    # the real repository's branch ref instead of the fixture — observed
+    # in practice as a feature-stage worktree's branch being overwritten
+    # by this fixture's "chore: init project" / "feat: add widget
+    # support" / "fix: correct widget overflow" commits. See
+    # DECISIONS_LOG.md for the incident this was root-caused from.
+    leaking_keys = (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_COMMON_DIR",
+        "GIT_CEILING_DIRECTORIES",
+        # Git also sets these for the commit currently being made by
+        # an enclosing hook invocation (e.g. this project's own
+        # pre-commit hook running this very test suite). This
+        # function's caller (run_git) already supplies its own
+        # explicit GIT_AUTHOR_*/GIT_COMMITTER_* identity and, per call,
+        # GIT_AUTHOR_DATE/GIT_COMMITTER_DATE (see commit()/tag() below)
+        # — but a git operation that does NOT set one of these itself
+        # (e.g. a plain "git tag" without an explicit date) would
+        # otherwise silently inherit the enclosing hook's real-world
+        # values instead of leaving git to derive its own default,
+        # breaking this suite's deterministic, fully-controlled
+        # timeline assumptions.
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_DATE",
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_DATE",
+    )
+    return {k: v for k, v in os.environ.items() if k not in leaking_keys}
 
 
 def commit(repo: Path, message: str, *, date: str, filename: str = "file.txt") -> str:
@@ -63,6 +106,7 @@ def run_release_notes(repo: Path, *args: str) -> subprocess.CompletedProcess[str
         ["bash", str(SCRIPT), *args, "--repo-dir", str(repo), "--repo-url", "https://example.invalid/owner/repo"],
         capture_output=True,
         text=True,
+        env=_base_os_env(),
         check=False,
     )
 

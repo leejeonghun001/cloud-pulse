@@ -39,12 +39,43 @@ def load_script(filename: str, module_name: str) -> ModuleType:
 PC = load_script("prepublish-check.py", "cloud_pulse_prepublish_check_test")
 
 
+def _sanitized_git_env() -> dict[str, str]:
+    """Returns a copy of the current process environment with every
+    GIT_* variable that would redirect git's target repository/
+    worktree away from an explicit cwd/-C argument removed (GIT_DIR,
+    GIT_WORK_TREE, GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY,
+    GIT_COMMON_DIR, GIT_CEILING_DIRECTORIES).
+
+    Git unconditionally sets GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE in
+    the environment of every hook it invokes (including pre-commit) —
+    when this repo itself is a git worktree (as every SPEC-v0.8 Part B
+    feature-stage checkout is: `git worktree add ...`), those
+    inherited variables point at THIS repository's own worktree
+    gitdir/index, not at TempGitRepo's throwaway fixture directory.
+    Without this scrub, running this test suite from inside a
+    pre-commit hook silently redirects every git operation below onto
+    the real repository's branch ref instead of the fixture. See
+    test_release_notes.py's _base_os_env for the sibling fix and
+    DECISIONS_LOG.md for the incident this was root-caused from.
+    """
+    leaking_keys = (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_COMMON_DIR",
+        "GIT_CEILING_DIRECTORIES",
+    )
+    return {k: v for k, v in os.environ.items() if k not in leaking_keys}
+
+
 def _run_git(repo: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args],
         cwd=repo,
         capture_output=True,
         text=True,
+        env=_sanitized_git_env(),
         check=True,
     )
     return result.stdout
