@@ -16,6 +16,38 @@
     {
       "key": "web/assets/js/ui/shell.js:296:key:label",
       "reason": "\"Linux / macOS\" is a fallback OS-tab label used only when the hub's install_commands API response omits per-OS entries (pre-v0.7.0 hub) — an OS/platform name, kept in English like other technical/API terms."
+    },
+    {
+      "key": "web/assets/js/core/notify-checklists.js:35:key:label",
+      "reason": "\"Discord\" is the platform's product name, kept in every language per CODING_CONVENTIONS.md/DECISIONS_LOG.md."
+    },
+    {
+      "key": "web/assets/js/core/notify-checklists.js:47:key:label",
+      "reason": "\"Telegram\" is the platform's product name, kept in every language."
+    },
+    {
+      "key": "web/assets/js/core/notify-checklists.js:60:key:label",
+      "reason": "\"WhatsApp\" is the platform's product name, kept in every language."
+    },
+    {
+      "key": "web/assets/js/core/notify-guides.js:34:key:label",
+      "reason": "\"Discord\" is the platform's product name, kept in every language per CODING_CONVENTIONS.md/DECISIONS_LOG.md."
+    },
+    {
+      "key": "web/assets/js/core/notify-guides.js:58:key:label",
+      "reason": "\"Telegram\" is the platform's product name, kept in every language."
+    },
+    {
+      "key": "web/assets/js/core/notify-guides.js:61:key:placeholder",
+      "reason": "\"123456:TEST-TOKEN\" is an example Telegram bot-token format string (API identifier syntax), not translatable prose."
+    },
+    {
+      "key": "web/assets/js/core/notify-guides.js:78:key:label",
+      "reason": "\"WhatsApp\" is the platform's product name, kept in every language."
+    },
+    {
+      "key": "web/assets/js/core/notify-guides.js:85:key:placeholder",
+      "reason": "\"en_US\" is a BCP-47-style WhatsApp template language code example (API identifier syntax), not translatable prose."
     }
   ]
 }

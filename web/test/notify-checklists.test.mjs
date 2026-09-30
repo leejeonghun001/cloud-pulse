@@ -3,6 +3,9 @@
 // checklist data + localStorage progress helpers).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { setCatalogs, setLang } from "../assets/js/core/i18n.js";
 import {
   CHECKLISTS,
   checklistByValue,
@@ -12,6 +15,22 @@ import {
   saveChecklistProgress,
   checklistCompletionCount,
 } from "../assets/js/core/notify-checklists.js";
+
+globalThis.localStorage = (() => {
+  const store = new Map();
+  return {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  };
+})();
+
+const assetsDir = fileURLToPath(new URL("../assets/i18n/", import.meta.url));
+setCatalogs({
+  en: JSON.parse(readFileSync(`${assetsDir}en.json`, "utf-8")),
+  ko: JSON.parse(readFileSync(`${assetsDir}ko.json`, "utf-8")),
+});
+setLang("en");
 
 // fakeStorage is a minimal Storage-shaped stand-in (get/setItem only)
 // so this suite never needs a real browser/jsdom environment.
@@ -157,4 +176,17 @@ test("draft (unsaved) channel and a saved channel of the same type track progres
 
   const savedProgress = loadChecklistProgress(storage, "discord", 42);
   assert.deepEqual(savedProgress, defaultChecklistProgress("discord"));
+});
+
+test("CHECKLISTS item text renders Korean when lang is ko", () => {
+  setLang("ko");
+  try {
+    const discord = checklistByValue("discord");
+    assert.equal(
+      discord.items.find((i) => i.id === "webhook_permission").text,
+      "웹훅이 생성된 채널에 대해 웹훅 관리 권한이 있는지 확인하세요."
+    );
+  } finally {
+    setLang("en");
+  }
 });

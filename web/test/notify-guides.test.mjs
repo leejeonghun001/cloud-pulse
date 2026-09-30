@@ -2,12 +2,35 @@
 // (per-platform notify-channel setup guides and draft-config validation).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { setCatalogs, setLang } from "../assets/js/core/i18n.js";
 import {
   CHANNEL_TYPES,
   channelTypeByValue,
   validateChannelConfig,
   defaultChannelName,
 } from "../assets/js/core/notify-guides.js";
+
+// A persistent fake localStorage (installed once, for the whole file
+// rather than per-test) so setLang("en") below stays in effect for
+// every test — CHANNEL_TYPES' fields/steps are getters that re-resolve
+// t() against whatever language is active at read time.
+globalThis.localStorage = (() => {
+  const store = new Map();
+  return {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  };
+})();
+
+const assetsDir = fileURLToPath(new URL("../assets/i18n/", import.meta.url));
+setCatalogs({
+  en: JSON.parse(readFileSync(`${assetsDir}en.json`, "utf-8")),
+  ko: JSON.parse(readFileSync(`${assetsDir}ko.json`, "utf-8")),
+});
+setLang("en");
 
 test("CHANNEL_TYPES covers every models.NotifyChannelType value", () => {
   assert.deepEqual(CHANNEL_TYPES.map((t) => t.value), ["discord", "telegram", "whatsapp", "webhook"]);
@@ -98,4 +121,16 @@ test("defaultChannelName", () => {
   assert.equal(defaultChannelName("discord"), "Discord");
   assert.equal(defaultChannelName("webhook"), "Webhook (generic)");
   assert.equal(defaultChannelName("bogus"), "bogus");
+});
+
+test("CHANNEL_TYPES fields/steps render Korean text when lang is ko", () => {
+  setLang("ko");
+  try {
+    const discord = channelTypeByValue("discord");
+    assert.equal(discord.fields[0].label, "웹훅 URL");
+    assert.equal(discord.steps[0], "Discord 서버에서 서버 설정 → 연동 → 웹훅으로 이동하세요.");
+    assert.equal(defaultChannelName("webhook"), "Webhook (범용)");
+  } finally {
+    setLang("en");
+  }
 });
