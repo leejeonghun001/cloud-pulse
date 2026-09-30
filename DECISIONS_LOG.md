@@ -1040,3 +1040,274 @@ never rewrite history here, only add to it.
   collected" (nil, omitted from JSON) stays distinguishable from "zero
   right now" (a real `0`) — a distinction the dashboard's host list
   needs to decide whether to show a "no inventory yet" hint or a literal
+
+### D-073 — Cloud billing: CLI polling, not an SDK, with a quiet-skip status model instead of hub errors (2026-09-30)
+
+- **Context**: SPEC-v0.6 §1 asks for periodic AWS/OCI cost visibility.
+  The project's own D-005/no-AWS-SDK precedent (hand-written SigV4 for
+  CloudWatch) argues against adding the AWS SDK just for Cost Explorer;
+  most operators who want billing already have `aws`/`oci` installed
+  and authenticated for other reasons. Billing is also inherently
+  best-effort: a missing CLI, an unauthenticated principal, or a
+  transient API timeout is common and must never be a hub-visible
+  error, since it isn't a fault in the hub itself.
+- **Decision**: the hub shells out to the `aws`/`oci` CLI binaries
+  already on its `PATH` (`internal/billing.CommandRunner`, wrapping
+  `exec.CommandContext` with a fixed argv, 60s timeout, 4 MiB output
+  cap — see CODING_CONVENTIONS.md's "Exec rules" section) instead of
+  linking a cloud SDK. Every outcome other than a successful JSON parse
+  is classified into one of six fixed statuses
+  (`not_installed`/`not_configured`/`auth_failed`/`permission_denied`/
+  `error`/`ok`, `models.CloudBillingStatus`) via stderr-substring
+  matching (`internal/billing/classify.go`) and treated as a "quiet
+  skip" — logged at most once a day per provider, never surfaced as an
+  API error. `CP_BILLING=auto` (default) queries whichever of `aws`/
+  `oci` is actually usable, silently omitting the other; `CP_BILLING=off`
+  starts no polling goroutine at all.
+- **Consequences**: a hub with neither CLI installed shows both
+  providers as "not connected" on the Costs page and otherwise behaves
+  identically to a v0.5.0 hub — billing is fully opt-in by CLI
+  availability, not by a separate feature flag. The cost is that
+  classification is necessarily heuristic (stderr substring matching
+  against each CLI's current error message wording, cited from live
+  documentation research in `notes/v06-billing.md`) rather than a typed
+  SDK exception — a future CLI wording change could misclassify a
+  status, though the failure mode is always "shows not_connected/wrong
+  reason," never a crash or a hang, since an unrecognized failure falls
+  through to the generic `error` status rather than panicking.
+
+### D-074 — Cloud CLI child processes get a sandboxed `HOME`/`PATH`, never the hub process's real environment (2026-09-30)
+
+- **Context**: `aws`/`oci` CLI tools resolve their own config/credential
+  files relative to `HOME` by default (`~/.aws/credentials`,
+  `~/.config/oci/config`). Running them with the hub process's actual
+  `HOME` would make billing collection depend on whatever happens to be
+  in the operator's own shell config on the hub host — an accidental
+  coupling, and untestable in this project's own sandboxed CI/dev
+  environment (this session's own hard safety rule: never touch a real
+  `~/.aws`/`~/.oci`).
+- **Decision**: every `aws`/`oci` invocation runs with `HOME` redirected
+  to `<CP_DATA_DIR>/cloud-cli` (created `0700` on first use — a
+  subdirectory of the same data directory `cloud-pulse.db` already
+  lives under, per `Hub.DBPath()`'s existing convention) and a fixed
+  minimal `PATH` (`/usr/bin:/bin:/usr/local/bin`, overridable only via
+  the test-only `CP_BILLING_PATH`). Every other environment variable the
+  child sees is passed through only if the hub itself was explicitly
+  configured with it (`AWS_ACCESS_KEY_ID`, `AWS_PROFILE`,
+  `OCI_CLI_CONFIG_FILE`, etc. — the full allowlist is in
+  README.md#billing) — never a blanket `os.Environ()` forward.
+- **Consequences**: an operator who already runs `aws`/`oci`
+  interactively as the hub's own OS user must explicitly point
+  `AWS_SHARED_CREDENTIALS_FILE`/`OCI_CLI_CONFIG_FILE` at their real
+  config file's path rather than relying on the sandboxed `HOME` picking
+  it up automatically — a one-time, documented adjustment, not a silent
+  behavior difference. This also makes the collector fully testable
+  against fake CLI stub binaries on an isolated `PATH`
+  (`internal/billing/collector_test.go`, and `scripts/smoke.sh`'s
+  `CP_BILLING_PATH`-pointed fake stubs) without ever touching a real
+  cloud credential.
+
+### D-075 — Network-cost pricing plans: builtin plans are immutable reference pricing, pooled free tiers allocate proportionally, byte accounting uses decimal GB (2026-09-30)
+
+- **Context**: SPEC-v0.6 §3 asks for an *estimate* of network-egress
+  cost independent of real cloud billing, seeded with AWS/OCI's actual
+  published free-tier and tiered-rate structure. Real AWS/OCI free
+  tiers are account/tenancy-wide, not per-instance, so a naive
+  per-host-independent calculation would understate a multi-host
+  fleet's real bill once any single host's usage alone would exceed the
+  free tier.
+- **Decision**: four builtin plans are seeded read-only
+  (`PUT`/`DELETE` → `403 builtin_immutable`) with rates cited from the
+  providers' own public pricing pages (see README.md's "Builtin plans"
+  table and `notes/v06-network-cost.md`'s citations) and a
+  `PoolFreeTier bool` field: when true, hosts sharing a plan have their
+  usage summed, the plan's free allowance subtracted once from that
+  sum, and the resulting bill allocated back to each host proportional
+  to its share of the group's usage (`internal/billing/network.go`'s
+  `EstimateNetworkCost`) — rather than each host getting its own
+  independent free allowance. Byte-to-GB conversion uses the
+  billing-industry **decimal** GB (10⁹ bytes,
+  `internal/billing.BytesPerGB`), deliberately distinct from
+  `CP_EGRESS_LIMIT_GB`/the Settings UI's egress-alert fields, which use
+  binary GiB (2³⁰ bytes) — two different units for two different
+  purposes (an alert threshold vs. a dollar estimate), each matching its
+  own domain's convention rather than forcing one unit choice across
+  both features.
+- **Consequences**: a user wanting different rates must clone a builtin
+  plan into a custom one rather than editing it in place — builtin
+  plans stay a stable, auditable reference point matching their cited
+  source even if a provider's real pricing later drifts, at which point
+  the plan's own "reference pricing, not a live quote" disclaimer (shown
+  in the UI) is the correct signal, not a silent recalculation. OCI's
+  two region-based plans required this stage to resolve an ambiguity the
+  prep stage flagged (which OCI region bucket a given host defaults to)
+  via a region-prefix heuristic (`ap-`/`sa-`/`me-`/`il-`/`af-` → APAC/
+  Japan/South America, else NA/EU) rather than leaving every OCI host on
+  one arbitrary default.
+
+### D-076 — Display currency: USD fixed for all storage/calculation, KRW shown only via a manually-entered exchange rate, never a live FX API call (2026-09-30)
+
+- **Context**: SPEC-v0.6 §6.3 (user-confirmed): cloud-pulse's own
+  network-cost estimate should optionally render in KRW for a Korean
+  operator, but the project already has zero third-party API
+  dependencies beyond AWS/Cloudflare/notification platforms it's
+  explicitly built to talk to — adding a live FX-rate API would be a new
+  outbound dependency solely for a display convenience, and one whose
+  failure mode (a stale or unavailable rate feed) would then need its
+  own quiet-skip handling.
+- **Decision**: every dollar amount is stored and calculated in USD,
+  full stop. A separate, purely cosmetic setting
+  (`billing_display_currency`, `billing_krw_per_usd`,
+  `billing_rate_updated_at`) lets the dashboard render the same USD
+  figure converted at a **manually entered** rate
+  (`internal/billing/currency.go`'s `ConvertForDisplay`, a pure
+  function with deterministic rounding — whole won, USD cents).
+  Selecting `KRW` before ever setting a rate is rejected outright
+  (`400 rate_required`) rather than silently defaulting to some
+  placeholder rate, and every KRW display always shows the original USD
+  figure and the rate/date alongside the converted number.
+- **Consequences**: the displayed KRW figure is only ever as fresh as
+  the last time an operator manually updated the rate — this is a
+  documented, deliberate trade-off (see README.md's "Display currency"
+  section), not an oversight; an operator who wants live-rate accuracy
+  must update the setting themselves. A cloud CLI's own reported
+  currency (normally USD for both AWS Cost Explorer and OCI's Usage
+  API) is never touched by this setting — it is a completely separate
+  concern from cloud-pulse's own network-cost estimate display.
+
+### D-077 — Remote agent updates: hub sends a target tag only, never a binary/URL/checksum; opt-in is agent-side and off by default (2026-09-30)
+
+- **Context**: SPEC-v0.6 §2/§6.2 (user-confirmed) asks for hub-triggered
+  batch agent updates, but the project's entire trust model up to this
+  point has the hub never able to push arbitrary code to an agent (an
+  agent only ever pulls its own update from its own already-trusted
+  release feed, per the pre-existing `cloud-pulse-agent update`
+  subcommand). A naive "hub tells agent what to download" design would
+  make a compromised hub a full remote-code-execution vector across the
+  entire fleet — the opposite of the existing push-metrics-only trust
+  boundary this project has maintained since D-003.
+- **Decision**: the hub's request carries exactly a `job_id` and a
+  target (`"latest"` or an exact `vX.Y.Z` tag) — nothing else
+  (`models.UpdateRequest`). The agent's own already-trusted
+  `agent.env` (root-owned, unreadable/unwritable by the unprivileged
+  agent process) continues to determine where the actual binary and
+  checksums come from, via the exact same `selfupdate.Run` pipeline the
+  manual `update` subcommand already used before this feature existed
+  (`internal/selfupdate/fromrequest.go`'s `RunFromRequest` delegates to
+  it, building `Source` from `agent.env`, never from the request file).
+  A downgrade (target not newer than the agent's current version) is
+  refused; opt-in is `CP_REMOTE_UPDATE=off|on` (default `off`), settable
+  only from the agent's own side (`--remote-update` at install time, or
+  a manual `agent.env` edit) — the hub has no API or code path that can
+  ever flip this on remotely.
+- **Consequences**: a compromised hub can, at most, move an opted-in
+  agent between two official versions of the release feed that agent
+  was already configured to trust — it cannot supply its own binary,
+  redirect the agent to an attacker-controlled URL, or update an agent
+  that never opted in. The feature is deliberately unavailable for
+  non-Linux/non-systemd hosts and pre-v0.6.0 agents (`unsupported`) — no
+  attempt was made to build a cross-platform remote-update mechanism for
+  this release, matching the narrower "Linux + systemd only" scope
+  SPEC-v0.6 §2 explicitly asked for rather than a more general one.
+
+### D-078 — Remote-update result files: root-owned directory + `O_NOFOLLOW`, not a signature, is the integrity mechanism (2026-09-30)
+
+- **Context**: once an update is triggered, the restarted agent process
+  needs to report whether it succeeded — but that report is read from a
+  file on disk, and the agent process that reports it is the same
+  unprivileged process the update was meant to protect against tampering
+  by. Without a defense, that process (or anything else running as its
+  user) could simply write a fake "succeeded" result regardless of what
+  actually happened.
+- **Decision**: the privileged updater (a root oneshot systemd service,
+  triggered by a path unit watching for the unprivileged agent's request
+  file) writes its result to `/var/lib/cloud-pulse-agent-update/
+  result.json` in a directory the unprivileged `cloud-pulse` agent user
+  has no write access to — the privilege separation itself, not a
+  cryptographic signature, is what prevents forgery. Both the request
+  file (written by the unprivileged agent) and the result file (written
+  by the privileged updater, read back by the unprivileged agent) are
+  read with `O_NOFOLLOW` (refusing a symlink at the final path segment)
+  and a strict size cap + schema validation before any field is trusted
+  — see CODING_CONVENTIONS.md's "Privileged-helper file handling"
+  section for the full checklist any future privileged-helper exchange
+  must follow.
+- **Consequences**: no new cryptographic machinery (key management,
+  signing, verification) was needed — the existing systemd/Unix
+  permission model does the whole job, consistent with the project's
+  broader preference for standard-library/OS primitives over added
+  dependencies. The trade-off is that this specific guarantee is
+  Linux+systemd-specific (matching D-077's own scope) and was verified
+  in this session only under an unprivileged `systemctl --user` sandbox
+  (mechanism confirmed: path triggers service, service runs update,
+  result is written and read back) — the real root/unprivileged
+  privilege boundary itself requires a real root install to fully
+  verify, documented as an explicit residual gap in
+  `notes/v06-remote-update.md` rather than claimed as verified when it
+  wasn't.
+
+### D-079 — Notification Send-test failures return a structured `Diagnosis`, classified by a pure function with zero network calls of its own (2026-09-30)
+
+- **Context**: pre-v0.6.0, a failed **Send test** returned only a bare
+  error string, leaving an operator to guess whether a failure meant a
+  wrong bot token, a deleted webhook, or a network problem entirely
+  unrelated to their channel config. SPEC-v0.6 §4 asks for a fixed,
+  documented taxonomy of causes with actionable guidance per platform.
+- **Decision**: `internal/notify.DiagnoseError` (a pure function — no
+  network calls, no side effects) classifies a sender's already-failed
+  attempt (an HTTP status + response body, or a network-level error)
+  into one of a fixed set of `models.DiagnosisCode` values (21 codes:
+  generic network/TLS/timeout/rate-limit codes plus Discord/Telegram/
+  WhatsApp-specific ones, each backed by a cited real error shape from
+  that platform's own documentation — see `notes/v06-notify-diag.md`).
+  Every sender's non-2xx branch now constructs a `*statusError`
+  carrying the platform/stage/status/body instead of a bare
+  `fmt.Errorf`, so the classifier has everything it needs without
+  re-parsing a formatted string. `models.TestResult{ok, delivery,
+  diagnosis}` replaces the old ad-hoc
+  `map[string]any{"ok","error"}` response shape.
+- **Consequences**: every `Diagnosis`'s `Title`/`Detail`/`Hint` is
+  guaranteed free of secret values (tested explicitly per platform,
+  confirming the fake token/URL used in each test never leaks into the
+  classified output) — see D-070's redaction precedent, extended here
+  from "redact before serializing a channel" to "never let a diagnosis
+  string echo a secret in the first place." A failed *scheduled* alert
+  delivery (not just a manual Send test) carries the same code on its
+  `AlertEvent.deliveries[]` entry, reusing the identical classifier
+  rather than a second, delivery-path-specific one.
+
+### D-080 — `scripts/verify-notify.py`: credentials only via env vars or a `0600` file, argv is an explicit secret-shape rejection surface (2026-09-30)
+
+- **Context**: SPEC-v0.6 §6.4 (user-confirmed improvement b) specifically
+  calls out that a verification script's credentials must never be
+  accepted as a command-line argument, since argv is visible to every
+  other process on the same host (`/proc/<pid>/cmdline`, `ps`) and is
+  routinely captured in shell history — a materially worse exposure than
+  an environment variable (visible only to the same process and its
+  children) or a file (subject to filesystem permissions the script
+  itself can and does check).
+- **Decision**: `scripts/verify-notify.py`'s `argparse` setup accepts
+  only `--platform`, `--credentials-file`, `--timeout`, `--dry-run`,
+  and `-h`/`--help` — any other flag, or a value passed to any flag
+  that merely *looks* like a secret (a Telegram bot-token shape, an
+  `https://` URL, a long opaque token), is rejected with a usage hint
+  rather than being processed, on the theory that an operator who tries
+  to pass a token as an argument should be redirected to the safe path,
+  not silently allowed to shoot themselves in the foot once. Real
+  credentials come from a fixed set of `CP_VERIFY_*` environment
+  variables, or from `--credentials-file PATH` (a `KEY=VALUE` file, read
+  only if it is owned by the invoking user and has no group/other
+  permission bits — i.e. mode `0600` or stricter — rejected outright
+  otherwise); a file takes priority over environment variables when
+  both are present, and every value the script ever prints (to stdout or
+  into an exception message) is masked first.
+- **Consequences**: the script is unusable in a way that leaks a secret
+  even by operator error via the most common mistake (pasting a token
+  straight onto the command line) — the failure mode there is a
+  rejected argument with guidance, not a working-but-insecure
+  invocation. This mirrors the same "secrets never via argv" principle
+  CODING_CONVENTIONS.md now states generally (see that document's
+  Security section) applied to a user-facing script rather than only to
+  the hub's own internal `exec.Command` calls.
+right now" (a real `0`) — a distinction the dashboard's host list
+  needs to decide whether to show a "no inventory yet" hint or a literal

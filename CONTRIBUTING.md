@@ -19,9 +19,11 @@ Use Conventional Commits, for example `feat(alerting): add pager sender` or `fix
 
 ## Extending cloud-pulse
 
-- **Notifier:** add a sender in `internal/notify`, validate its config and SSRF posture, redact any secret fields in `models.NotifyChannel.SecretFields`, test against `httptest`, and wire it through the command-layer factory without exposing credentials in logs.
+- **Notifier:** add a sender in `internal/notify`, validate its config and SSRF posture, redact any secret fields in `models.NotifyChannel.SecretFields`, classify its failure modes through `notify.DiagnoseError` (add new `models.DiagnosisCode` values only for genuinely new failure shapes, citing the platform's real documented error format), test against `httptest`, and wire it through the command-layer factory without exposing credentials in logs or argv.
 - **Metric:** add the model and collection path, preserve old agent/hub JSON compatibility, persist/query it if charted, add deterministic collection and storage tests, then add its alert semantics and documentation.
 - **Page:** place pure helpers under `web/assets/js/core` or `ui` with Node tests; use existing components and CSP-safe DOM construction; rebuild CSS with `make css` whenever Tailwind classes change.
+- **Pricing plan / cloud billing provider:** builtin plans and provider CLIs are the exception to "small changes only" — see `CODING_CONVENTIONS.md`'s Exec rules and Audit logging sections before adding a new CLI-backed provider or a new builtin plan; any new admin-facing settings change (a rate, an interval, a plan edit) must call `(*Server).recordAudit` alongside its own `slog.Info` line.
+- **Privileged agent-side helper** (anything analogous to remote update's request/result file exchange): follow `CODING_CONVENTIONS.md`'s "Privileged-helper file handling" checklist exactly — `O_NOFOLLOW`, a size cap, full schema validation before trusting a field, and a root-owned (or otherwise more-privileged) directory for anything the unprivileged side must not be able to forge.
 
 ## Pull requests
 

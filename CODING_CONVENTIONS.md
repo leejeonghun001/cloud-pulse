@@ -311,6 +311,140 @@ require touching more than the files listed for that concept.
   D-064; a new network-affecting endpoint must follow the same
   lock-out/bind-failure/pending/auto-revert shape, not a simplified
   version of it.
+- **Secrets are never passed via a child process's or the hub's own
+  argv.** A bot token, webhook URL, access token, or any other
+  credential must reach the code that needs it via an environment
+  variable, a file the caller already controls the permissions of, or
+  an HTTP request body/header — never as a command-line argument to
+  `exec.Command`/`os.Args`, since argv is visible to every other process
+  on the same host via `/proc/<pid>/cmdline` or `ps`. This applies to
+  both directions: the hub building an `aws`/`oci` invocation (see
+  "Exec rules" below, which passes credentials via `env`, never `args`)
+  and `scripts/verify-notify.py`'s CLI, whose argument parser actively
+  **rejects** any flag value that merely looks like a secret (a
+  bot-token shape, a webhook URL, a long opaque token) rather than
+  accepting and using it.
+
+## Exec rules: privileged child processes
+
+Any code that shells out to an external binary (`aws`, `oci`, or a
+future addition) must follow all of these, together — see
+`internal/billing/runner.go`'s `ExecRunner` for the reference
+implementation:
+
+- **Fixed argument array, never a shell string.** Build `exec.Command`/
+  `exec.CommandContext`'s `args []string` as a literal, fully-formed
+  slice — never `sh -c "... " + userInput` or any other string
+  concatenated into a shell invocation. This is what makes command
+  injection structurally impossible regardless of what a config value
+  contains.
+- **A bounded timeout on every call**, via `context.WithTimeout`
+  wrapping the `exec.CommandContext` call — 60 seconds for the billing
+  CLIs, documented per-caller if a different bound is ever needed. A
+  hung child process (a stuck network call inside `aws`/`oci` itself)
+  must never hang the calling goroutine indefinitely.
+- **Output reads are capped**, via `io.LimitReader` (4 MiB for the
+  billing CLIs) on both stdout and stderr — an unexpectedly large or
+  runaway output must not be buffered without bound.
+- **A minimal, explicit environment — never `os.Environ()`
+  passthrough.** Build the child's `Env []string` from a fixed, named
+  allowlist of variables the caller explicitly read from its own config
+  (see [Billing](README.md#billing)'s "Where the hub looks for CLI
+  config" for the exact list), plus a fixed `PATH` and a sandboxed
+  `HOME` redirected under the hub's own data directory. The child must
+  never inherit the hub process's full environment, which could contain
+  unrelated secrets (session-signing material, other integrations'
+  tokens) the child has no legitimate need to see.
+- **A missing binary, bad credentials, or a timeout is a classified
+  status, never a panic or an unhandled error surfaced to the caller as
+  a 500.** See `internal/billing/classify.go`: `exec.ErrNotFound` →
+  `not_installed`, a fixed set of stderr substrings → `auth_failed`/
+  `permission_denied`, `context.DeadlineExceeded` → `error`, anything
+  else → `error`. This is what SPEC-v0.6 §1 calls the "quiet-skip"
+  status model.
+- **Raw stderr/stdout is never logged.** Only the classified status
+  string (`not_installed`, `auth_failed`, etc.) and a short, fixed,
+  secret-free `StatusDetail` reach `slog` — the child's actual output
+  could contain a credential echoed back by a misconfigured CLI or
+  proxy, so it is inspected in-process for classification purposes only
+  and then discarded.
+
+## Audit logging
+
+Any admin action that changes persisted, non-secret configuration
+(pricing plans, host→plan assignments, the display-currency rate, the
+billing polling interval, a remote-update batch) must be recorded to the
+`audit_log` table via the shared `(*Server).recordAudit` helper
+(`internal/hub/audit.go`), in addition to (not instead of) the action's
+own `slog.Info` line:
+
+- **Record the actor, remote address, action, entity, and full
+  before/after values.** `recordAudit` resolves the actor
+  (`"admin"`/`"api_token"`) from the existing session/API-token auth
+  context via `auditActorFor`, and the remote address from the same
+  `clientIP` helper the rate limiter uses (`RemoteAddr` host only, never
+  a client-supplied header) — reuse these, don't re-derive either.
+- **A no-op save is not logged.** If the marshaled before/after JSON is
+  byte-identical, `recordAudit` skips the write entirely — a `PUT` that
+  resends the same value the setting already had must not create a new
+  audit row.
+- **Never write a secret value into `before`/`after`.** Audit entries in
+  this codebase are restricted to fields that are never credentials by
+  construction (prices, plan assignments, an exchange rate, an interval)
+  — if a future audited action's before/after *could* include a secret
+  field, redact it the same way `NotifyChannel.Redacted()` does before
+  it ever reaches `recordAudit`, don't add a parallel un-redacted path.
+- **Define your own `models.AuditAction` constants in your own route
+  file** (e.g. `AuditActionUpdateBatchCreate` in `updateroutes.go`,
+  `AuditActionPlanCreate` in `pricingroutes.go`) — `AuditAction` is an
+  intentionally open string type (`"<entity>.<verb>"`), not a shared
+  enum requiring a central registry edit for every new action.
+- **Retention**: audit entries older than `models.AuditRetentionDays`
+  (400 days) are pruned on the same hourly retention sweep as alert
+  events and rollups (`internal/hub/scheduler.go`'s `runPruneLoop`) —
+  add a new audited action's cleanup to that existing sweep, don't start
+  a second retention loop.
+
+## Privileged-helper file handling
+
+Any file exchanged between an unprivileged process and a privileged
+helper it triggers (the remote-update agent's request/result files
+being the current example) must defend against the unprivileged side
+tampering with either file:
+
+- **Read with `O_NOFOLLOW`** (`internal/agent/nofollow_unix.go`'s
+  `unixNoFollowFlag()`, `0` on platforms with no such flag) so a
+  symlink planted at the expected path is refused rather than
+  transparently followed to an attacker-chosen target. This applies to
+  *reading* a request file the privileged helper is about to act on,
+  and to reading back a result file whose contents will be trusted.
+- **Enforce a strict size cap before parsing** (4 KiB for an
+  update-request file, 16 KiB for a result file) — read at most cap+1
+  bytes and reject anything at or beyond the cap, never buffer an
+  unbounded read into memory just to find out it's oversized.
+- **Validate the full schema before acting on any field** — a
+  request/result file's `job_id`, target/state strings, and any other
+  field are checked against an explicit allowlist of valid values
+  (e.g. a result file's `state` must be exactly `succeeded` or
+  `failed`; an agent must never be allowed to self-report `queued`/
+  `in_progress`) before any of it is trusted, not parsed permissively
+  and patched up later.
+- **The result file lives in a root-owned directory the unprivileged
+  process cannot write to.** This is the actual privilege boundary: an
+  unprivileged agent process can request an update (by writing to a
+  directory it owns) but cannot forge the *outcome* of one, because it
+  has no write access to the directory the privileged updater writes
+  its result into. Don't collapse this into a single shared directory
+  for convenience — the whole point is that request and result live in
+  directories with different ownership.
+- **A successfully consumed result file is deleted**; a
+  malformed/oversized/symlinked one is left in place and logged, never
+  silently removed — this keeps a rejected file diagnosable by whoever
+  investigates it, rather than disappearing along with the evidence of
+  what was wrong with it.
+- **Write atomically**: temp file in the same directory, then rename
+  over the final path — never a window where a partially written
+  request/result file could be read half-formed by the other side.
 
 ## Database migrations
 

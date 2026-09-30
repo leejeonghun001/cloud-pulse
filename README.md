@@ -375,6 +375,11 @@ track R2 egress bytes.
 | `CP_S3_FILTER_ID` | `EntireBucket` | S3 request-metrics filter ID |
 | `CP_R2_ACCOUNT_ID` / `CP_R2_API_TOKEN` | *(unset)* | Cloudflare R2 credentials |
 | `CP_R2_BUCKETS` | *(unset, = all)* | Comma-separated R2 bucket names |
+| `CP_BILLING` | `auto` | `auto\|off` — periodic AWS/OCI CLI cost polling (SPEC-v0.6 §1); `auto` queries whichever provider CLI is installed and authenticated, quietly skipping the rest |
+| `CP_BILLING_INTERVAL` | `24h` | `6h\|12h\|24h` — initial polling interval; a hub-side Settings → Billing override, once saved, takes precedence at runtime without a restart |
+| `CP_BILLING_AWS_RESOURCES` | `false` | `true` enables per-resource AWS Cost Explorer queries (extra paid API calls); `false` reports only account-level totals |
+| `CP_OCI_CONFIG_FILE` / `CP_OCI_PROFILE` / `CP_OCI_TENANCY_ID` | *(unset)* | Override the OCI CLI's config file path/profile/tenancy OCID for Usage API queries |
+| `CP_BILLING_PATH` | *(unset)* | Overrides the minimal PATH passed to `aws`/`oci` child processes (default `/usr/bin:/bin:/usr/local/bin`). **Only intended for tests/smoke harnesses** that need to point the collector at fake CLI stub binaries — a real deployment should never need this, since the CLI installed at the system-standard locations is what the default already covers |
 
 S3 collection is enabled only when `CP_S3_BUCKETS` is non-empty **and**
 both AWS key env vars are set. R2 collection is enabled only when both
@@ -463,6 +468,8 @@ recovers from.
 | `CP_DOCKER` | `auto` | `auto` (probe `/var/run/docker.sock` or `DOCKER_HOST`'s `unix://` path) \| `off` (disable Docker collection entirely) \| an explicit socket path/URL (e.g. a rootless Podman socket) — see [Inventory](#inventory-docker-services--listening-ports) |
 | `CP_LOG_LEVEL` | `info` | `debug\|info\|warn\|error` |
 | `CP_LOG_FORMAT` | `text` | `text\|json` |
+| `CP_REMOTE_UPDATE` | `off` | `off\|on` — opts this agent in to hub-triggered remote updates (SPEC-v0.6 §2); requires Linux + systemd + `--remote-update` at install time. The hub can never turn this on remotely — it's opt-in only from the agent side |
+| `CP_CLOUD_METADATA` | `auto` | `auto\|off` — detects `HostInfo.CloudInstanceID` via DMI/AWS IMDSv2/OCI instance metadata (SPEC-v0.6 §1), used to match this host to hub-collected cloud billing data; `off` disables detection entirely (always reports empty) |
 
 ### Agent CLI flags (`cloud-pulse-agent`)
 
@@ -700,6 +707,45 @@ open-read-API behavior, keeps working exactly as before as an optional
 API bearer token — it's no longer read by the dashboard's login flow,
 but scripts using it as a bearer token need no changes.
 
+### Upgrading an existing install to v0.6.0
+
+A plain `sudo cloud-pulse-hub update` (no reinstall needed, since your
+install is already on v0.3.1+) replaces the binary and applies the
+migration 0005 (billing/pricing/update-jobs/audit tables) automatically
+on next hub startup — existing hosts, alert rules, and notify channels
+are preserved untouched. On the agent side, `sudo cloud-pulse-agent
+update` is likewise enough to reach v0.6.0, but **remote agent updates
+stay off by default** even after upgrading (`CP_REMOTE_UPDATE=off`) —
+the hub can never turn this on for you. To opt an agent into
+hub-triggered remote updates:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scripts/install-agent.sh \
+  | sudo bash -s -- --reinstall --remote-update
+```
+
+or, at a terminal, choose **2) Reinstall** and answer "y" to "Allow the
+hub to trigger updates of this agent?". Either path also installs the
+`cloud-pulse-agent-update.path`/`.service` systemd units (enabled but
+never started directly — they only ever trigger on an incoming update
+request) alongside the existing main unit; `sudo cloud-pulse-agent
+update`'s own `systemd-unit apply` step keeps these two units in sync on
+every future upgrade once they exist, the same way it already
+maintains the main unit's template (see
+[Remote agent updates](#remote-agent-updates)). No new hub-side
+configuration is required to *receive* remote-update requests — the
+Updates page (`#/updates`) and its underlying API routes work as soon
+as the hub itself is on v0.6.0; whether any given agent is eligible
+depends entirely on that agent's own opt-in and version.
+
+Cloud billing (`CP_BILLING=auto` by default) and network-cost pricing
+plans need no configuration to appear — the Costs page and Settings →
+Billing simply show every provider as "not connected" until you
+authenticate the `aws`/`oci` CLI on the hub host (see
+[Billing](#billing)) or assign a pricing plan to a host (see
+[Network cost estimate](#network-cost-estimate)); nothing about the
+upgrade itself changes existing egress-alert or dashboard behavior.
+
 ### Upgrading from v0.1.x / v0.2.x / v0.3.0 (no unit-syncing `update` yet)
 
 Versions before v0.3.0 don't have the `update` subcommand at all — an old
@@ -778,6 +824,403 @@ hand. Same recommended order as above: hub first, then agents.
   already have (see [D-026](DECISIONS_LOG.md)); `update` doesn't
   introduce a weaker one, but it doesn't add package-signing-level
   assurance either.
+
+## Billing
+
+Since v0.6.0 the hub can periodically poll **AWS Cost Explorer** and/or
+**OCI's Usage API** for account/tenancy-level cloud cost, and match each
+host to its own cloud resource for a per-host cost view. This is
+**cloud CLI polling**, not a metrics agent: the hub shells out to the
+`aws`/`oci` CLI binaries you already have installed and authenticated on
+the hub host — no AWS/OCI SDK dependency, no credentials sent anywhere
+but to AWS/OCI's own APIs via their own CLI.
+
+### Requirements
+
+- **AWS**: the `aws` CLI on the hub's `PATH`, authenticated (env vars,
+  `~/.aws/credentials`, or an instance role — anything `aws` itself
+  already supports) as a principal with:
+
+  ```json
+  {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "ce:GetCostAndUsage",
+          "ce:GetCostForecast"
+        ],
+        "Resource": "*"
+      }
+    ]
+  }
+  ```
+
+  Add `ce:GetCostAndUsageWithResources` to `Action` only if you enable
+  `CP_BILLING_AWS_RESOURCES=true` (see below) — it requires Cost
+  Explorer's resource-level data opt-in and costs more per call, so it's
+  a separate, optional permission rather than bundled by default.
+- **OCI**: the `oci` CLI on the hub's `PATH`, authenticated (a config
+  file, instance principal, or any other mechanism `oci` itself
+  supports) as a principal with a usage-report read policy, e.g.:
+
+  ```
+  Allow group <YourGroup> to read usage-reports in tenancy
+  ```
+
+  (OCI's Usage API is free to call — no per-request billing, unlike AWS
+  Cost Explorer below.)
+- Both CLIs are invoked with a **fixed argument array** (never a shell
+  string) and a 60-second timeout per call; see
+  [Exec rules](CODING_CONVENTIONS.md#exec-rules-privileged-child-processes)
+  in `CODING_CONVENTIONS.md`.
+
+### Where the hub looks for CLI config
+
+The hub does **not** read your shell's `~/.aws`/`~/.oci` config by
+default — it runs `aws`/`oci` with a minimal, explicit environment:
+
+- `HOME` is set to `<CP_DATA_DIR>/cloud-cli` (created `0700` on first
+  use), so both CLIs' own default config-file resolution
+  (`~/.aws/credentials`, `~/.config/oci/config`) looks there, not at the
+  hub process's real `$HOME`.
+- `PATH` is a minimal fixed list (`/usr/bin:/bin:/usr/local/bin`, or
+  `CP_BILLING_PATH` for a test/smoke harness — see the env table below;
+  never intended for real deployments).
+- Everything else is passed through **only if explicitly set** on the
+  hub itself: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+  `AWS_SESSION_TOKEN`, `AWS_REGION`, `AWS_PROFILE`, `AWS_CONFIG_FILE`,
+  `AWS_SHARED_CREDENTIALS_FILE`, `OCI_CLI_CONFIG_FILE` (from
+  `CP_OCI_CONFIG_FILE`), `OCI_CLI_PROFILE` (from `CP_OCI_PROFILE`).
+  `CP_OCI_TENANCY_ID` overrides the tenancy OCID the CLI's own config
+  file would otherwise supply.
+
+If you already run `aws`/`oci` interactively as the same OS user the hub
+runs as (e.g. via a real `~/.aws/credentials`), point
+`AWS_SHARED_CREDENTIALS_FILE`/`OCI_CLI_CONFIG_FILE` at that file's real
+path rather than relying on the sandboxed `HOME` — the hub never writes
+or modifies CLI config itself, only reads whatever you point it at.
+
+### Polling interval and its own API cost
+
+AWS Cost Explorer bills **$0.01 per API call, per page** — this project
+makes 2 calls per poll (MTD `get-cost-and-usage` + `get-cost-forecast`,
+skipped on the last calendar day of the month since a forecast window
+of zero/negative length would just error), so the interval you choose
+directly sets a small recurring AWS bill:
+
+| Interval | Approx. AWS API cost/month |
+|---|---|
+| 24h (default) | ≈ $0.60 |
+| 12h | ≈ $1.20 |
+| 6h | ≈ $2.40 |
+
+Enabling `CP_BILLING_AWS_RESOURCES=true` adds one more call per poll
+(`get-cost-and-usage-with-resources`), scaling the same table up
+proportionally. **OCI's Usage API is free** regardless of interval.
+
+Set the interval via `CP_BILLING_INTERVAL` (`6h`\|`12h`\|`24h`, default
+`24h`) as the initial value; once changed from Settings → Billing (`PUT
+/api/v1/settings/billing/interval`), the hub-side setting takes
+precedence over the env var and applies to the running scheduler
+immediately, no restart needed.
+
+### Quiet-skip status model
+
+`CP_BILLING=auto` (the default) queries whichever of `aws`/`oci` is
+actually installed and authenticated, silently skipping the other — a
+missing CLI, an unauthenticated principal, insufficient IAM/policy
+permissions, or a timeout are **never** treated as hub errors. Each
+provider's most recent attempt is classified into one status:
+
+| Status | Meaning |
+|---|---|
+| `not_installed` | The CLI binary isn't on `PATH` |
+| `not_configured` | No credentials/config found at all |
+| `auth_failed` | Credentials present but rejected |
+| `permission_denied` | Authenticated, but the IAM policy/OCI policy statement is missing the required action |
+| `error` | Reached the CLI/API but got something else unexpected (including a timeout) |
+| `ok` | Collected successfully |
+
+`CP_BILLING=off` disables polling entirely (no goroutine started). The
+same classified reason is logged at most once per day per provider
+(`slog.Info`) — the CLI's raw stderr output and any credentials are
+**never** logged, only the fixed classification string.
+
+### Not-connected states and data freshness
+
+A provider showing anything other than `ok` still displays its **last
+successful** snapshot if one exists, so a transient CLI hiccup doesn't
+blank out the Costs page: `CloudCostSnapshot.LastSuccessAt` and
+`LastAttemptAt` (both unix seconds, `0` if never) are preserved across
+failed polls, and `Stale` is set once the time since `LastSuccessAt`
+exceeds **twice** the current polling interval (e.g. past 48h on the
+default 24h interval). The dashboard renders this as, for example,
+"Not connected · last success 2026-09-29 07:00 (1d 3h ago)", with a
+distinct "no successful data yet" state when `LastSuccessAt` is `0`.
+
+### Currency and tax
+
+All cloud-CLI-reported amounts are shown **in whatever currency the CLI
+itself reports** (normally `USD` for both AWS and OCI) — cloud-pulse
+never converts a cloud provider's own billing currency. Every dollar
+figure on the Costs/Settings → Billing pages carries an "excl. tax"
+label, since Cost Explorer/Usage API figures are pre-tax. See
+[Network cost estimate](#network-cost-estimate) below for the
+**separate** manual-rate KRW *display* option, which only applies to
+cloud-pulse's own network-egress cost estimate, not to cloud-CLI-
+reported figures.
+
+### Host ↔ cloud resource matching
+
+Agents report `HostInfo.CloudInstanceID`, detected in this order (each
+step 2-second-timeout, first non-empty wins):
+
+1. DMI: AWS Nitro's `/sys/class/dmi/id/board_asset_tag` (`i-...`).
+2. AWS IMDSv2 (token-gated metadata service).
+3. OCI instance metadata v2 (`/opc/v2/instance/`, `Authorization: Bearer
+   Oracle`).
+
+Set `CP_CLOUD_METADATA=off` to disable detection entirely (the field is
+always empty). The hub matches `CloudInstanceID` directly against the
+cost snapshot's `PerResource` map key (the provider's own native
+resource-ID string, no normalization) — a host that doesn't match shows
+`matched: false` and, when the snapshot is account-level (the default,
+`CP_BILLING_AWS_RESOURCES=false`), all matched hosts on that provider
+show the same account-wide total rather than an individual figure.
+
+### API and UI
+
+`GET /api/v1/billing` returns every provider's snapshot plus a
+`hosts[]` array combining each host's matched cloud cost with its
+network-cost estimate (see below) into `HostCost{cloud_mtd,
+cloud_forecast, network_estimate, total_mtd, total_forecast}`. `POST
+/api/v1/billing/refresh` (admin) triggers an immediate poll, rate-
+limited to once per 10 minutes (`429 rate_limited` otherwise). The
+dashboard's **Costs** page (`#/costs`) shows a provider card per cloud
+(MTD, month-end forecast, status badge, a link to enable the feature
+when not connected) and a per-host cost table; the host detail page
+gets a "Cost" card, and the fleet overview table has an opt-in "Est.
+cost" column. Settings → Billing exposes provider status/staleness,
+the interval selector (with the API-cost table above), the AWS
+resource-level toggle (with its cost-warning text), a "Refresh now"
+button, and the display-currency setting.
+
+## Network cost estimate
+
+Independent of real cloud-CLI billing, cloud-pulse can also **estimate**
+what a host's tracked network egress would cost under a configurable
+**pricing plan** — useful for hosts with no cloud CLI configured at all,
+or as a sanity check against the real cloud-billing figure above.
+
+### Builtin plans
+
+Four read-only builtin plans are seeded on every hub (via migration
+`0005_v06.sql`), each carrying a **reference pricing, not a live quote**
+disclaimer and a link to the provider's own pricing page — real billing
+can differ, especially for non-standard regions or negotiated pricing:
+
+| Plan | Free tier/month | Rate beyond free tier | Pooled? | Source |
+|---|---|---|---|---|
+| AWS Free Tier (Internet egress, US) | 100 GB (account-wide) | $0.09/GB up to 10 TB, $0.085/GB next 40 TB, $0.07/GB next 100 TB, $0.05/GB beyond | Yes | [AWS EC2 On-Demand Pricing → Data Transfer](https://aws.amazon.com/ec2/pricing/on-demand/) |
+| OCI Always Free (NA/EU) | 10 TB (tenancy-wide) | $0.0085/GB | Yes | [OCI VCN pricing](https://www.oracle.com/cloud/networking/virtual-cloud-network/pricing/) |
+| OCI Always Free (APAC/Japan/South America) | 10 TB (tenancy-wide) | $0.025/GB | Yes | same as above |
+| Other / Free | Unlimited | $0/GB | N/A | — |
+
+"Pooled" (`PoolFreeTier: true`) means the free allowance is **shared
+across every host assigned to that plan** (matching how AWS/OCI actually
+bill — the free tier is account/tenancy-wide, not per-instance): the
+combined free allowance is subtracted from the group's total usage
+first, and the resulting bill is allocated back to each host
+proportional to its share of the group's usage. A host's plan is
+assigned explicitly (`PUT /api/v1/hosts/{id}/pricing`, `0` clears back
+to the provider default) or falls back to a default based on its
+detected provider — AWS → the AWS plan, OCI → one of the two OCI plans
+based on the tenancy's region prefix (`ap-`/`sa-`/`me-`/`il-` → APAC/
+Japan/South America bucket, everything else including unknown → NA/EU),
+other/unknown → the free plan.
+
+Byte→GB conversion uses the **billing-industry decimal GB** (10⁹ bytes,
+matching how AWS/OCI actually meter and bill), not the binary GiB
+(2³⁰ bytes) `CP_EGRESS_LIMIT_GB` and the Settings UI's *limit* fields
+use elsewhere — these are two different, intentionally separate units
+for two different purposes (an egress alert threshold vs. a dollar-cost
+estimate), each matching the convention of the domain it belongs to.
+
+### Editing plans
+
+Settings → Billing's pricing-plan editor lets you clone/edit a **custom**
+plan (free-tier amount, an editable tiered-rate table with add/remove
+rows, an inbound price per GB, the pooled-free-tier toggle) with a live
+preview ("1 TB of outbound traffic on this plan costs $X"). Builtin
+plans are immutable — `PUT`/`DELETE` on one responds `403
+builtin_immutable`. Validation (non-negative amounts, ascending tier
+boundaries, exactly one unbounded trailing tier) responds `400` with
+`APIError.details` on failure, same shape as the alerting endpoints.
+
+### Display currency
+
+All storage and calculation is fixed in **USD**. A separate *display*
+setting lets the dashboard render figures in **KRW** via a **manually
+entered exchange rate** — there is no live FX API call, by design (see
+[D-076](DECISIONS_LOG.md)):
+
+- `GET`/`PUT /api/v1/settings/billing/currency` (admin) manage
+  `display_currency` (`USD`\|`KRW`), `krw_per_usd` (positive, fractional
+  allowed, e.g. `1385.5`), and `rate_updated_at`.
+- Selecting `KRW` without ever having set a rate is rejected: `400
+  rate_required`.
+- KRW display always shows the original USD figure and the rate/date
+  alongside the converted amount, e.g. `₩1,234,567 (≈ $891.20 · rate
+  1,385.5 as of 2026-09-30)` — never a bare converted number with no way
+  to see what it was converted from.
+- Conversion is a pure function (`internal/billing/currency.go`,
+  mirrored by a JS helper for the dashboard) with deterministic
+  rounding: whole won for KRW, cents for USD.
+- This setting affects **only** cloud-pulse's own network-cost estimate
+  display — a cloud CLI's own reported currency (see
+  [Billing](#billing) above) is never converted.
+
+### Audit log
+
+Every pricing-plan create/update/delete, host→plan assignment change,
+display-currency/rate change, and billing-interval change is recorded
+to an `audit_log` table (migration `0005_v06.sql`) with the actor
+(`admin` or `api_token`), the requesting IP, the action, and the
+**full before/after values** of whatever changed — mirrored to
+`slog.Info("audit", ...)` with no secret values in either. A save that
+doesn't actually change anything (identical before/after) is **not**
+logged. `GET /api/v1/audit?entity_type=&limit=&before=` (admin,
+cursor-paginated, limit capped at 200) serves the log; entries older
+than 400 days are pruned on the hourly retention sweep alongside alert
+events and rollups. Settings → Billing's "Change history" table shows
+timestamp, actor, changed item, and a before → after diff.
+
+## Remote agent updates
+
+Since v0.6.0, an admin can trigger `cloud-pulse-agent update` on a
+batch of hosts from the dashboard instead of SSHing into each one — but
+the security model is deliberately narrow: **the hub can only ask an
+agent to update to a specific official release tag; it can never supply
+its own binary, URL, or checksum.**
+
+### Security model
+
+- **Request-only**: the hub's request carries just a `job_id` and a
+  target (`"latest"` or an exact `vX.Y.Z` tag) — nothing else. The
+  agent's own `agent.env` (root-owned, unreadable/unwritable by the
+  agent's own unprivileged process) still determines *where* the update
+  binary and checksums come from (`CP_RELEASE_BASE_URL`/GitHub, same as
+  a manual `cloud-pulse-agent update`). A compromised hub can therefore
+  only move an opted-in agent between versions of the **already-
+  trusted** release feed that agent was configured with — it cannot
+  redirect the agent to an arbitrary binary.
+- **No downgrade**: a request whose target is not newer than the
+  agent's current version is refused (`downgrade_refused`), except an
+  exactly-equal target, which is treated as already succeeded
+  (`already_up_to_date`) rather than an error.
+- **Opt-in per agent, off by default**: `CP_REMOTE_UPDATE=off|on`
+  (default `off`). The hub **cannot** turn this on remotely — it's set
+  only from the agent's own side, either at install time
+  (`--remote-update` flag, or the interactive installer's "Allow the hub
+  to trigger updates of this agent? [y/N]" prompt) or by hand-editing
+  `agent.env` and restarting. An agent that hasn't opted in shows
+  `failed`/`not_enabled` for any job targeting it, with the manual
+  update command as a fallback.
+- **Linux + systemd only, and only for v0.6.0+ agents**: any other OS,
+  or an older agent (even on Linux+systemd), reports
+  `failed`/`unsupported` with the same manual-command fallback. The hub
+  also independently re-checks `AgentVersion >= v0.6.0` before ever
+  handing out a request — an old agent's optimistic self-reported
+  capability is never trusted alone.
+- **Privileged-helper file handling**: see
+  [CODING_CONVENTIONS.md](CODING_CONVENTIONS.md#privileged-helper-file-handling)
+  for the `O_NOFOLLOW` + root-owned result directory rules that prevent
+  the unprivileged agent process from tampering with its own update
+  request or result.
+
+### How it works
+
+Since agents are push-only (no inbound connection to them), the whole
+flow rides on the existing report/response cycle:
+
+1. Admin selects hosts on the dashboard (or `POST
+   /api/v1/agents/updates {host_ids, target, max_parallel}` directly) —
+   `max_parallel` (default 3) caps how many jobs are `in_progress` at
+   once per batch, rolling as jobs complete. One `queued` job per host
+   is created.
+2. Within the parallel limit, the next matching agent's report response
+   carries the request (`IngestResponse.UpdateRequest{job_id, target}`);
+   the hub marks that job `in_progress` the instant it hands it out
+   (there's no separate ack message in a push-only architecture).
+3. The agent (only if opted in) atomically writes
+   `/var/lib/cloud-pulse-agent/update-request.json`.
+4. A systemd path unit, `cloud-pulse-agent-update.path`, notices the
+   write and triggers a **root** oneshot service,
+   `cloud-pulse-agent-update.service`, running
+   `cloud-pulse-agent update --from-request <file> --result-dir
+   /var/lib/cloud-pulse-agent-update`. The request file is read with
+   `O_NOFOLLOW` and a strict size/schema check before anything else
+   happens. From here it's the exact same download/checksum-verify/
+   atomic-replace/`systemd-unit apply`/restart pipeline the manual
+   `update` subcommand already uses.
+5. The result (`succeeded`/`failed` + version + error code, if any) is
+   written to `/var/lib/cloud-pulse-agent-update/result.json` — a
+   **root-owned directory** the unprivileged agent process cannot write
+   to, so it can't forge its own success/failure report by symlink or
+   direct write.
+6. The restarted agent reads and reports that result
+   (`AgentReport.UpdateStatus{job_id, state, version, error_code,
+   error}`) on its next report; the hub marks the job `succeeded` if the
+   reported version matches the target (or `already_up_to_date` →
+   `succeeded`) or `failed` otherwise. No response within 15 minutes of
+   going `in_progress` marks the job `failed`/`timeout`.
+
+### Statuses and failure reasons
+
+| State | Meaning |
+|---|---|
+| `queued` | Waiting for its turn within the batch's `max_parallel` limit |
+| `in_progress` | Handed to the agent, awaiting its result |
+| `succeeded` | Agent reported the target version (or was already on it) |
+| `failed` | See reason below |
+
+| Failure reason | Meaning |
+|---|---|
+| `not_enabled` | Agent hasn't set `CP_REMOTE_UPDATE=on` |
+| `unsupported` | Not Linux+systemd, or agent version < v0.6.0 |
+| `timeout` | No result within 15 minutes |
+| `download_failed` | Couldn't fetch the release asset |
+| `checksum_mismatch` | Downloaded asset didn't match `checksums.txt` |
+| `verify_failed` | The new binary's own `-version` didn't report the target tag |
+| `restart_failed` | Binary replaced but the service restart failed |
+| `downgrade_refused` | Target is not newer than the current version |
+| `unknown` | Anything else |
+
+`POST /api/v1/agents/updates/{job_id}/retry` re-queues a fresh job for a
+failed one — refused (no retry button shown) for `not_enabled`/
+`unsupported`, since retrying without fixing the underlying opt-in/OS
+issue would just fail identically. `POST
+/api/v1/agents/updates/{batch_id}/cancel` cancels every still-`queued`
+job in a batch; jobs already `in_progress` run to completion. Every
+mutating call is audit-logged (see [Audit log](#audit-log)).
+
+### Limitations
+
+- **Linux + systemd only** — there is no remote-update mechanism for
+  Windows/macOS/FreeBSD agents or non-systemd Linux; those hosts always
+  show the manual `cloud-pulse-agent update` command instead.
+  Requires an agent at **v0.6.0 or later** — older agents show
+  `unsupported` with the legacy manual-update guidance.
+- `max_parallel` is tracked in-memory per batch, not persisted — a hub
+  restart mid-batch falls back to the default of 3 for any batch still
+  in flight.
+- The dashboard's Updates page shows a checkbox host list with version/
+  eligibility badges, a target-version + parallelism picker, and a
+  progress panel (per-host status badges, elapsed time, failure reason,
+  a retry button per failed row, a batch summary) that auto-refreshes
+  every 5 seconds.
 
 ## Settings UI
 
@@ -1121,6 +1564,111 @@ channel's `include_image` config is `"true"`/`"1"` — an
 `image_png_base64` field carrying the chart as base64-encoded PNG bytes.
 Requires `https://` unless custom endpoints are allowed (see below).
 
+### Real-account verification checklists
+
+Since v0.6.0, each platform's setup guide in Settings → Notifications
+ends with a **real-account checklist** — checkbox items tracked in the
+browser's `localStorage` per channel (never sent to the hub), showing
+the last successful **Send test** time once checked off:
+
+- **Discord**: confirm the channel permission used to create the
+  webhook ("Manage Webhooks"); confirm the URL matches
+  `https://discord.com/api/webhooks/<id>/<token>`; **Send test** and
+  confirm the image embed actually renders in the channel; remember that
+  deleting/regenerating the webhook invalidates the URL.
+- **Telegram**: create the bot via [@BotFather](https://t.me/botfather);
+  invite it to the group (or add it as admin for a channel); message it
+  once, then call `getUpdates` to read `chat_id` (negative for groups/
+  channels); note the `message_thread_id` if it's a forum-topic group;
+  **Send test** and confirm a photo + caption arrives.
+- **WhatsApp**: confirm the access-token type (temporary 24h vs. a
+  System User's permanent token); confirm the Phone Number ID; add the
+  recipient to the allowed test-number list (development mode) using
+  E.164 digits only; confirm the image-header template's approval status
+  and language code; **Send test** from outside the 24-hour customer
+  window via the template path specifically, to confirm the non-template
+  path correctly fails outside that window while the template path still
+  succeeds.
+
+### Send-test diagnosis codes
+
+A failed **Send test** (`POST /api/v1/alerts/channels/{id}/test` or
+`POST /api/v1/alerts/channels/test` for an unsaved draft) responds with
+`models.TestResult{ok: false, diagnosis: Diagnosis{code, title, detail,
+hint, docs_url}}` instead of a bare error string — `internal/notify`'s
+`DiagnoseError` (pure function, no network calls of its own) classifies
+the underlying HTTP status/platform error body or network error into one
+of:
+
+| Code | Condition | Guidance |
+|---|---|---|
+| `dns_failure` | DNS resolution failed | Check the hub's DNS/outbound connectivity |
+| `network_unreachable` / `connection_refused` | Connection failed | Check firewall/proxy/outbound allowlist |
+| `timeout` | No response within 20s | Network latency; retry |
+| `tls_error` | Certificate error | Check the system CA store/clock |
+| `invalid_config` | Local validation failed | Field-specific guidance |
+| `discord_webhook_not_found` | Discord 404 / Unknown Webhook (code 10015) | Webhook was deleted — create a new one |
+| `discord_unauthorized` | Discord 401/403 (Invalid Webhook Token, 50027) | The URL's token half is corrupted |
+| `telegram_unauthorized` | 401 | Bot token is wrong/revoked |
+| `telegram_chat_not_found` | 400 "chat not found" | Check `chat_id`; message the bot first |
+| `telegram_bot_blocked` / `telegram_not_member` | 403, or 400 "not enough rights"/membership | Unblock the bot, or invite/promote it |
+| `telegram_thread_not_found` | 400 "message thread not found" | Check the topic/thread ID |
+| `whatsapp_token_invalid` | Graph error code 190 | Token expired (temporary tokens last 24h) — use a permanent token |
+| `whatsapp_permission` | Graph code 10/200/100 | Missing `whatsapp_business_messaging` permission or bad parameter |
+| `whatsapp_recipient_not_allowed` | Graph code 131030 | Add the recipient to the allowed test-number list |
+| `whatsapp_window_closed` | Graph code 131047 | Outside the 24h window — use an approved template |
+| `whatsapp_template_missing` | Graph code 132000/132001 | Check template name/language/approval status |
+| `whatsapp_media_failed` | Media-upload stage error | Check the chart image's size/format |
+| `rate_limited` | HTTP 429 | Wait and retry (`Retry-After` shown) |
+| `platform_error` | Any other 4xx/5xx | Shows the platform's own message, secrets stripped |
+
+Every `Diagnosis` field is guaranteed secret-free — `DiagnoseError` never
+echoes back a bot token, webhook URL path, or access token, even when a
+platform's own error body happens to include the request URL. The
+Settings UI shows the diagnosis as a red card (title, cause, fix, a docs
+link) under the failed **Send test** button, highlighting the relevant
+input field, and the same diagnosis is shown as a tooltip on that
+channel's last-test-result badge in the channel list. A failed alert
+delivery (not just a manual Send test) also carries the same
+`diagnosis` code on its `AlertEvent.deliveries[]` entry.
+
+### `scripts/verify-notify.py`
+
+An optional, user-run script (never executed by CI, never run
+automatically) that sends one real test message per configured platform
+and prints the same diagnosis classification as the dashboard:
+
+```bash
+python3 scripts/verify-notify.py --platform discord --credentials-file /path/to/creds.env
+```
+
+- **Credentials never go on the command line** (visible in `ps`/shell
+  history) — only two input methods are accepted:
+  - Environment variables: `CP_VERIFY_DISCORD_WEBHOOK_URL`,
+    `CP_VERIFY_TELEGRAM_BOT_TOKEN`, `CP_VERIFY_TELEGRAM_CHAT_ID`,
+    `CP_VERIFY_WHATSAPP_ACCESS_TOKEN`, `CP_VERIFY_WHATSAPP_PHONE_NUMBER_ID`,
+    `CP_VERIFY_WHATSAPP_TO`, `CP_VERIFY_WHATSAPP_TEMPLATE_NAME`,
+    `CP_VERIFY_WHATSAPP_TEMPLATE_LANG`.
+  - `--credentials-file PATH`: a `KEY=VALUE` file (no shell
+    interpretation), read only if it's owned by the invoking user **and**
+    has no group/other permission bits (i.e. mode `0600` or stricter) —
+    a looser-permissioned file is rejected outright rather than read.
+    A credentials file takes priority over environment variables when
+    both are present.
+- The argument parser accepts only `--platform`, `--credentials-file`,
+  `--timeout`, `--dry-run`, `-h`/`--help` — any other argument, or a
+  value that merely *looks* like a secret (a bot-token shape, a URL, a
+  long opaque token), is rejected with a usage hint instead of being
+  processed.
+- Every printed value (tokens, webhook URLs, phone numbers) is masked
+  before being written to stdout or an exception message — see
+  `internal/notify/diagnose.go`'s equivalent redaction rule.
+- Tests: `scripts/tests/test_verify_notify.py` (stdlib `unittest`, fake
+  `http.server.HTTPServer` per platform) — argument rejection,
+  credentials-file permission enforcement, file-over-env priority, and
+  masking, run via `python3 -m unittest discover -s scripts/tests`
+  alongside every other Python test in the repo.
+
 ### Manual verification checklist
 
 Automated tests use `httptest` fakes for every platform — nothing in the
@@ -1128,11 +1676,13 @@ test suite or CI ever contacts a real Discord/Telegram/WhatsApp
 endpoint. Before relying on a channel in production, verify it manually:
 
 1. Create the channel in Settings → Notifications, filling in the
-   platform's guide fields exactly as shown.
+   platform's guide fields exactly as shown, then work through that
+   platform's real-account checklist above.
 2. Click **Send test** (or `POST /api/v1/alerts/channels/{id}/test`) —
    confirm the response shows `ok: true` and a real message (with a
    generic sample chart) actually arrives in the target Discord
-   channel / Telegram chat / WhatsApp conversation.
+   channel / Telegram chat / WhatsApp conversation. If it fails, read
+   the diagnosis card rather than guessing from a raw error string.
 3. For WhatsApp specifically: test **both** with and without
    `template_name` set, from a device that has *not* messaged the
    business number in the last 24 hours — the non-template path should
@@ -1147,6 +1697,16 @@ endpoint. Before relying on a channel in production, verify it manually:
    once the condition clears, and that egress rules do **not** re-fire
    within the same calendar month after dropping and re-crossing a
    threshold.
+6. Optionally, run `scripts/verify-notify.py` from a shell with
+   credentials supplied via env vars or a `0600` credentials file (never
+   as a command-line argument) as an independent, scriptable check
+   outside the browser.
+
+**Limitation, stated plainly**: CI never contacts a real platform — every
+automated test in this repo uses `httptest` fakes reproducing the
+documented error shapes above. The checklist, **Send test**, and
+`verify-notify.py` are the only ways to confirm a channel actually works
+against the real Discord/Telegram/WhatsApp service.
 
 ## Inventory: Docker services + listening ports
 
@@ -1290,6 +1850,22 @@ assets) require signing in (session bearer token) or the optional
 | `GET /api/v1/alerts/events?state=&host=&limit=&before=` | Paginated firing/resolved alert event history | Session or API token |
 | `GET /api/v1/alerts/active` | Every currently-firing event (navbar bell) | Session or API token |
 | `GET /api/v1/hosts/{id}/inventory` | A host's most recently reported listening ports + Docker containers | Session or API token |
+| `GET /api/v1/billing` | Provider cloud-cost snapshots + per-host cost view (see [Billing](#billing)) | Session or API token |
+| `POST /api/v1/billing/refresh` | Trigger an immediate AWS/OCI CLI poll; rate-limited to once per 10 minutes (`429 rate_limited`) | Admin |
+| `PUT /api/v1/settings/billing/interval` | Set the hub-side billing polling interval override (`6h`\|`12h`\|`24h`) | Admin |
+| `GET /api/v1/billing/plans` | List network-cost pricing plans (builtin + custom) | Session or API token |
+| `POST /api/v1/billing/plans` | Create a custom pricing plan | Admin |
+| `PUT /api/v1/billing/plans/{id}` | Update a custom pricing plan (builtin plans are immutable, `403 builtin_immutable`) | Admin |
+| `DELETE /api/v1/billing/plans/{id}` | Delete a custom pricing plan | Admin |
+| `PUT /api/v1/hosts/{id}/pricing` | Assign a pricing plan to a host (`0` clears back to the provider default) | Admin |
+| `GET /api/v1/billing/network?month=YYYY-MM` | Estimated network egress cost per host for a month, grouped by resolved plan (see [Network cost estimate](#network-cost-estimate)) | Session or API token |
+| `GET /api/v1/settings/billing/currency` | Current display-currency settings (`USD`\|`KRW`, manual rate, rate timestamp) | Admin |
+| `PUT /api/v1/settings/billing/currency` | Set the display currency; `KRW` without a rate is rejected (`400 rate_required`) | Admin |
+| `GET /api/v1/agents/updates?batch=` | List remote-update jobs, optionally filtered to one batch | Admin |
+| `POST /api/v1/agents/updates` | Create a remote-update batch (`host_ids`, `target`, `max_parallel`) — see [Remote agent updates](#remote-agent-updates) | Admin |
+| `POST /api/v1/agents/updates/{job_id}/retry` | Re-queue a failed job as a new job (refused for `not_enabled`/`unsupported` reasons) | Admin |
+| `POST /api/v1/agents/updates/{batch_id}/cancel` | Cancel every still-`queued` job in a batch; `in_progress` jobs run to completion | Admin |
+| `GET /api/v1/audit?entity_type=&limit=&before=` | Paginated audit log of settings/pricing/currency/update-batch changes (see [Audit log](#audit-log)) | Admin |
 | `GET /healthz` | Liveness check | None |
 | `GET /` and static assets | Embedded dashboard | None |
 
@@ -1307,13 +1883,19 @@ see [Update notifications](#update-notifications). Since v0.5.0 both
 also embed optional `containers_running`/`listening_ports` integers
 (omitted, not `0`, when the host has never reported an inventory
 snapshot at all — see [Inventory](#inventory-docker-services--listening-ports)).
+Since v0.6.0 both also embed an optional `cost` object (`HostCost`, see
+[Billing](#billing)) when cloud billing or a network-cost pricing plan
+applies to that host.
 
 A validation failure on any `POST`/`PUT` alerting endpoint (channels or
 rules) responds `400` with `APIError.details` — a `field → message` map
 (e.g. `{"error":"validation failed","details":{"metric":"must be one
 of cpu, memory, disk, load1, egress_out_pct, egress_in_pct,
 host_down"}}`) — so the Settings UI can highlight the offending form
-field directly instead of showing only a generic error string.
+field directly instead of showing only a generic error string. The same
+`details` shape is used by the pricing-plan and remote-update-batch
+endpoints (e.g. a plan with a descending tier boundary, or a batch with
+an empty `host_ids`).
 
 ## Security model
 
@@ -1448,6 +2030,34 @@ field directly instead of showing only a generic error string.
   hub with real credentials configured removes the one guard preventing
   a compromised or careless channel config from turning the hub into an
   arbitrary internal HTTP client.
+- **Cloud-billing CLI child processes run sandboxed, never with a
+  shell**: `aws`/`oci` are invoked via a fixed argument array
+  (`exec.CommandContext`, never a shell string), a 60-second timeout per
+  call, output capped at 4 MiB, and a minimal explicit environment —
+  `HOME` redirected under `CP_DATA_DIR` (never the hub process's real
+  home directory) and `PATH` fixed to system-standard locations (or
+  `CP_BILLING_PATH` for a test harness only) — see
+  [Billing](#billing)'s "Where the hub looks for CLI config" and
+  [Exec rules](CODING_CONVENTIONS.md#exec-rules-privileged-child-processes).
+  A missing CLI, bad credentials, or a timeout is always a quiet-skip
+  status, never a crash or a hang.
+- **Remote agent updates keep the hub in a request-only role**: a
+  compromised hub can move an opted-in agent between official release
+  tags of that agent's own already-configured release feed, but cannot
+  supply its own binary URL or checksum — see
+  [Remote agent updates](#remote-agent-updates)'s security model. The
+  agent-side update-request/result files are protected by `O_NOFOLLOW`
+  reads and a root-owned result directory the unprivileged agent process
+  cannot write to, preventing the agent from forging its own
+  success/failure report.
+- **Audit log has no separate secret-redaction step because it never
+  stores secrets**: pricing-plan rates, host→plan assignments, the
+  display-currency rate, and the billing interval are the only fields
+  ever written to `audit_log`'s before/after JSON — none of these are
+  credentials, so unlike `NotifyChannel.Redacted()` above, no redaction
+  pass is needed before a `GET /api/v1/audit` response is served. See
+  [Network cost estimate](#network-cost-estimate)'s "Audit log"
+  subsection.
 
 ## Development
 
