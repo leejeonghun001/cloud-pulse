@@ -5,8 +5,6 @@
     "web/assets/js/pages/settings/agents.js",
     "web/assets/js/pages/settings/alert-rules.js",
     "web/assets/js/pages/settings/billing.js",
-    "web/assets/js/pages/settings/general.js",
-    "web/assets/js/pages/settings/index.js",
     "web/assets/js/pages/settings/network.js",
     "web/assets/js/pages/settings/notifications.js",
     "web/assets/js/pages/settings/security.js",
