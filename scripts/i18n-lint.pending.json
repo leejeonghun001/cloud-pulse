@@ -4,7 +4,6 @@
     "web/assets/js/core/updates.js",
     "web/assets/js/pages/settings/alert-rules.js",
     "web/assets/js/pages/settings/billing.js",
-    "web/assets/js/pages/settings/network.js",
     "web/assets/js/pages/settings/notifications.js",
     "web/assets/js/pages/settings/storage.js",
     "web/assets/js/pages/updates.js"
