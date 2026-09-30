@@ -23,6 +23,30 @@ const (
 	// internal/alerting/storageusage.go for the evaluation logic this
 	// repurposing enables without a schema/model change.
 	AlertMetricStorageUsagePct AlertMetric = "storage_usage_pct"
+	// AlertMetricAgentOutdated is SPEC-v0.8 §3-1's rollout alert
+	// metric: a host's agent version is behind the fleet's latest known
+	// release by at least DurationSec seconds (SPEC-v0.8 §3-1 default:
+	// 14 days). Host-scoped exactly like cpu/memory/disk/load1/
+	// host_down — AlertRule.HostID means what it always means here, no
+	// repurposing. Threshold is ignored (like host_down): the only
+	// condition is "outdated for >= DurationSec", evaluated from each
+	// host's OutdatedSince, not from a metric value crossing a
+	// threshold. See internal/alerting/rollout.go.
+	AlertMetricAgentOutdated AlertMetric = "agent_outdated"
+	// AlertMetricUpdateBatchFailed is SPEC-v0.8 §3-1's rollout alert
+	// metric: a remote-update batch finished with at least one failed
+	// job. Unlike every other metric, this one is batch-scoped, not
+	// host-scoped or account-scoped — it fires once per completed
+	// batch (never sustained, never re-notified on a cooldown) rather
+	// than participating in the ok/pending/firing state machine at
+	// all. AlertRule.HostID/Threshold/DurationSec/CooldownSec/
+	// NotifyResolved are all ignored for this metric. See
+	// internal/alerting/rollout.go's EvaluateUpdateBatch, which bypasses
+	// the shared state-machine helpers in state.go entirely (there is
+	// no "resolved" for a batch that already finished, and dedup is a
+	// simple "have we already notified this batch ID" check, not a
+	// sustained-window/cooldown one).
+	AlertMetricUpdateBatchFailed AlertMetric = "update_batch_failed"
 )
 
 // AlertOperator is the comparison an alert rule's threshold is evaluated
