@@ -46,7 +46,7 @@ func (s *Server) handleListUpdateJobs(w http.ResponseWriter, r *http.Request) {
 	jobs, err := s.store.ListUpdateJobs(ctx, batchID, "")
 	if err != nil {
 		s.logger.Error("list update jobs failed", "batch_id", batchID, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
@@ -61,20 +61,20 @@ func (s *Server) handleCreateUpdateBatch(w http.ResponseWriter, r *http.Request)
 	r.Body = http.MaxBytesReader(w, r.Body, maxUpdateBodyBytes)
 	var req models.UpdateBatchCreate
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
 		return
 	}
 
 	if len(req.HostIDs) == 0 {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "host_ids must not be empty"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "host_ids must not be empty", Code: "host_ids_empty"})
 		return
 	}
 	if len(req.HostIDs) > maxUpdateBatchHosts {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "host_ids exceeds maximum batch size"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "host_ids exceeds maximum batch size", Code: "host_ids_too_many"})
 		return
 	}
 	if req.MaxParallel < 0 {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "max_parallel must be >= 0"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "max_parallel must be >= 0", Code: "invalid_max_parallel"})
 		return
 	}
 
@@ -106,14 +106,14 @@ func (s *Server) handleRetryUpdateJob(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("job_id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid job id"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid job id", Code: "invalid_job_id"})
 		return
 	}
 
 	job, err := s.retryUpdateJob(ctx, id)
 	if err != nil {
 		if isNotFound(err) {
-			writeJSON(w, http.StatusNotFound, models.APIError{Error: "job not found"})
+			writeJSON(w, http.StatusNotFound, models.APIError{Error: "job not found", Code: "job_not_found"})
 			return
 		}
 		writeJSON(w, http.StatusBadRequest, models.APIError{Error: err.Error()})
@@ -142,7 +142,7 @@ func (s *Server) handleCancelUpdateBatch(w http.ResponseWriter, r *http.Request)
 	canceled, err := s.cancelUpdateBatch(ctx, batchID)
 	if err != nil {
 		s.logger.Error("cancel update batch failed", "batch_id", batchID, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 

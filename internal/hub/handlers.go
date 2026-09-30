@@ -46,7 +46,7 @@ func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
 // nil, every request falls back to a JSON 404.
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/api/") || s.assets == nil {
-		writeJSON(w, http.StatusNotFound, models.APIError{Error: "not found"})
+		writeJSON(w, http.StatusNotFound, models.APIError{Error: "not found", Code: "not_found"})
 		return
 	}
 	// Embedded assets have neither modification times nor ETags. Require
@@ -65,12 +65,12 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 	var report models.AgentReport
 	if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
 		return
 	}
 
 	if !models.ValidHostID(report.Host.ID) {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid host id"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid host id", Code: "invalid_host_id"})
 		return
 	}
 
@@ -78,7 +78,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	// well-formed but exceeds a size limit, which maps naturally to
 	// Payload Too Large. Documented here and in notes/hub.md.
 	if len(report.Samples) > maxSamplesPerReport {
-		writeJSON(w, http.StatusRequestEntityTooLarge, models.APIError{Error: "too many samples"})
+		writeJSON(w, http.StatusRequestEntityTooLarge, models.APIError{Error: "too many samples", Code: "too_many_samples"})
 		return
 	}
 
@@ -97,14 +97,14 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.store.UpsertHost(ctx, report.Host, now.Unix()); err != nil {
 		s.logger.Error("ingest: upsert host failed", "host_id", report.Host.ID, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
 	inserted, err := s.store.InsertSamples(ctx, report.Host.ID, valid)
 	if err != nil {
 		s.logger.Error("ingest: insert samples failed", "host_id", report.Host.ID, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -151,7 +151,7 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	records, err := s.store.ListHosts(ctx)
 	if err != nil {
 		s.logger.Error("list hosts failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -159,7 +159,7 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	egressRecords, err := s.store.ListEgress(ctx, month)
 	if err != nil {
 		s.logger.Error("list egress failed", "month", month, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	egressByHost := indexEgressByHost(egressRecords)
@@ -167,7 +167,7 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	limits, err := s.store.ListHostLimits(ctx)
 	if err != nil {
 		s.logger.Error("list host limits failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	limitsByHost := indexLimitsByHost(limits)
@@ -202,25 +202,25 @@ func (s *Server) handleGetHost(w http.ResponseWriter, r *http.Request) {
 	rec, err := s.store.GetHost(ctx, id)
 	if err != nil {
 		if isNotFound(err) {
-			writeJSON(w, http.StatusNotFound, models.APIError{Error: "host not found"})
+			writeJSON(w, http.StatusNotFound, models.APIError{Error: "host not found", Code: "host_not_found"})
 			return
 		}
 		s.logger.Error("get host failed", "host_id", id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
 	tx, rx, err := s.currentMonthEgress(ctx, id, now)
 	if err != nil {
 		s.logger.Error("compute host summary failed", "host_id", id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
 	limits, err := s.store.GetHostLimits(ctx, id)
 	if err != nil {
 		s.logger.Error("get host limits failed", "host_id", id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -252,17 +252,17 @@ func (s *Server) handleHostMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	duration, ok := rangeDurations[rangeParam]
 	if !ok {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid range"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid range", Code: "invalid_range"})
 		return
 	}
 
 	if _, err := s.store.GetHost(ctx, id); err != nil {
 		if isNotFound(err) {
-			writeJSON(w, http.StatusNotFound, models.APIError{Error: "host not found"})
+			writeJSON(w, http.StatusNotFound, models.APIError{Error: "host not found", Code: "host_not_found"})
 			return
 		}
 		s.logger.Error("get host failed", "host_id", id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -272,7 +272,7 @@ func (s *Server) handleHostMetrics(w http.ResponseWriter, r *http.Request) {
 	series, err := s.store.QuerySeries(ctx, id, from, to)
 	if err != nil {
 		s.logger.Error("query series failed", "host_id", id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, series)
@@ -297,21 +297,21 @@ func (s *Server) handleEgress(w http.ResponseWriter, r *http.Request) {
 		month = models.MonthOf(now)
 	}
 	if _, _, err := models.MonthBounds(month); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid month"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid month", Code: "invalid_month"})
 		return
 	}
 
 	records, err := s.store.ListEgress(ctx, month)
 	if err != nil {
 		s.logger.Error("list egress failed", "month", month, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
 	hosts, err := s.store.ListHosts(ctx)
 	if err != nil {
 		s.logger.Error("list hosts failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	hostByID := make(map[string]models.HostRecord, len(hosts))
@@ -322,7 +322,7 @@ func (s *Server) handleEgress(w http.ResponseWriter, r *http.Request) {
 	limits, err := s.store.ListHostLimits(ctx)
 	if err != nil {
 		s.logger.Error("list host limits failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	limitsByHost := indexLimitsByHost(limits)
@@ -366,7 +366,7 @@ func (s *Server) handleBuckets(w http.ResponseWriter, r *http.Request) {
 	latest, err := s.store.LatestBuckets(ctx)
 	if err != nil {
 		s.logger.Error("latest buckets failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -376,7 +376,7 @@ func (s *Server) handleBuckets(w http.ResponseWriter, r *http.Request) {
 		history, err := s.store.BucketHistory(ctx, stats.Provider, stats.Bucket, since)
 		if err != nil {
 			s.logger.Error("bucket history failed", "provider", stats.Provider, "bucket", stats.Bucket, "error", err)
-			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 			return
 		}
 		view := models.BucketView{

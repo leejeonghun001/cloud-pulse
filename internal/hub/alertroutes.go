@@ -55,7 +55,7 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 	channels, err := s.store.ListNotifyChannels(ctx)
 	if err != nil {
 		s.logger.Error("list notify channels failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	out := make([]models.NotifyChannel, len(channels))
@@ -112,7 +112,7 @@ func (s *Server) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxAlertBodyBytes)
 	var req channelRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
 		return
 	}
 
@@ -127,7 +127,7 @@ func (s *Server) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		s.logger.Error("create notify channel failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, created.Redacted())
@@ -142,25 +142,25 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, err := parseAlertID(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id", Code: "invalid_id"})
 		return
 	}
 
 	existing, err := s.store.GetNotifyChannel(ctx, id)
 	if err != nil {
 		if isNotFound(err) {
-			writeJSON(w, http.StatusNotFound, models.APIError{Error: "channel not found"})
+			writeJSON(w, http.StatusNotFound, models.APIError{Error: "channel not found", Code: "channel_not_found"})
 			return
 		}
 		s.logger.Error("get notify channel failed", "id", id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxAlertBodyBytes)
 	var req channelRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
 		return
 	}
 
@@ -177,11 +177,11 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if isNotFound(err) {
-			writeJSON(w, http.StatusNotFound, models.APIError{Error: "channel not found"})
+			writeJSON(w, http.StatusNotFound, models.APIError{Error: "channel not found", Code: "channel_not_found"})
 			return
 		}
 		s.logger.Error("update notify channel failed", "id", id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, updated.Redacted())
@@ -215,12 +215,12 @@ func (s *Server) handleDeleteChannel(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, err := parseAlertID(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id", Code: "invalid_id"})
 		return
 	}
 	if err := s.store.DeleteNotifyChannel(ctx, id); err != nil {
 		s.logger.Error("delete notify channel failed", "id", id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -260,17 +260,17 @@ func (s *Server) handleTestExistingChannel(w http.ResponseWriter, r *http.Reques
 	ctx := r.Context()
 	id, err := parseAlertID(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id", Code: "invalid_id"})
 		return
 	}
 	ch, err := s.store.GetNotifyChannel(ctx, id)
 	if err != nil {
 		if isNotFound(err) {
-			writeJSON(w, http.StatusNotFound, models.APIError{Error: "channel not found"})
+			writeJSON(w, http.StatusNotFound, models.APIError{Error: "channel not found", Code: "channel_not_found"})
 			return
 		}
 		s.logger.Error("get notify channel failed", "id", id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	s.sendTestMessage(w, r, ch)
@@ -284,7 +284,7 @@ func (s *Server) handleTestDraftChannel(w http.ResponseWriter, r *http.Request) 
 	r.Body = http.MaxBytesReader(w, r.Body, maxAlertBodyBytes)
 	var req channelRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
 		return
 	}
 	typ, details := validateChannelRequest(req)
@@ -300,7 +300,7 @@ func (s *Server) handleTestDraftChannel(w http.ResponseWriter, r *http.Request) 
 // outcome. A nil NotifyFactory (no notify stage wired yet) responds 501.
 func (s *Server) sendTestMessage(w http.ResponseWriter, r *http.Request, ch models.NotifyChannel) {
 	if s.opts.NotifyFactory == nil {
-		writeJSON(w, http.StatusNotImplemented, models.APIError{Error: "notification sending is not configured on this hub"})
+		writeJSON(w, http.StatusNotImplemented, models.APIError{Error: "notification sending is not configured on this hub", Code: "notify_not_configured"})
 		return
 	}
 	sender, err := s.opts.NotifyFactory(ch)
@@ -312,7 +312,7 @@ func (s *Server) sendTestMessage(w http.ResponseWriter, r *http.Request, ch mode
 	message, err := testMessage()
 	if err != nil {
 		s.logger.Error("render notification test chart failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "could not render test chart"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "could not render test chart", Code: "chart_render_failed"})
 		return
 	}
 
@@ -336,7 +336,7 @@ func (s *Server) handleListRules(w http.ResponseWriter, r *http.Request) {
 	rules, err := s.store.ListAlertRules(r.Context())
 	if err != nil {
 		s.logger.Error("list alert rules failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, rules)
@@ -471,7 +471,7 @@ func (s *Server) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxAlertBodyBytes)
 	var req ruleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
 		return
 	}
 	rule, details := validateRuleRequest(req)
@@ -483,7 +483,7 @@ func (s *Server) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 	created, err := s.store.CreateAlertRule(ctx, rule)
 	if err != nil {
 		s.logger.Error("create alert rule failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, created)
@@ -495,14 +495,14 @@ func (s *Server) handleUpdateRule(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, err := parseAlertID(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id", Code: "invalid_id"})
 		return
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxAlertBodyBytes)
 	var req ruleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
 		return
 	}
 	rule, details := validateRuleRequest(req)
@@ -515,11 +515,11 @@ func (s *Server) handleUpdateRule(w http.ResponseWriter, r *http.Request) {
 	updated, err := s.store.UpdateAlertRule(ctx, rule)
 	if err != nil {
 		if isNotFound(err) {
-			writeJSON(w, http.StatusNotFound, models.APIError{Error: "rule not found"})
+			writeJSON(w, http.StatusNotFound, models.APIError{Error: "rule not found", Code: "rule_not_found"})
 			return
 		}
 		s.logger.Error("update alert rule failed", "id", id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
@@ -531,17 +531,17 @@ func (s *Server) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, err := parseAlertID(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id", Code: "invalid_id"})
 		return
 	}
 	if err := s.store.DeleteAlertRule(ctx, id); err != nil {
 		s.logger.Error("delete alert rule failed", "id", id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	if err := s.store.DeleteAlertStatesForRule(ctx, id); err != nil {
 		s.logger.Error("delete alert states for rule failed", "id", id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -554,18 +554,18 @@ func (s *Server) handlePreviewRule(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, err := parseAlertID(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id", Code: "invalid_id"})
 		return
 	}
 
 	rule, err := s.store.GetAlertRule(ctx, id)
 	if err != nil {
 		if isNotFound(err) {
-			writeJSON(w, http.StatusNotFound, models.APIError{Error: "rule not found"})
+			writeJSON(w, http.StatusNotFound, models.APIError{Error: "rule not found", Code: "rule_not_found"})
 			return
 		}
 		s.logger.Error("get alert rule failed", "id", id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -576,7 +576,7 @@ func (s *Server) handlePreviewRule(w http.ResponseWriter, r *http.Request) {
 // via s.opts.Alerting.Preview.
 func (s *Server) previewRule(w http.ResponseWriter, r *http.Request, rule models.AlertRule) {
 	if s.opts.Alerting == nil {
-		writeJSON(w, http.StatusNotImplemented, models.APIError{Error: "alert evaluation is not configured on this hub"})
+		writeJSON(w, http.StatusNotImplemented, models.APIError{Error: "alert evaluation is not configured on this hub", Code: "alert_eval_not_configured"})
 		return
 	}
 
@@ -585,14 +585,14 @@ func (s *Server) previewRule(w http.ResponseWriter, r *http.Request, rule models
 	hosts, err := s.hostSnapshots(ctx, now)
 	if err != nil {
 		s.logger.Error("build host snapshots for preview failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
 	result, err := s.opts.Alerting.Preview(ctx, now, rule, hosts)
 	if err != nil {
 		s.logger.Error("preview rule failed", "rule_id", rule.ID, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
@@ -607,7 +607,7 @@ func (s *Server) handleListAlertEvents(w http.ResponseWriter, r *http.Request) {
 
 	state := models.AlertEventState(q.Get("state"))
 	if state != "" && state != models.AlertEventFiring && state != models.AlertEventResolved {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid state"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid state", Code: "invalid_state"})
 		return
 	}
 	hostID := q.Get("host")
@@ -616,7 +616,7 @@ func (s *Server) handleListAlertEvents(w http.ResponseWriter, r *http.Request) {
 	if raw := q.Get("limit"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed <= 0 {
-			writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid limit"})
+			writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid limit", Code: "invalid_limit"})
 			return
 		}
 		limit = parsed
@@ -629,7 +629,7 @@ func (s *Server) handleListAlertEvents(w http.ResponseWriter, r *http.Request) {
 	if raw := q.Get("before"); raw != "" {
 		parsed, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || parsed < 0 {
-			writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid before"})
+			writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid before", Code: "invalid_before"})
 			return
 		}
 		before = parsed
@@ -638,7 +638,7 @@ func (s *Server) handleListAlertEvents(w http.ResponseWriter, r *http.Request) {
 	events, err := s.store.ListAlertEvents(r.Context(), state, hostID, before, limit)
 	if err != nil {
 		s.logger.Error("list alert events failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": events})
@@ -650,7 +650,7 @@ func (s *Server) handleListActiveAlerts(w http.ResponseWriter, r *http.Request) 
 	events, err := s.store.ListActiveAlertEvents(r.Context())
 	if err != nil {
 		s.logger.Error("list active alert events failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	sort.Slice(events, func(i, j int) bool { return events[i].StartedAt > events[j].StartedAt })

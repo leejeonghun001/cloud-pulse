@@ -9,6 +9,7 @@
 // login page) can render a countdown.
 import { getSessionToken, clearSessionToken, buildLoginRedirect } from "./auth.js";
 import { showToast } from "../ui/toast.js";
+import { t } from "./i18n.js";
 
 /** ApiError is thrown for non-2xx responses. */
 export class ApiError extends Error {
@@ -714,6 +715,32 @@ export function setStorageInterval(interval, signal) {
 }
 
 /**
+ * localizeApiError resolves a caught error to a user-facing message:
+ * for an ApiError/RateLimitError with a known machine-readable `code`,
+ * looks up `errors.<code>` in the active language catalog; falls back
+ * to the server's own (English-only) `message` when the code is empty
+ * or unrecognized (t() itself falls back to the bare key, which would
+ * leak "errors.some_unknown_code" to the user, so this checks presence
+ * first). Pages should call this instead of reading `err.message`
+ * directly wherever a caught ApiError is shown to the user (toasts,
+ * inline error text) — see CODING_CONVENTIONS.md's i18n section.
+ * @param {unknown} err
+ * @param {string} [fallbackKey] catalog key to use when err isn't an
+ *   ApiError at all (network failure, aborted fetch, etc.); defaults
+ *   to the generic "errors.generic" message.
+ * @returns {string}
+ */
+export function localizeApiError(err, fallbackKey = "errors.generic") {
+  if (err instanceof ApiError && err.code) {
+    const key = `errors.${err.code}`;
+    const localized = t(key);
+    if (localized !== key) return localized;
+  }
+  if (err instanceof ApiError) return err.message;
+  return t(fallbackKey);
+}
+
+/**
  * withToastOnError wraps an async action, showing an error toast for
  * any thrown ApiError/RateLimitError that isn't already handled by the
  * 401/403 global hooks (which don't throw a *visible* toast themselves
@@ -729,7 +756,7 @@ export async function withToastOnError(action, failureMessagePrefix = "Action fa
     return await action();
   } catch (err) {
     if (err?.name === "AbortError") return undefined;
-    const msg = err instanceof ApiError ? err.message : String(err?.message || err);
+    const msg = err instanceof ApiError ? localizeApiError(err) : String(err?.message || err);
     showToast({ message: `${failureMessagePrefix}: ${msg}`, variant: "error" });
     return undefined;
   }

@@ -44,7 +44,7 @@ func (s *Server) handleGetNotifyLanguage(w http.ResponseWriter, r *http.Request)
 	raw, ok, err := s.store.GetSetting(ctx, SettingNotifyLanguage)
 	if err != nil {
 		s.logger.Error("get notify language setting failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	lang := i18n.DefaultLang
@@ -78,19 +78,19 @@ func (s *Server) handleSetNotifyLanguage(w http.ResponseWriter, r *http.Request)
 	r.Body = http.MaxBytesReader(w, r.Body, maxNotifyLanguageBodyBytes)
 	var req notifyLanguageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
 		return
 	}
 	lang, ok := i18n.Parse(req.Language)
 	if !ok {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "language must be one of en, ko"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "language must be one of en, ko", Code: "invalid_language"})
 		return
 	}
 
 	beforeRaw, hadBefore, err := s.store.GetSetting(ctx, SettingNotifyLanguage)
 	if err != nil {
 		s.logger.Error("get notify language setting failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	before := string(i18n.DefaultLang)
@@ -100,7 +100,7 @@ func (s *Server) handleSetNotifyLanguage(w http.ResponseWriter, r *http.Request)
 
 	if err := s.store.SetSetting(ctx, SettingNotifyLanguage, string(lang)); err != nil {
 		s.logger.Error("set notify language setting failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 

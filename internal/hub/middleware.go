@@ -72,7 +72,7 @@ func (s *Server) cidrAllowlist(next http.Handler) http.Handler {
 			// parsing as a bare address as a fallback.
 			addr, addrErr := netip.ParseAddr(r.RemoteAddr)
 			if addrErr != nil {
-				writeJSON(w, http.StatusForbidden, models.APIError{Error: "forbidden"})
+				writeJSON(w, http.StatusForbidden, models.APIError{Error: "forbidden", Code: "forbidden"})
 				return
 			}
 			addrPort = netip.AddrPortFrom(addr, 0)
@@ -87,7 +87,7 @@ func (s *Server) cidrAllowlist(next http.Handler) http.Handler {
 			}
 		}
 		if !ok {
-			writeJSON(w, http.StatusForbidden, models.APIError{Error: "forbidden"})
+			writeJSON(w, http.StatusForbidden, models.APIError{Error: "forbidden", Code: "forbidden"})
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -136,7 +136,7 @@ func (s *Server) jsonMethodNotAllowed(next http.Handler) http.Handler {
 		}
 
 		w.Header().Del("Content-Length")
-		writeJSON(w, http.StatusMethodNotAllowed, models.APIError{Error: "method not allowed"})
+		writeJSON(w, http.StatusMethodNotAllowed, models.APIError{Error: "method not allowed", Code: "method_not_allowed"})
 	})
 }
 
@@ -188,7 +188,7 @@ func (s *Server) recoverMiddleware(next http.Handler) http.Handler {
 					"method", r.Method,
 					"path", r.URL.Path,
 				)
-				writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+				writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 			}
 		}()
 		next.ServeHTTP(w, r)
