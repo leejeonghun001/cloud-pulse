@@ -3,7 +3,6 @@
   "files": [
     "web/assets/js/core/updates.js",
     "web/assets/js/pages/alerts.js",
-    "web/assets/js/pages/costs.js",
     "web/assets/js/pages/settings/agents.js",
     "web/assets/js/pages/settings/alert-rules.js",
     "web/assets/js/pages/settings/billing.js",
