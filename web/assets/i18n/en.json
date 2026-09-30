@@ -9,7 +9,16 @@
     "language": "Language",
     "language_auto": "Auto",
     "language_en": "English",
-    "language_ko": "한국어"
+    "language_ko": "한국어",
+    "palette_search_placeholder": "Search hosts, pages, settings, actions…",
+    "palette_search_aria_label": "Command palette search",
+    "palette_no_matches": "No matches.",
+    "level_ok": "OK",
+    "level_warning": "Warning",
+    "level_critical": "Critical",
+    "level_exceeded": "Exceeded",
+    "copy": "Copy",
+    "dismiss": "Dismiss"
   },
   "nav": {
     "overview": "Overview",
@@ -75,7 +84,14 @@
     "column_containers": "Containers",
     "column_cost": "Est. cost",
     "column_agent": "Agent",
-    "column_last_seen": "Last seen"
+    "column_last_seen": "Last seen",
+    "summary_hosts_up": "Hosts up",
+    "summary_hosts_down": "Hosts down",
+    "summary_avg_cpu": "Avg CPU",
+    "summary_fleet_outbound": "Fleet outbound (mo.)",
+    "summary_fleet_inbound": "Fleet inbound (mo.)",
+    "summary_buckets_tracked": "Buckets tracked",
+    "summary_agents_outdated": "Agents outdated"
   },
   "host": {
     "title": "Host",
@@ -99,7 +115,21 @@
     "storage_last_checked": "Last checked {relative}",
     "storage_never_checked": "Never successfully checked yet.",
     "chart_series_time": "Time",
-    "chart_series_requests": "Requests"
+    "chart_series_requests": "Requests",
+    "no_samples_yet": "No samples yet.",
+    "hub_override": "hub override",
+    "hub_override_title": "Overridden from the hub",
+    "egress_outbound_label": "↑ Outbound",
+    "egress_outbound_bar_label": "Monthly outbound usage",
+    "egress_inbound_label": "↓ Inbound",
+    "egress_inbound_bar_label": "Monthly inbound usage",
+    "egress_no_limit": "No limit · {amount} used",
+    "egress_usage_label": "{label} usage",
+    "egress_projected": "Projected: {amount} by month end",
+    "release_notes": "Release notes",
+    "agent_update_title": "Agent update",
+    "provider_other": "Other",
+    "metric_usage_label": "{label} usage"
   },
   "alerts": {
     "title": "Alerts",

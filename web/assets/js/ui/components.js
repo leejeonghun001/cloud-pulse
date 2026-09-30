@@ -17,6 +17,7 @@ import {
 } from "../core/format.js";
 import { bannerText, hostUpdateBadgeText, agentVersionText, agentUpdatePanelText, LEGACY_AGENT_EXPLANATION } from "../core/updates.js";
 import { icon } from "./icons.js";
+import { t } from "../core/i18n.js";
 
 /**
  * el creates an element with optional class names, attributes, and
@@ -110,7 +111,7 @@ export function statusDot(status) {
  */
 export function providerBadge(provider) {
   const labels = { aws: "AWS", oci: "OCI" };
-  const label = labels[provider] || "Other";
+  const label = labels[provider] || t("host.provider_other");
   const cls = provider === "aws" ? "cp-badge-aws" : provider === "oci" ? "cp-badge-oci" : "cp-badge-other";
   return el("span", { class: `cp-badge ${cls}`, text: label });
 }
@@ -132,7 +133,12 @@ export function storageBadge(provider) {
  * @returns {HTMLElement}
  */
 export function egressLevelChip(level) {
-  const labels = { ok: "OK", warning: "Warning", critical: "Critical", exceeded: "Exceeded" };
+  const labels = {
+    ok: t("common.level_ok"),
+    warning: t("common.level_warning"),
+    critical: t("common.level_critical"),
+    exceeded: t("common.level_exceeded"),
+  };
   return el("span", {
     class: `cp-chip cp-chip-${level}`,
     text: labels[level] || level,
@@ -173,7 +179,7 @@ export function metricRow(label, percent, detail) {
     progressBar({
       value: percent,
       max: 100,
-      label: `${label} usage`,
+      label: t("host.metric_usage_label", { label }),
       levelClass: percent >= 90 ? "cp-bar-critical" : percent >= 75 ? "cp-bar-warning" : "cp-bar-ok",
       valueText: "",
     }),
@@ -266,7 +272,7 @@ export function hostCard(summary, nowMs) {
       }),
     );
   } else {
-    card.append(el("p", { class: "cp-host-card-meta", text: "No samples yet." }));
+    card.append(el("p", { class: "cp-host-card-meta", text: t("host.no_samples_yet") }));
   }
 
   card.append(egressSection(summary.egress));
@@ -282,7 +288,7 @@ export function hostCard(summary, nowMs) {
  * @returns {HTMLElement}
  */
 export function hubOverrideBadge() {
-  return el("span", { class: "cp-badge cp-badge-hub", text: "hub override", attrs: { title: "Overridden from the hub" } });
+  return el("span", { class: "cp-badge cp-badge-hub", text: t("host.hub_override"), attrs: { title: t("host.hub_override_title") } });
 }
 
 /**
@@ -309,7 +315,7 @@ export function egressDirectionRow({ label, bytes, limitBytes, level, projectedB
   wrap.append(head);
 
   if (limitBytes === 0) {
-    wrap.append(el("p", { class: "cp-egress-unlimited", text: `No limit · ${formatBytes(bytes)} used` }));
+    wrap.append(el("p", { class: "cp-egress-unlimited", text: t("host.egress_no_limit", { amount: formatBytes(bytes) }) }));
     return wrap;
   }
 
@@ -317,13 +323,13 @@ export function egressDirectionRow({ label, bytes, limitBytes, level, projectedB
     progressBar({
       value: bytes,
       max: limitBytes,
-      label: barLabel || `${label} usage`,
+      label: barLabel || t("host.egress_usage_label", { label }),
       levelClass: levelClassForBar(level),
       valueText: `${formatBytes(bytes)} / ${formatBytes(limitBytes)}`,
     }),
   );
   wrap.append(
-    el("p", { class: "cp-egress-projection", text: `Projected: ${formatBytes(projectedBytes)} by month end` }),
+    el("p", { class: "cp-egress-projection", text: t("host.egress_projected", { amount: formatBytes(projectedBytes) }) }),
   );
   return wrap;
 }
@@ -340,24 +346,24 @@ export function egressSection(egress) {
   const wrap = el("div", { class: "cp-egress-mini" });
   wrap.append(
     egressDirectionRow({
-      label: "↑ Outbound",
+      label: t("host.egress_outbound_label"),
       bytes: egress.tx_bytes,
       limitBytes: egress.limit_bytes,
       level: egress.level,
       projectedBytes: egress.projected_tx_bytes,
       hubOverride: egress.limit_source === "hub",
-      barLabel: "Monthly outbound usage",
+      barLabel: t("host.egress_outbound_bar_label"),
     }),
   );
   wrap.append(
     egressDirectionRow({
-      label: "↓ Inbound",
+      label: t("host.egress_inbound_label"),
       bytes: egress.rx_bytes,
       limitBytes: egress.rx_limit_bytes,
       level: egress.rx_level,
       projectedBytes: egress.projected_rx_bytes,
       hubOverride: egress.rx_limit_source === "hub",
-      barLabel: "Monthly inbound usage",
+      barLabel: t("host.egress_inbound_bar_label"),
     }),
   );
   return wrap;
@@ -389,7 +395,7 @@ export function updateBanner({ versionInfo }) {
 
   const actions = el("div", { class: "cp-update-banner-actions" });
   const copyBtn = /** @type {HTMLButtonElement} */ (
-    el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: "Copy" })
+    el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: t("common.copy") })
   );
   actions.append(copyBtn);
 
@@ -398,13 +404,13 @@ export function updateBanner({ versionInfo }) {
       el("a", {
         class: "cp-btn cp-btn-secondary",
         attrs: { href: versionInfo.release_url, target: "_blank", rel: "noopener noreferrer" },
-        text: "Release notes",
+        text: t("host.release_notes"),
       }),
     );
   }
 
   const dismissBtn = /** @type {HTMLButtonElement} */ (
-    el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: "Dismiss" })
+    el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: t("common.dismiss") })
   );
   actions.append(dismissBtn);
   wrap.append(actions);
@@ -426,7 +432,7 @@ export function agentUpdatePanel(update) {
   if (!info) return null;
 
   const card = el("div", { class: "cp-card cp-agent-update-panel" });
-  card.append(el("h2", { text: "Agent update" }));
+  card.append(el("h2", { text: t("host.agent_update_title") }));
   card.append(el("p", { text: info.headline }));
 
   let copyBtn = null;
@@ -435,7 +441,7 @@ export function agentUpdatePanel(update) {
     pre.append(el("code", { text: info.command }));
     card.append(pre);
     copyBtn = /** @type {HTMLButtonElement} */ (
-      el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: "Copy" })
+      el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: t("common.copy") })
     );
     card.append(copyBtn);
   }
@@ -507,15 +513,15 @@ export function summaryStrip(stats) {
   const wrap = el("div", { class: "cp-summary-strip" });
 
   const items = [
-    ["Hosts up", formatNumber(stats.hostsUp)],
-    ["Hosts down", formatNumber(stats.hostsDown)],
-    ["Avg CPU", formatPercent(stats.avgCPU)],
-    ["Fleet outbound (mo.)", formatBytes(stats.fleetEgressBytes)],
-    ["Fleet inbound (mo.)", formatBytes(stats.fleetIngressBytes)],
-    ["Buckets tracked", formatNumber(stats.bucketsTracked)],
+    [t("overview.summary_hosts_up"), formatNumber(stats.hostsUp)],
+    [t("overview.summary_hosts_down"), formatNumber(stats.hostsDown)],
+    [t("overview.summary_avg_cpu"), formatPercent(stats.avgCPU)],
+    [t("overview.summary_fleet_outbound"), formatBytes(stats.fleetEgressBytes)],
+    [t("overview.summary_fleet_inbound"), formatBytes(stats.fleetIngressBytes)],
+    [t("overview.summary_buckets_tracked"), formatNumber(stats.bucketsTracked)],
   ];
   if (stats.outdatedAgents) {
-    items.push(["Agents outdated", formatNumber(stats.outdatedAgents)]);
+    items.push([t("overview.summary_agents_outdated"), formatNumber(stats.outdatedAgents)]);
   }
   for (const [label, value] of items) {
     const item = el("div", { class: "cp-summary-item" });

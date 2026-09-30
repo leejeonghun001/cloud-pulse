@@ -18,8 +18,6 @@
     "web/assets/js/pages/settings/security.js",
     "web/assets/js/pages/settings/storage.js",
     "web/assets/js/pages/settings/traffic.js",
-    "web/assets/js/pages/updates.js",
-    "web/assets/js/ui/components.js",
-    "web/assets/js/ui/palette.js"
+    "web/assets/js/pages/updates.js"
   ]
 }

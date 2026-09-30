@@ -9,7 +9,16 @@
     "language": "언어",
     "language_auto": "자동",
     "language_en": "English",
-    "language_ko": "한국어"
+    "language_ko": "한국어",
+    "palette_search_placeholder": "호스트, 페이지, 설정, 작업 검색…",
+    "palette_search_aria_label": "명령 팔레트 검색",
+    "palette_no_matches": "일치하는 항목이 없습니다.",
+    "level_ok": "정상",
+    "level_warning": "경고",
+    "level_critical": "심각",
+    "level_exceeded": "초과",
+    "copy": "복사",
+    "dismiss": "닫기"
   },
   "nav": {
     "overview": "개요",
@@ -75,7 +84,14 @@
     "column_containers": "컨테이너",
     "column_cost": "예상 비용",
     "column_agent": "에이전트",
-    "column_last_seen": "마지막 확인"
+    "column_last_seen": "마지막 확인",
+    "summary_hosts_up": "정상 호스트",
+    "summary_hosts_down": "오프라인 호스트",
+    "summary_avg_cpu": "평균 CPU",
+    "summary_fleet_outbound": "전체 송신 (월간)",
+    "summary_fleet_inbound": "전체 수신 (월간)",
+    "summary_buckets_tracked": "추적 중인 버킷",
+    "summary_agents_outdated": "업데이트 필요 에이전트"
   },
   "host": {
     "title": "호스트",
@@ -99,7 +115,21 @@
     "storage_last_checked": "마지막 확인: {relative}",
     "storage_never_checked": "아직 성공적으로 확인된 적이 없습니다.",
     "chart_series_time": "시간",
-    "chart_series_requests": "요청"
+    "chart_series_requests": "요청",
+    "no_samples_yet": "아직 수집된 샘플이 없습니다.",
+    "hub_override": "허브 재정의",
+    "hub_override_title": "허브에서 재정의됨",
+    "egress_outbound_label": "↑ 송신",
+    "egress_outbound_bar_label": "월간 송신 사용량",
+    "egress_inbound_label": "↓ 수신",
+    "egress_inbound_bar_label": "월간 수신 사용량",
+    "egress_no_limit": "한도 없음 · {amount} 사용",
+    "egress_usage_label": "{label} 사용량",
+    "egress_projected": "예상: 이번 달 말까지 {amount}",
+    "release_notes": "릴리스 노트",
+    "agent_update_title": "에이전트 업데이트",
+    "provider_other": "기타",
+    "metric_usage_label": "{label} 사용량"
   },
   "alerts": {
     "title": "알림",
