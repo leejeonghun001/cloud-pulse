@@ -631,6 +631,22 @@ binary.
   `except urllib.error.URLError`, not a blanket `except Exception`
   unless re-raising or logging-and-continuing is genuinely correct for
   every possible exception there).
+- **A `git` subprocess call targeting a directory other than the
+  ambient repository (e.g. a `tempfile.mkdtemp()`-built test fixture)
+  must strip every inherited `GIT_*` environment variable** —
+  `env = {k: v for k, v in os.environ.items() if not
+  k.startswith("GIT_")}`, passed via `env=`. Git always sets
+  `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` for a hook's own
+  subprocess tree (every `.githooks/pre-commit` run), and `GIT_DIR`
+  takes precedence over `-C`/`cwd=` for path resolution — a
+  `subprocess.run(["git", ...], cwd=fixture_dir)` with no `env=`
+  override, run from inside the hook, silently operates on the real
+  repository running the hook instead of `fixture_dir`. This is a
+  correctness bug, not a style nit — see DECISIONS_LOG.md D-091 for
+  the incident that surfaced it. Exception: a helper whose whole point
+  is inspecting *this* repository (e.g. `git rev-parse
+  --show-toplevel` to find the repo root) correctly wants the ambient
+  environment and should not strip it.
 - **`pathlib.Path`** for any real filesystem path manipulation (joining,
   suffix checks, existence checks) — a bare `str` is fine for values
   that are only ever passed through unmodified (e.g. a SQLite connection

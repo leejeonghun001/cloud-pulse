@@ -1595,3 +1595,114 @@ never rewrite history here, only add to it.
   not checked against the catalog (can't be, statically) and is not
   flagged as hard-coded either, a known gap accepted rather than
   chasing false negatives with more regex complexity.
+
+### D-089 — Channel health state: two independent signals, synthetic-test failure overrides delivery-rate thresholds (2026-10-01)
+
+- **Context**: SPEC-v0.8 §3-2 needs one `healthy`/`degraded`/`failing`/
+  `unknown` state per channel, derived from two different kinds of
+  evidence that don't always agree: a weekly opt-in synthetic
+  connectivity test (present for some channels, absent for others) and
+  the channel's real delivery success rate over the last 7 days
+  (present only once at least one alert has actually fired through
+  it). Neither signal alone is sufficient — a channel with a perfect
+  delivery record might still be freshly broken (no alert has fired
+  recently to expose it) if a synthetic test just failed; a channel
+  with no synthetic testing enabled at all still needs a state derived
+  from whatever delivery history exists.
+- **Decision**: `models.ComputeChannelHealthState` (pure function,
+  documented thresholds in one place, table-tested) checks the most
+  recent synthetic result first — a `failed` outcome unconditionally
+  forces `failing`, regardless of the delivery success rate, even a
+  100% one. Only if the synthetic signal doesn't already say "failing"
+  does the function fall through to the 7-day success rate: no
+  deliveries and no failed synthetic test is `unknown` (not enough
+  data to say anything); below 50% success is `failing`; below 90% is
+  `degraded`; otherwise `healthy`. Both threshold constants
+  (`failingSuccessRateThreshold`, `degradedSuccessRateThreshold`) live
+  next to the function with a comment pointing back to it as the
+  single source of truth, so nothing else in the codebase re-derives
+  or duplicates these numbers.
+- **Consequences**: A channel can flip to `failing` the instant a
+  scheduled synthetic test fails, without waiting for a real alert to
+  fire and fail delivery first — which is the whole point of the
+  opt-in synthetic test feature. A channel that has never opted into
+  synthetic testing and has no delivery history yet (e.g. just
+  created) correctly reports `unknown` rather than a misleadingly
+  confident `healthy`.
+
+### D-090 — Channel-failure fallback: deterministic lowest-ID selection, one incident row per channel, banner as the explicit "nothing to notify" state (2026-10-01)
+
+- **Context**: SPEC-v0.8 §3-2 requires notifying "through a different
+  healthy channel" when one is failing, but a fleet may have zero,
+  one, or several other channels in varying health states, and the
+  same failure must not re-notify on every subsequent scheduler tick
+  while it remains unresolved.
+- **Decision**: `internal/channelhealth.SelectFallbackChannel` is a
+  pure function taking the full channel list, the failing channel's
+  ID, and a health-state map; it excludes the failing channel itself,
+  disabled channels, and any other channel also currently `failing`,
+  then deterministically picks the *lowest remaining ID* — not "first
+  enabled," not random, not "most recently healthy." Determinism was
+  chosen specifically so a hub restart, a retried tick, or a test
+  assertion always agrees on the same pick given the same channel set,
+  rather than depending on map iteration order or wall-clock timing.
+  De-duplication is a single `channel_failure_incidents` row per
+  channel (PK `channel_id`, so at most one open incident at a time),
+  tracking `notified_at`/`fallback_channel_id` — a fresh incident opens
+  un-notified, the fallback dispatch attempt sets `notified_at` only on
+  success, and a still-open, still-unnotified incident is retried on
+  the next opportunity (either the next scheduled synthetic test or
+  the next manual "run now"). When `SelectFallbackChannel` finds no
+  eligible candidate, the incident simply stays open and unnotified
+  forever until a fallback becomes available or the channel recovers
+  — `GET /api/v1/alerts/channels/health`'s `banner_needed`/
+  `banner_channel_names` fields surface exactly this state to the
+  dashboard, making "no healthy channel exists" a first-class,
+  explicitly-modeled outcome rather than a silent no-op.
+- **Consequences**: Adding a channel with a lower ID than an existing
+  fallback recipient changes which channel gets chosen for a *future*
+  incident (not a currently-open one, since dispatch only happens
+  once per incident) — an accepted tradeoff of determinism over
+  "prefer whichever channel is currently healthiest," which would add
+  a second, harder-to-test dimension to the selection rule for little
+  practical benefit (any enabled, non-failing channel is an acceptable
+  fallback recipient by definition).
+
+### D-091 — Test-fixture git subprocess calls must strip inherited GIT_* environment variables (2026-10-01)
+
+- **Context**: `scripts/prepublish-check.py`'s own history-scanning
+  helpers, and the `TempGitRepo`/`ReleaseNotesFixture` test fixtures in
+  `scripts/tests/test_prepublish_check.py` and
+  `scripts/tests/test_release_notes.py`, all spawn `git` subprocesses
+  against an isolated temp directory via `-C`/`cwd=`, inheriting the
+  calling process's environment by default (Python's
+  `subprocess.run`'s implicit behavior when no `env=` is passed). Git
+  itself always sets `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` for a
+  hook's own subprocess tree — every `.githooks/pre-commit` run, i.e.
+  every `git commit` — and `GIT_DIR` takes precedence over `-C`/`cwd=`
+  for path resolution. Running this project's own `python3 -m
+  unittest discover -s scripts/tests` from *inside* the pre-commit
+  hook (exactly what section 9 of the hook does) meant every fixture's
+  `git init`/`commit`/`tag` call silently operated on the *real
+  repository running the hook* instead of the fixture's own throwaway
+  directory — repeatedly resetting a real feature branch to a 3-commit
+  placeholder history during this v0.8 Part B session, recovered each
+  time via the hook's own `ORIG_HEAD`.
+- **Decision**: every git-subprocess call site that targets a
+  directory other than "whatever repository this process happens to be
+  running in" now explicitly builds
+  `env = {k: v for k, v in os.environ.items() if not
+  k.startswith("GIT_")}` and passes it. Fixed in
+  `scripts/prepublish-check.py`'s `_git`/`iter_history_added_lines`/
+  `scan_history_large_and_binary_blobs`, and the equivalent helpers in
+  both affected test files (`test_prepublish_check.py`'s `_run_git`,
+  `test_release_notes.py`'s `_base_os_env`/`run_release_notes`).
+  `prepublish-check.py`'s own *intentional* self-repository git calls
+  (`find_repo_root`'s `git rev-parse --show-toplevel`, which correctly
+  wants the ambient `GIT_DIR`) were deliberately left untouched.
+- **Consequences**: any *future* helper in this codebase that spawns
+  `git` against a path that isn't necessarily the repository the
+  calling process is already inside must follow the same pattern —
+  reviewers should treat a bare `subprocess.run(["git", ...], cwd=X)`
+  with no `env=` override as a latent bug, not a style nit, if `X` can
+  ever differ from the ambient repository.
