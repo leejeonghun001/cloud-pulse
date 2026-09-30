@@ -194,3 +194,87 @@ func TestHostSummaryJSON_InventoryCountersRoundTrip(t *testing.T) {
 		t.Errorf("ListeningPorts = %v, want %d", decoded.ListeningPorts, ports)
 	}
 }
+
+func TestHostInfoJSON_CloudFieldsOmittedWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	h := HostInfo{ID: "h1"}
+	b, err := json.Marshal(h)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatalf("Unmarshal raw: %v", err)
+	}
+	if _, ok := raw["cloud_instance_id"]; ok {
+		t.Errorf("cloud_instance_id must be omitted when empty, got %s", b)
+	}
+	// remote_update has no omitempty (it's always a meaningful struct,
+	// not an optional pointer) so it must always be present.
+	if _, ok := raw["remote_update"]; !ok {
+		t.Errorf("remote_update must always be present, got %s", b)
+	}
+}
+
+func TestHostInfoJSON_CloudFieldsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	h := HostInfo{
+		ID:              "h1",
+		CloudInstanceID: "i-0123456789abcdef0",
+		RemoteUpdate:    RemoteUpdateCapability{Supported: true, OptedIn: true},
+	}
+	b, err := json.Marshal(h)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded HostInfo
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.CloudInstanceID != h.CloudInstanceID {
+		t.Errorf("CloudInstanceID = %q, want %q", decoded.CloudInstanceID, h.CloudInstanceID)
+	}
+	if decoded.RemoteUpdate != h.RemoteUpdate {
+		t.Errorf("RemoteUpdate = %+v, want %+v", decoded.RemoteUpdate, h.RemoteUpdate)
+	}
+}
+
+func TestHostSummaryJSON_CostOmittedWhenNil(t *testing.T) {
+	t.Parallel()
+
+	s := HostSummary{Host: HostInfo{ID: "h1"}, Status: HostUp}
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatalf("Unmarshal raw: %v", err)
+	}
+	if _, ok := raw["cost"]; ok {
+		t.Errorf("cost must be omitted when nil, got %s", b)
+	}
+}
+
+func TestHostSummaryJSON_CostRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	s := HostSummary{
+		Host:   HostInfo{ID: "h1"},
+		Status: HostUp,
+		Cost:   &HostCost{HostID: "h1", TotalMTD: 5.5},
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded HostSummary
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.Cost == nil || *decoded.Cost != *s.Cost {
+		t.Errorf("Cost = %+v, want %+v", decoded.Cost, s.Cost)
+	}
+}

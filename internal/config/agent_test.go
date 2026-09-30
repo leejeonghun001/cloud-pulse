@@ -556,3 +556,75 @@ func TestDefaultAgentNetExclude(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadAgent_RemoteUpdate(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		value   string // "" means CP_REMOTE_UPDATE unset
+		want    bool
+		wantErr bool
+	}{
+		{"unset_defaults_off", "", false, false},
+		{"explicit_off", "off", false, false},
+		{"explicit_on", "on", true, false},
+		{"upper_on", "ON", true, false},
+		{"invalid_true", "true", false, true},
+		{"invalid_1", "1", false, true},
+		{"invalid_garbage", "enabled", false, true},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			env := validAgentEnv()
+			if tc.value != "" {
+				env["CP_REMOTE_UPDATE"] = tc.value
+			}
+			cfg, err := LoadAgent(mapLookup(env), "host")
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("LoadAgent() err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if !tc.wantErr && cfg.RemoteUpdate != tc.want {
+				t.Errorf("RemoteUpdate = %v, want %v", cfg.RemoteUpdate, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadAgent_CloudMetadata(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		value   string // "" means CP_CLOUD_METADATA unset
+		want    string
+		wantErr bool
+	}{
+		{"unset_defaults_auto", "", "auto", false},
+		{"explicit_auto", "auto", "auto", false},
+		{"upper_auto", "AUTO", "auto", false},
+		{"off", "off", "off", false},
+		{"invalid", "on", "", true},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			env := validAgentEnv()
+			if tc.value != "" {
+				env["CP_CLOUD_METADATA"] = tc.value
+			}
+			cfg, err := LoadAgent(mapLookup(env), "host")
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("LoadAgent() err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if !tc.wantErr && cfg.CloudMetadata != tc.want {
+				t.Errorf("CloudMetadata = %q, want %q", cfg.CloudMetadata, tc.want)
+			}
+		})
+	}
+}

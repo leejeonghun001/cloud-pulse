@@ -349,3 +349,83 @@ func TestAgentReport_OldPayloadWithoutInventoryStillDecodes(t *testing.T) {
 		t.Errorf("Inventory = %+v, want nil for a payload with no inventory field", r.Inventory)
 	}
 }
+
+func TestAgentReport_UpdateStatusOmittedWhenNil(t *testing.T) {
+	t.Parallel()
+
+	r := AgentReport{Host: HostInfo{ID: "h1"}, Samples: []Sample{}}
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatalf("Unmarshal raw: %v", err)
+	}
+	if _, ok := raw["update_status"]; ok {
+		t.Errorf("update_status must be omitted when nil, got %s", b)
+	}
+}
+
+func TestAgentReport_UpdateStatusRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	r := AgentReport{
+		Host:    HostInfo{ID: "h1"},
+		Samples: []Sample{},
+		UpdateStatus: &AgentUpdateStatus{
+			JobID:   42,
+			State:   UpdateJobSucceeded,
+			Version: "v0.6.0",
+		},
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded AgentReport
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.UpdateStatus == nil || *decoded.UpdateStatus != *r.UpdateStatus {
+		t.Errorf("UpdateStatus round-trip = %+v, want %+v", decoded.UpdateStatus, r.UpdateStatus)
+	}
+}
+
+func TestIngestResponse_UpdateRequestOmittedWhenNil(t *testing.T) {
+	t.Parallel()
+
+	r := IngestResponse{Accepted: 1, ServerTimeMs: 100}
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatalf("Unmarshal raw: %v", err)
+	}
+	if _, ok := raw["update_request"]; ok {
+		t.Errorf("update_request must be omitted when nil, got %s", b)
+	}
+}
+
+func TestIngestResponse_UpdateRequestRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	r := IngestResponse{
+		Accepted:      1,
+		ServerTimeMs:  100,
+		UpdateRequest: &UpdateRequest{JobID: 7, Target: "latest"},
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded IngestResponse
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.UpdateRequest == nil || *decoded.UpdateRequest != *r.UpdateRequest {
+		t.Errorf("UpdateRequest round-trip = %+v, want %+v", decoded.UpdateRequest, r.UpdateRequest)
+	}
+}

@@ -60,6 +60,11 @@ type AgentReport struct {
 	// than v0.5.0's inventory support; a hub older than v0.5.0 ignores
 	// this field.
 	Inventory *Inventory `json:"inventory,omitempty"`
+	// UpdateStatus reports the outcome of a remote-update job this
+	// agent previously received via IngestResponse.UpdateRequest
+	// (SPEC-v0.6 §2 step 5). Omitted when the agent has no pending
+	// result to report; a hub older than v0.6.0 ignores this field.
+	UpdateStatus *AgentUpdateStatus `json:"update_status,omitempty"`
 }
 
 // IngestResponse is returned by the hub after processing an AgentReport.
@@ -75,6 +80,12 @@ type IngestResponse struct {
 	// the hub, omitted when unknown. Agents use it to log a one-time
 	// notice when a newer version is available.
 	LatestVersion string `json:"latest_version,omitempty"`
+	// UpdateRequest hands a queued remote-update job to the reporting
+	// agent (SPEC-v0.6 §2 step 2), omitted when no job is queued for
+	// this host or the agent hasn't opted in
+	// (HostInfo.RemoteUpdate.OptedIn false, checked by the hub before
+	// setting this field).
+	UpdateRequest *UpdateRequest `json:"update_request,omitempty"`
 }
 
 // TimeResponse is returned by the hub's time-sync endpoint so agents can

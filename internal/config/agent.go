@@ -49,6 +49,17 @@ type Agent struct {
 	// platform default Docker socket), or an explicit socket path/URL.
 	// See loadDocker for the exact parsing/normalization rule.
 	Docker string
+	// RemoteUpdate is the resolved CP_REMOTE_UPDATE setting: true opts
+	// this agent into the hub's remote batch-update feature (SPEC-v0.6
+	// §2). Default false — the hub can never trigger an update on an
+	// agent that hasn't explicitly opted in, and the hub itself has no
+	// setting that can turn this on remotely.
+	RemoteUpdate bool
+	// CloudMetadata is "auto" (probe DMI/IMDS/OCI metadata for
+	// HostInfo.CloudInstanceID, each with its own short timeout) or
+	// "off" (skip detection entirely; CloudInstanceID is always empty).
+	// See SPEC-v0.6 §1.
+	CloudMetadata string
 }
 
 // DefaultAgentNetExclude returns the default network interface exclusion
@@ -69,7 +80,8 @@ func DefaultAgentNetExclude() []string {
 // (comma-separated globs), CP_LOG_LEVEL, CP_LOG_FORMAT, CP_TIME_SYNC
 // (hub|local, default hub), CP_SEND_JITTER (default 0, must be
 // <= CP_INTERVAL/2), CP_DOCKER (auto|off|<socket path/URL>, default
-// auto).
+// auto), CP_REMOTE_UPDATE (off|on, default off), CP_CLOUD_METADATA
+// (auto|off, default auto).
 func LoadAgent(l LookupFunc, hostname string) (Agent, error) {
 	cfg := Agent{}
 
@@ -127,7 +139,49 @@ func LoadAgent(l LookupFunc, hostname string) (Agent, error) {
 
 	cfg.Docker = loadDocker(l)
 
+	remoteUpdate, err := loadRemoteUpdate(l)
+	if err != nil {
+		return Agent{}, err
+	}
+	cfg.RemoteUpdate = remoteUpdate
+
+	cloudMetadata, err := loadCloudMetadata(l)
+	if err != nil {
+		return Agent{}, err
+	}
+	cfg.CloudMetadata = cloudMetadata
+
 	return cfg, nil
+}
+
+// loadRemoteUpdate reads and validates CP_REMOTE_UPDATE (off|on,
+// case-insensitive), defaulting to false ("off"). Deliberately a
+// restricted off|on vocabulary (not getBool's broader
+// true/false/1/0/t/f) to match SPEC-v0.6 §2's exact spelling and read
+// unambiguously in an env file next to CP_DOCKER's similar auto|off
+// style.
+func loadRemoteUpdate(l LookupFunc) (bool, error) {
+	v := strings.ToLower(getString(l, "CP_REMOTE_UPDATE", "off"))
+	switch v {
+	case "off":
+		return false, nil
+	case "on":
+		return true, nil
+	default:
+		return false, fmt.Errorf("config: CP_REMOTE_UPDATE must be one of off|on, got %q", v)
+	}
+}
+
+// loadCloudMetadata reads and validates CP_CLOUD_METADATA (auto|off,
+// case-insensitive), defaulting to "auto".
+func loadCloudMetadata(l LookupFunc) (string, error) {
+	v := strings.ToLower(getString(l, "CP_CLOUD_METADATA", "auto"))
+	switch v {
+	case "auto", "off":
+		return v, nil
+	default:
+		return "", fmt.Errorf("config: CP_CLOUD_METADATA must be one of auto|off, got %q", v)
+	}
 }
 
 // loadDocker reads CP_DOCKER, defaulting to "auto". Recognized special

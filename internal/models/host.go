@@ -138,6 +138,18 @@ type HostInfo struct {
 	// unlimited.
 	EgressLimitBytes uint64 `json:"egress_limit_bytes"`
 	AgentVersion     string `json:"agent_version"`
+	// CloudInstanceID is the detected cloud resource identifier for
+	// this host (e.g. an AWS "i-…" instance ID or an OCI instance
+	// OCID), used to match hub-collected cloud billing data to a
+	// specific host (SPEC-v0.6 §1). Empty when detection is disabled
+	// (CP_CLOUD_METADATA=off), failed, or the host isn't running on a
+	// supported cloud provider.
+	CloudInstanceID string `json:"cloud_instance_id,omitempty"`
+	// RemoteUpdate describes this agent's remote self-update opt-in and
+	// platform support (SPEC-v0.6 §2), reported on every ingest so the
+	// hub's Updates page always reflects the agent's current
+	// CP_REMOTE_UPDATE setting without a separate query.
+	RemoteUpdate RemoteUpdateCapability `json:"remote_update"`
 }
 
 // HostStatus is the liveness state of a host as seen by the hub.
@@ -177,4 +189,8 @@ type HostSummary struct {
 	// latest inventory, omitted when no inventory has been collected
 	// yet.
 	ListeningPorts *int `json:"listening_ports,omitempty"`
+	// Cost is this host's combined cloud-billing + network-estimate
+	// cost summary (SPEC-v0.6 §1/§3), omitted when billing is disabled
+	// or no cost data is available yet for this host.
+	Cost *HostCost `json:"cost,omitempty"`
 }

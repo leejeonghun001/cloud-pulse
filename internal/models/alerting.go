@@ -159,7 +159,14 @@ type Delivery struct {
 	OK          bool   `json:"ok"`
 	// Error is the delivery failure's message, empty when OK is true.
 	Error string `json:"error,omitempty"`
-	At    int64  `json:"at"`
+	// Diagnosis is a machine-readable classification of Error (SPEC-
+	// v0.6 §4's DiagnosisCode table), nil when OK is true or when no
+	// classifier was configured (e.g. an older build). Producers must
+	// never populate this from anything but a secret-free classifier
+	// (see internal/notify.DiagnoseError) — like Error, it is persisted
+	// and returned via GET /api/v1/alerts/events.
+	Diagnosis *DiagnosisCode `json:"diagnosis,omitempty"`
+	At        int64          `json:"at"`
 }
 
 // AlertEvent is one firing/resolved occurrence of an AlertRule against a

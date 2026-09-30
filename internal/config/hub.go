@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/leejeonghun001/cloud-pulse/internal/models"
 )
 
 // S3BucketConfig identifies one S3 bucket to collect statistics for.
@@ -76,6 +78,44 @@ type Hub struct {
 	// R2Buckets lists the R2 buckets to collect statistics for; empty
 	// means all buckets in the account.
 	R2Buckets []string
+
+	// Billing is "auto" (query whichever provider CLI is installed and
+	// authenticated) or "off" (disable cloud billing collection
+	// entirely). See SPEC-v0.6 §1.
+	Billing string
+	// BillingInterval is the initial cloud billing polling interval
+	// (6h|12h|24h); a hub-side "billing_interval" setting, once
+	// confirmed from the dashboard, takes precedence over this value at
+	// runtime.
+	BillingInterval models.BillingInterval
+	// BillingAWSResources enables per-resource AWS Cost Explorer
+	// queries (CP_BILLING_AWS_RESOURCES), which cost more and require
+	// the account to have opted into S3/EC2 resource-level Cost
+	// Explorer data. false (default) reports only account-level totals.
+	BillingAWSResources bool
+	// OCIConfigFile overrides the OCI CLI's config file path
+	// (OCI_CLI_CONFIG_FILE passed to the child process); empty uses the
+	// OCI CLI's own default (~/.oci/config under the child's HOME).
+	OCIConfigFile string
+	// OCIProfile overrides the OCI CLI's config profile
+	// (OCI_CLI_PROFILE); empty uses the OCI CLI's own default
+	// ("DEFAULT").
+	OCIProfile string
+	// OCITenancyID overrides the tenancy OCID used for OCI Usage API
+	// queries; empty uses the tenancy value from the OCI CLI's own
+	// config file.
+	OCITenancyID string
+	// BillingPATH overrides the minimal PATH passed to every aws/oci
+	// CLI child process (billing.Options.PATH), defaulting to
+	// billing.Collector's own "/usr/bin:/bin:/usr/local/bin" when
+	// empty. This exists so a test/smoke harness can point the
+	// collector at a directory containing fake aws/oci stub binaries
+	// without needing to touch the real PATH the hub process itself
+	// runs with — see scripts/smoke.sh's billing section and SPEC-v0.6
+	// §5. Not documented as a normal operator-facing setting since a
+	// real deployment should never need it (the CLI installed at the
+	// system-standard locations is what the default covers).
+	BillingPATH string
 }
 
 // DBPath returns the path to the hub's SQLite database file, inside
@@ -94,6 +134,15 @@ func (h Hub) S3Enabled() bool {
 // account ID and API token are present.
 func (h Hub) R2Enabled() bool {
 	return h.R2AccountID != "" && h.R2APIToken != ""
+}
+
+// BillingEnabled reports whether cloud billing collection should run at
+// all: Billing is not "off". Per-provider enablement (whether the aws/
+// oci CLI is actually installed and authenticated) is determined at
+// runtime by internal/billing, not by config alone — see SPEC-v0.6 §1's
+// "조용한 건너뛰기" (quiet-skip) behavior.
+func (h Hub) BillingEnabled() bool {
+	return h.Billing != "off"
 }
 
 // defaultAllowedCIDRs is the default CP_ALLOWED_CIDRS value: Tailscale's
@@ -170,7 +219,50 @@ func LoadHub(l LookupFunc) (Hub, error) {
 	h.R2APIToken = getString(l, "CP_R2_API_TOKEN", "")
 	h.R2Buckets = splitList(getString(l, "CP_R2_BUCKETS", ""))
 
+	h.Billing, err = loadBilling(l)
+	if err != nil {
+		return Hub{}, err
+	}
+	h.BillingInterval, err = loadBillingInterval(l)
+	if err != nil {
+		return Hub{}, err
+	}
+	h.BillingAWSResources, err = getBool(l, "CP_BILLING_AWS_RESOURCES", false)
+	if err != nil {
+		return Hub{}, err
+	}
+	h.OCIConfigFile = getString(l, "CP_OCI_CONFIG_FILE", "")
+	h.OCIProfile = getString(l, "CP_OCI_PROFILE", "")
+	h.OCITenancyID = getString(l, "CP_OCI_TENANCY_ID", "")
+	h.BillingPATH = getString(l, "CP_BILLING_PATH", "")
+
 	return h, nil
+}
+
+// loadBilling reads and validates CP_BILLING (auto|off,
+// case-insensitive), defaulting to "auto".
+func loadBilling(l LookupFunc) (string, error) {
+	v := strings.ToLower(getString(l, "CP_BILLING", "auto"))
+	switch v {
+	case "auto", "off":
+		return v, nil
+	default:
+		return "", fmt.Errorf("config: CP_BILLING must be one of auto|off, got %q", v)
+	}
+}
+
+// loadBillingInterval reads and validates CP_BILLING_INTERVAL (one of
+// models.BillingInterval6h/12h/24h), defaulting to
+// models.BillingIntervalDefault (24h). This is only the initial value;
+// a hub-side "billing_interval" setting confirmed from the dashboard
+// takes precedence at runtime (see SPEC-v0.6 §1).
+func loadBillingInterval(l LookupFunc) (models.BillingInterval, error) {
+	raw := getString(l, "CP_BILLING_INTERVAL", string(models.BillingIntervalDefault))
+	v := models.BillingInterval(strings.ToLower(raw))
+	if !models.ValidBillingInterval(v) {
+		return "", fmt.Errorf("config: CP_BILLING_INTERVAL must be one of 6h|12h|24h, got %q", raw)
+	}
+	return v, nil
 }
 
 // parseAllowedCIDRs parses a comma-separated list of CIDRs or bare IPs.

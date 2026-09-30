@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/leejeonghun001/cloud-pulse/internal/models"
 )
 
 func TestLoadHub_Defaults(t *testing.T) {
@@ -66,6 +68,27 @@ func TestLoadHub_Defaults(t *testing.T) {
 	}
 	if got, want := h.DBPath(), filepath.Join("data", "cloud-pulse.db"); got != want {
 		t.Errorf("DBPath() = %q, want %q", got, want)
+	}
+	if h.Billing != "auto" {
+		t.Errorf("Billing = %q, want auto", h.Billing)
+	}
+	if !h.BillingEnabled() {
+		t.Error("BillingEnabled() = false, want true (default)")
+	}
+	if h.BillingInterval != models.BillingInterval24h {
+		t.Errorf("BillingInterval = %q, want 24h", h.BillingInterval)
+	}
+	if h.BillingAWSResources {
+		t.Error("BillingAWSResources = true, want false (default)")
+	}
+	if h.OCIConfigFile != "" {
+		t.Errorf("OCIConfigFile = %q, want empty", h.OCIConfigFile)
+	}
+	if h.OCIProfile != "" {
+		t.Errorf("OCIProfile = %q, want empty", h.OCIProfile)
+	}
+	if h.OCITenancyID != "" {
+		t.Errorf("OCITenancyID = %q, want empty", h.OCITenancyID)
 	}
 }
 
@@ -526,5 +549,181 @@ func TestParseCIDROrIP_IPv4MappedIPv6(t *testing.T) {
 	addr := netip.MustParseAddr("::ffff:127.0.0.1")
 	if !addr.Is4In6() {
 		t.Fatal("expected ::ffff:127.0.0.1 to be Is4In6")
+	}
+}
+
+func TestLoadHub_Billing(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		value   string
+		want    string
+		wantErr bool
+	}{
+		{"default_auto", "", "auto", false},
+		{"explicit_auto", "auto", "auto", false},
+		{"upper_auto", "AUTO", "auto", false},
+		{"off", "off", "off", false},
+		{"invalid", "on", "", true},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			env := map[string]string{"CP_AGENT_TOKEN": "abcdefghijklmnop"}
+			if tc.value != "" {
+				env["CP_BILLING"] = tc.value
+			}
+			h, err := LoadHub(mapLookup(env))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("LoadHub() err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if !tc.wantErr && h.Billing != tc.want {
+				t.Errorf("Billing = %q, want %q", h.Billing, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadHub_BillingEnabled(t *testing.T) {
+	t.Parallel()
+
+	on, err := LoadHub(mapLookup(map[string]string{"CP_AGENT_TOKEN": "abcdefghijklmnop", "CP_BILLING": "auto"}))
+	if err != nil {
+		t.Fatalf("LoadHub: %v", err)
+	}
+	if !on.BillingEnabled() {
+		t.Error("BillingEnabled() = false for CP_BILLING=auto, want true")
+	}
+
+	off, err := LoadHub(mapLookup(map[string]string{"CP_AGENT_TOKEN": "abcdefghijklmnop", "CP_BILLING": "off"}))
+	if err != nil {
+		t.Fatalf("LoadHub: %v", err)
+	}
+	if off.BillingEnabled() {
+		t.Error("BillingEnabled() = true for CP_BILLING=off, want false")
+	}
+}
+
+func TestLoadHub_BillingInterval(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		value   string
+		want    models.BillingInterval
+		wantErr bool
+	}{
+		{"default_24h", "", models.BillingInterval24h, false},
+		{"6h", "6h", models.BillingInterval6h, false},
+		{"12h", "12h", models.BillingInterval12h, false},
+		{"24h", "24h", models.BillingInterval24h, false},
+		{"upper_case", "24H", models.BillingInterval24h, false},
+		{"invalid_1h", "1h", "", true},
+		{"invalid_48h", "48h", "", true},
+		{"invalid_garbage", "not-a-duration", "", true},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			env := map[string]string{"CP_AGENT_TOKEN": "abcdefghijklmnop"}
+			if tc.value != "" {
+				env["CP_BILLING_INTERVAL"] = tc.value
+			}
+			h, err := LoadHub(mapLookup(env))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("LoadHub() err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if !tc.wantErr && h.BillingInterval != tc.want {
+				t.Errorf("BillingInterval = %q, want %q", h.BillingInterval, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadHub_BillingAWSResources(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		value   string
+		want    bool
+		wantErr bool
+	}{
+		{"default_off", "", false, false},
+		{"on", "on", false, true}, // strconv.ParseBool doesn't accept "on"
+		{"true", "true", true, false},
+		{"1", "1", true, false},
+		{"false", "false", false, false},
+		{"invalid", "yes", false, true},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			env := map[string]string{"CP_AGENT_TOKEN": "abcdefghijklmnop"}
+			if tc.value != "" {
+				env["CP_BILLING_AWS_RESOURCES"] = tc.value
+			}
+			h, err := LoadHub(mapLookup(env))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("LoadHub() err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if !tc.wantErr && h.BillingAWSResources != tc.want {
+				t.Errorf("BillingAWSResources = %v, want %v", h.BillingAWSResources, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadHub_OCISettings(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{
+		"CP_AGENT_TOKEN":     "abcdefghijklmnop",
+		"CP_OCI_CONFIG_FILE": "/etc/cloud-pulse/oci-config",
+		"CP_OCI_PROFILE":     "CUSTOM",
+		"CP_OCI_TENANCY_ID":  "ocid1.tenancy.oc1..aaaaaaaaexample",
+	}
+	h, err := LoadHub(mapLookup(env))
+	if err != nil {
+		t.Fatalf("LoadHub: %v", err)
+	}
+	if h.OCIConfigFile != "/etc/cloud-pulse/oci-config" {
+		t.Errorf("OCIConfigFile = %q", h.OCIConfigFile)
+	}
+	if h.OCIProfile != "CUSTOM" {
+		t.Errorf("OCIProfile = %q", h.OCIProfile)
+	}
+	if h.OCITenancyID != "ocid1.tenancy.oc1..aaaaaaaaexample" {
+		t.Errorf("OCITenancyID = %q", h.OCITenancyID)
+	}
+}
+
+// TestLoadHub_BillingPATH verifies the test/smoke-only CP_BILLING_PATH
+// override (billing.Options.PATH passthrough) is read as a plain
+// string, empty by default.
+func TestLoadHub_BillingPATH(t *testing.T) {
+	t.Parallel()
+
+	h, err := LoadHub(mapLookup(map[string]string{"CP_AGENT_TOKEN": "abcdefghijklmnop"}))
+	if err != nil {
+		t.Fatalf("LoadHub: %v", err)
+	}
+	if h.BillingPATH != "" {
+		t.Errorf("BillingPATH = %q, want empty by default", h.BillingPATH)
+	}
+
+	h2, err := LoadHub(mapLookup(map[string]string{
+		"CP_AGENT_TOKEN":  "abcdefghijklmnop",
+		"CP_BILLING_PATH": "/tmp/fake-cli-stubs",
+	}))
+	if err != nil {
+		t.Fatalf("LoadHub: %v", err)
+	}
+	if h2.BillingPATH != "/tmp/fake-cli-stubs" {
+		t.Errorf("BillingPATH = %q, want /tmp/fake-cli-stubs", h2.BillingPATH)
 	}
 }
