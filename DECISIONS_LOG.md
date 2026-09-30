@@ -1595,3 +1595,132 @@ never rewrite history here, only add to it.
   not checked against the catalog (can't be, statically) and is not
   flagged as hard-coded either, a known gap accepted rather than
   chasing false negatives with more regex complexity.
+
+### D-089 — `GET /api/v1/fleet/versions` and `GET /api/v1/agents/updates/batches` use `requireUser`, not `requireAdmin` (2026-10-01)
+
+- **Context**: SPEC-v0.8 §3-1's rollout dashboard needed to decide
+  which auth tier its two new read-only endpoints sit at. Every
+  *mutating* remote-update endpoint (`POST /api/v1/agents/updates`,
+  its `/retry`/`/cancel` actions) is `requireAdmin` — creating or
+  altering update batches is an administrative action with real
+  side effects on managed infrastructure. But `GET
+  /api/v1/fleet/versions` and `GET /api/v1/agents/updates/batches`
+  are pure reads.
+- **Decision**: Both new endpoints use `requireUser` (any signed-in
+  account), matching the existing precedent set by `GET /api/v1/hosts`,
+  `GET /api/v1/alerts/events`, `GET /api/v1/storage/accounts`, and
+  every other read-only fleet-wide `GET` route already in the codebase
+  — the hub's established pattern is "read access is available to any
+  signed-in user; only mutations require admin." Neither new endpoint
+  discloses anything a signed-in user couldn't already piece together
+  from `GET /api/v1/hosts` (agent version, OS, remote-update capability
+  are already present there) or `GET /api/v1/agents/updates?batch=`
+  (already `requireAdmin` for the per-job detail view, but the
+  *existence* of a batch and its aggregate counts are not more
+  sensitive than the per-job list a non-admin already can't see) —
+  they only aggregate and present that data differently.
+- **Consequences**: A non-admin signed-in user can see the fleet's
+  version distribution and batch history on the Rollout dashboard, but
+  cannot create, retry, or cancel anything — matching how the rest of
+  the dashboard already splits "look" from "touch." If a future
+  requirement narrows read access to admins only, both routes would
+  need to switch to `requireAdmin` together, since the dashboard page
+  itself doesn't currently branch its own auth-tier assumptions per
+  endpoint.
+
+### D-090 — Rollout alert metrics reuse `alert_state`/`AlertEvent` with a synthetic scope ID, not new tables (2026-10-01)
+
+- **Context**: SPEC-v0.8 §3-1 needed two new alert kinds:
+  `agent_outdated` (host-scoped, needs sustained-duration + cooldown +
+  resolve semantics identical to every existing host-scoped metric) and
+  `update_batch_failed` (batch-scoped, fires exactly once per batch,
+  never resolves). Neither maps cleanly onto a host or a real per-rule
+  duration column without extending the schema, but `internal/alerting`
+  already had a working precedent: SPEC-v0.7 §3's `storage_usage_pct`
+  repurposes `AlertRule.HostID`/`alert_state.host_id` to hold a storage
+  account's ID instead of a real host ID (see D-0xx in the storage
+  section and `storageusage.go`'s own doc comments), reusing the
+  existing state machine and table rather than adding
+  `alert_state_by_account`.
+- **Decision**: `agent_outdated` is host-scoped in the literal sense
+  (its `HostID` really is a host ID, no repurposing needed) and simply
+  slots into the existing `Evaluate`-style state machine
+  (`EvaluateAgentOutdated` in `internal/alerting/rollout.go`), deriving
+  its "satisfied" value from a hub-computed `OutdatedSince` timestamp
+  rather than a queried time series — mirroring `host_down`'s own
+  liveness-timestamp-derived value (`hostDownValue`) rather than
+  inventing a third sustained-window mechanism.
+  `update_batch_failed` goes further: it bypasses the ok/pending/firing
+  state machine entirely (there is no "pending" or "resolved" for an
+  already-finished batch) and instead uses a single `alert_state` row,
+  keyed by `(rule_id, batch_id)` with `batch_id` standing in for
+  `host_id` exactly like `storage_usage_pct`'s account-ID repurposing,
+  purely as an idempotency marker: `State == firing` means "already
+  notified for this batch," checked and set inside
+  `EvaluateUpdateBatch` without ever transitioning through `pending`.
+- **Consequences**: No new migration section, no new store methods —
+  both metrics ride entirely on `ListAlertRules`/`GetAlertState`/
+  `SetAlertState`/`CreateAlertEvent`/`UpdateAlertEvent`, the same
+  interface every other metric already depends on
+  (`internal/alerting/store.go`'s `Store` interface needed zero
+  changes). This is a deliberate repeated pattern now: any future
+  alert metric that doesn't cleanly fit "one host, one sustained
+  numeric condition" should look at repurposing `alert_state`'s
+  `(rule_id, host_id)` key with a synthetic scope ID before reaching
+  for a new table — three metrics (`storage_usage_pct`,
+  `agent_outdated`'s scope reuse is trivial/literal, and
+  `update_batch_failed`'s idempotency-only reuse) now demonstrate the
+  range of what this key can stand in for. The tradeoff is that a
+  `alert_state`/`AlertEvent` row's `host_id`/`hostname` fields no
+  longer always mean literally "a host" — `internal/alerting`'s own
+  doc comments (and this entry) are the source of truth for decoding
+  which repurposing applies to which metric.
+
+### D-091 — Discovered and fixed a `GIT_DIR`/`GIT_WORK_TREE` env leak in two test suites' git subprocess helpers (2026-10-01)
+
+- **Context**: While working in a `git worktree`-based checkout (every
+  SPEC-v0.8 Part B feature-stage worktree, including this one), running
+  this project's own `.githooks/pre-commit` hook (which runs `python3
+  -m unittest discover -s scripts/tests` as one of its checks)
+  repeatedly and reproducibly overwrote the current worktree's own
+  branch ref with unrelated throwaway commits ("chore: init project" /
+  "feat: add widget support" / "fix: correct widget overflow") —
+  observed independently across multiple parallel worktrees during this
+  session, confirming it wasn't specific to one checkout.
+- **Root cause**: git unconditionally sets `GIT_DIR`, `GIT_WORK_TREE`,
+  and `GIT_INDEX_FILE` in the environment of every hook process it
+  invokes (standard git behavior, especially consequential for a
+  worktree checkout, where `GIT_DIR` points at
+  `.git/worktrees/<name>` rather than a plain `.git`). Two test
+  helpers — `scripts/tests/test_release_notes.py`'s `run_git`/
+  `run_release_notes` and `scripts/tests/test_prepublish_check.py`'s
+  `_run_git` (plus `scripts/prepublish-check.py`'s own `_git`/log-
+  streaming/blob-scan subprocess calls, used by the latter test file)
+  — built their subprocess calls' environment from a plain
+  `dict(os.environ)`/inherited-env copy and relied on `-C <dir>` /
+  `cwd=<dir>` alone to target their own disposable temp-directory git
+  fixtures. Git honors an inherited `GIT_DIR` over `-C`'s directory-
+  based discovery, so every such subprocess silently operated on the
+  *hook's own* worktree instead of the intended fixture — reproduced
+  directly by invoking either test file with `GIT_DIR`/`GIT_WORK_TREE`/
+  `GIT_INDEX_FILE` manually set to a worktree's own paths.
+- **Decision**: Both test files' git-subprocess helpers, and all three
+  call sites in `prepublish-check.py`, now explicitly strip `GIT_DIR`/
+  `GIT_WORK_TREE`/`GIT_INDEX_FILE`/`GIT_OBJECT_DIRECTORY`/
+  `GIT_COMMON_DIR`/`GIT_CEILING_DIRECTORIES` (plus, for
+  `test_release_notes.py` specifically, the `GIT_AUTHOR_*`/
+  `GIT_COMMITTER_*` identity/date variables git also sets for the
+  commit-in-progress, which were separately corrupting the fixture's
+  own deterministic commit timeline) from the subprocess environment
+  before invoking `git`.
+- **Consequences**: Re-running both test files with the exact poisoned
+  environment observed from a real hook invocation now leaves the
+  worktree's branch ref untouched and every test passes. This fix
+  landed early in the rollout stage's own worktree and is a repo-wide
+  correctness fix, not scoped to SPEC-v0.8 §3-1 — flagged here (rather
+  than only in the rollout stage's own commit message) since the same
+  latent bug could otherwise resurface in any future test helper that
+  shells out to `git` against a disposable fixture directory without
+  the same environment scrub. Any new git-subprocess test helper added
+  in this codebase should sanitize the same variable set up front
+  rather than rediscovering this the hard way.

@@ -12,18 +12,25 @@ for channel setup and real-account verification.
 An `AlertRule` has:
 
 - **Metric**: `cpu` | `memory` | `disk` | `load1` | `egress_out_pct` |
-  `egress_in_pct` | `host_down` | `storage_usage_pct`.
+  `egress_in_pct` | `host_down` | `storage_usage_pct` |
+  `agent_outdated` | `update_batch_failed` (the last two are SPEC-v0.8
+  §3-1's rollout alerts — see their own section below).
 - **Scope**: a specific host (or account, for `storage_usage_pct` — see
   [storage.md](storage.md#polling-and-alerting)), or `""` for "every
-  host/account."
+  host/account." `update_batch_failed` has no scope at all — it always
+  applies to every remote-update batch.
 - **Operator/threshold**: `>` or `>=` against the metric's own unit
   (percent for cpu/memory/disk/egress/storage; a raw load-average
-  number for `load1`; ignored for `host_down`).
+  number for `load1`; ignored for `host_down`/`agent_outdated`/
+  `update_batch_failed`, which are duration- or event-based rather than
+  threshold-based).
 - **Duration** (`duration_sec`): the sustained window the condition
   must hold for. `0` fires immediately on the first breaching sample.
   For `host_down`, the effective offline threshold is
-  `CP_OFFLINE_AFTER + duration_sec`. Not used for
-  `egress_*`/`storage_usage_pct`.
+  `CP_OFFLINE_AFTER + duration_sec`. For `agent_outdated`, it's "behind
+  the latest release for at least this long" (default 14 days when
+  left at `0` — see below). Not used for `egress_*`/
+  `storage_usage_pct`/`update_batch_failed`.
 - **Cooldown** (`cooldown_sec`, default `3600`): the minimum time
   between re-notifications while a rule keeps firing on the same
   host/account. `0` means notify once on firing and never again until
@@ -74,17 +81,69 @@ set — only a new UTC calendar month resets eligibility.
 default to a once-per-day re-notification cadence via
 `cooldown_sec`.
 
+## Rollout alerts (SPEC-v0.8 §3-1)
+
+Two rule kinds tied to the [Rollout dashboard](remote-updates.md#rollout-dashboard-spec-v08-3-1)
+rather than a host's own metrics:
+
+### `agent_outdated`
+
+Host-scoped, using the same ok → pending → firing → resolved state
+machine every other host-scoped metric uses (state.go): a host is
+"satisfied" once it has been behind the fleet's latest known release
+for at least `duration_sec` (default 14 days, applied when left at
+`0` — mirrors `host_down`'s own default-application convention). Fires
+once per host, respects `cooldown_sec` for "still outdated" reminders,
+and resolves (with an optional notification, per `notify_resolved`)
+once the host catches up. Preset: "Agent behind latest release for 14
+days."
+
+The "how long has this host been outdated" figure comes from the
+Rollout dashboard's own in-memory tracking (see
+[remote-updates.md](remote-updates.md#outdated-status-and-behind-for)),
+not a stored history table — a hub restart resets the clock for a host
+still outdated at that point, exactly like `agent_outdated`'s own
+sustained-window check has no separate persistence of its own beyond
+the regular `alert_state` row.
+
+### `update_batch_failed`
+
+Batch-scoped, not host- or account-scoped — `host_id`/`threshold`/
+`duration_sec`/`cooldown_sec`/`notify_resolved` are all ignored. Fires
+**exactly once** when a remote-update batch finishes (every job
+terminal) with at least one failure; a batch that finishes with zero
+failures, or is still in progress, never fires. There is no "resolved"
+state for this metric — a finished batch's outcome is immutable, so
+once notified it is never re-evaluated again (idempotency is tracked
+via the same `alert_state` table every other metric uses, keyed by a
+synthetic scope ID equal to the batch ID — this survives a hub restart
+without a dedicated table). Preset: "Remote update batch has a
+failure."
+
+The notification message lists every failed host and its failure
+reason (see [remote-updates.md](remote-updates.md#statuses-and-failure-reasons)
+for the reason vocabulary); the attached image is a stacked
+success/failure bar chart (`internal/alerting/chart.RenderBars`),
+grouped by OS/failure-reason, rather than the time-series line chart
+every other metric's chart image uses (there is no time series for a
+batch outcome — see the next section).
+
 ## Chart images
 
 Every firing/resolved notification for a series-backed metric (cpu,
-memory, disk, load1 — egress, host_down, and storage_usage_pct have no
-queryable time series and correctly ship with no image) includes an
-800x400 PNG chart (`internal/alerting/chart`, standard library
-`image/png` only, no font or charting dependency): a dark background,
-the metric's line over `max(duration_sec * 3, 1h)` of history, a
-dashed red threshold line, a shaded band over the breach window, axis
-ticks, and a title like `HOSTNAME · CPU 93.4% > 90% for 5m`. Rendering
-is deterministic (covered by a golden-hash test).
+memory, disk, load1 — egress, host_down, storage_usage_pct, and
+agent_outdated have no queryable time series and correctly ship with
+no image) includes an 800x400 PNG line chart (`internal/alerting/chart`,
+standard library `image/png` only, no font or charting dependency): a
+dark background, the metric's line over `max(duration_sec * 3, 1h)` of
+history, a dashed red threshold line, a shaded band over the breach
+window, axis ticks, and a title like `HOSTNAME · CPU 93.4% > 90% for
+5m`. `update_batch_failed`'s notification instead attaches a stacked
+success/failure **bar** chart (`chart.RenderBars`, same PNG pipeline
+and bitmap font, no time axis — see its own section above). Both
+renderers are deterministic (covered by golden-hash tests hashing
+decoded pixels, not encoded bytes, since PNG's zlib output isn't
+stable across Go toolchains).
 
 Chart text (axis labels, legends, titles) is always rendered in
 English, regardless of the hub's `notify_language` setting (SPEC-v0.8
@@ -117,3 +176,9 @@ and `GET /api/v1/alerts/active` (any signed-in user). A validation
 failure on any rule/channel `POST`/`PUT` responds `400` with
 `APIError.details` — a `field -> message` map — so the Settings UI can
 highlight the offending form field directly.
+
+`agent_outdated` is evaluated on the same 30-second scheduler tick as
+every other host-scoped metric. `update_batch_failed` runs on its own
+1-minute scan independent of that tick (batch completion isn't tied to
+any single host's report), scanning every batch's job list for one
+that just finished with a failure it hasn't notified yet.
