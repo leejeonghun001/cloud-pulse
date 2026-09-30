@@ -13,6 +13,8 @@ import { createDialog, buildDialogActions } from "../ui/dialog.js";
 import { isPasswordValid } from "../core/password-policy.js";
 import { login, changePassword, ApiError, RateLimitError } from "../core/api.js";
 import { setSessionToken } from "../core/auth.js";
+import { t, htmlLang } from "../core/i18n.js";
+import { languageSelector } from "../ui/language-select.js";
 import { showToast } from "../ui/toast.js";
 
 /**
@@ -26,6 +28,7 @@ import { showToast } from "../ui/toast.js";
  */
 export function mountLoginPage(container, { onLoggedIn }) {
   clearChildren(container);
+  document.documentElement.lang = htmlLang();
 
   const page = el("div", { class: "cp-auth-page" });
   const card = el("div", { class: "cp-auth-card" });
@@ -33,12 +36,12 @@ export function mountLoginPage(container, { onLoggedIn }) {
   const brand = el("div", { class: "cp-auth-brand" });
   brand.append(icon("activity"), el("h1", { text: "cloud-pulse" }));
   card.append(brand);
-  card.append(el("p", { class: "cp-page-subtitle", text: "Sign in to your hub", attrs: { style: "text-align:center" } }));
+  card.append(el("p", { class: "cp-page-subtitle", text: t("login.subtitle"), attrs: { style: "text-align:center" } }));
 
   const form = el("form", { class: "cp-auth-form" });
 
   const usernameField = el("div", { class: "cp-field" });
-  usernameField.append(el("label", { class: "cp-label", attrs: { for: "cp-login-username" }, text: "Username" }));
+  usernameField.append(el("label", { class: "cp-label", attrs: { for: "cp-login-username" }, text: t("login.username_label") }));
   const usernameInput = /** @type {HTMLInputElement} */ (
     el("input", {
       class: "cp-input",
@@ -50,7 +53,7 @@ export function mountLoginPage(container, { onLoggedIn }) {
 
   const { node: pwNode, input: passwordInput } = passwordField({
     id: "cp-login-password",
-    label: "Password",
+    label: t("login.password_label"),
     autocomplete: "current-password",
   });
   form.append(pwNode);
@@ -60,13 +63,27 @@ export function mountLoginPage(container, { onLoggedIn }) {
 
   const submitRow = el("div", { class: "cp-auth-submit-row" });
   const submitBtn = /** @type {HTMLButtonElement} */ (
-    el("button", { class: "cp-btn cp-btn-primary cp-btn-block", attrs: { type: "submit" }, text: "Sign in" })
+    el("button", { class: "cp-btn cp-btn-primary cp-btn-block", attrs: { type: "submit" }, text: t("login.sign_in") })
   );
   submitRow.append(submitBtn);
   form.append(submitRow);
 
   card.append(form);
-  card.append(el("p", { class: "cp-auth-footer", text: "cloud-pulse hub" }));
+
+  const langRow = el("div", { class: "cp-auth-language-row" });
+  const { node: langNode } = languageSelector({
+    onChange: () => {
+      // Cheap to re-render in place: the login page owns no
+      // in-flight requests or timers worth preserving across a
+      // language switch (unlike an authenticated page's auto-refresh
+      // loop), so a full remount is simplest and correct.
+      mountLoginPage(container, { onLoggedIn });
+    },
+  });
+  langRow.append(langNode);
+  card.append(langRow);
+
+  card.append(el("p", { class: "cp-auth-footer", text: t("login.footer") }));
   page.append(card);
   container.append(page);
 
@@ -82,9 +99,9 @@ export function mountLoginPage(container, { onLoggedIn }) {
     submitBtn.disabled = submitting;
     clearChildren(submitBtn);
     if (submitting) {
-      submitBtn.append(el("span", { class: "cp-spinner" }), el("span", { text: "Signing in…" }));
+      submitBtn.append(el("span", { class: "cp-spinner" }), el("span", { text: t("login.signing_in") }));
     } else {
-      submitBtn.textContent = "Sign in";
+      submitBtn.textContent = t("login.sign_in");
     }
   }
 
@@ -93,7 +110,7 @@ export function mountLoginPage(container, { onLoggedIn }) {
     let remaining = Math.max(1, Math.round(seconds));
     submitBtn.disabled = true;
     const render = () => {
-      errorEl.textContent = `Too many attempts. Try again in ${remaining}s.`;
+      errorEl.textContent = t("login.rate_limited", { seconds: remaining });
     };
     render();
     countdownTimer = setInterval(() => {
@@ -129,9 +146,9 @@ export function mountLoginPage(container, { onLoggedIn }) {
       if (err instanceof RateLimitError) {
         startRateLimitCountdown(err.retryAfterSeconds || 60);
       } else if (err instanceof ApiError) {
-        errorEl.textContent = err.code === "invalid_credentials" ? "Invalid username or password." : err.message;
+        errorEl.textContent = err.code === "invalid_credentials" ? t("login.invalid_credentials") : err.message;
       } else {
-        errorEl.textContent = "Unable to reach the hub. Check your connection and try again.";
+        errorEl.textContent = t("login.unreachable");
       }
     } finally {
       if (!countdownTimer) setSubmitting(false);
@@ -163,8 +180,8 @@ export function mountLoginPage(container, { onLoggedIn }) {
 export function openForcedChangeModal({ currentPassword, onDone }) {
   const { dialog, body, open, close } = createDialog({
     titleId: "cp-forced-change-title",
-    title: "Set a new password",
-    description: "You're signing in with the default password. Choose a new one to continue.",
+    title: t("login.forced_change_title"),
+    description: t("login.forced_change_description"),
     nonDismissable: true,
   });
 
@@ -174,19 +191,19 @@ export function openForcedChangeModal({ currentPassword, onDone }) {
   const needsCurrent = !currentPassword;
   let currentInput = null;
   if (needsCurrent) {
-    const { node, input } = passwordField({ id: "cp-forced-current", label: "Current password", autocomplete: "current-password" });
+    const { node, input } = passwordField({ id: "cp-forced-current", label: t("login.current_password_label"), autocomplete: "current-password" });
     form.append(node);
     currentInput = input;
   }
 
   const { node: newNode, input: newInput } = passwordField({
     id: "cp-forced-new",
-    label: "New password",
+    label: t("login.new_password_label"),
     autocomplete: "new-password",
   });
   const { node: confirmNode, input: confirmInput } = passwordField({
     id: "cp-forced-confirm",
-    label: "Confirm new password",
+    label: t("login.confirm_password_label"),
     autocomplete: "new-password",
   });
   form.append(newNode, confirmNode);
@@ -199,7 +216,7 @@ export function openForcedChangeModal({ currentPassword, onDone }) {
   form.append(errorEl);
 
   const submitBtn = /** @type {HTMLButtonElement} */ (
-    el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "submit" }, text: "Set password" })
+    el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "submit" }, text: t("login.set_password") })
   );
   form.append(buildDialogActions([submitBtn]));
 
@@ -218,11 +235,11 @@ export function openForcedChangeModal({ currentPassword, onDone }) {
     errorEl.textContent = "";
     const cur = needsCurrent ? currentInput.value : currentPassword;
     if (!isPasswordValid(newInput.value, cur)) {
-      errorEl.textContent = "Please satisfy every password requirement.";
+      errorEl.textContent = t("login.password_requirements_unmet");
       return;
     }
     if (newInput.value !== confirmInput.value) {
-      errorEl.textContent = "Passwords do not match.";
+      errorEl.textContent = t("login.passwords_do_not_match");
       return;
     }
     submitBtn.disabled = true;
@@ -230,13 +247,13 @@ export function openForcedChangeModal({ currentPassword, onDone }) {
       const resp = await changePassword(cur, newInput.value);
       setSessionToken(resp.token);
       close();
-      showToast({ message: "Password updated.", variant: "success" });
+      showToast({ message: t("login.password_updated"), variant: "success" });
       onDone(resp);
     } catch (err) {
       if (err instanceof ApiError) {
-        errorEl.textContent = err.code === "invalid_credentials" ? "Current password is incorrect." : err.message;
+        errorEl.textContent = err.code === "invalid_credentials" ? t("login.current_password_incorrect") : err.message;
       } else {
-        errorEl.textContent = "Unable to reach the hub. Try again.";
+        errorEl.textContent = t("login.unreachable_retry");
       }
     } finally {
       submitBtn.disabled = false;

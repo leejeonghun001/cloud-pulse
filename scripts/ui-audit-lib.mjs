@@ -246,13 +246,19 @@ export function violationKey(checkId, routeKey) {
 }
 
 /**
- * buildRouteKey builds the canonical route/viewport/theme identity string
- * used both as a report grouping key and as an allow-list match key.
- * @param {{route:string, viewport:string, theme:string}} input
+ * buildRouteKey builds the canonical route/viewport/theme(/lang) identity
+ * string used both as a report grouping key and as an allow-list match
+ * key. lang is omitted from the key entirely when not provided (or
+ * equal to the tool's implicit single-language default), so every
+ * pre-v0.8 allow-list entry (route@viewport@theme, no lang segment)
+ * keeps matching unchanged — only a multi-language run (--langs with
+ * more than one language) produces route@viewport@theme@lang keys.
+ * @param {{route:string, viewport:string, theme:string, lang?:string}} input
  * @returns {string}
  */
-export function buildRouteKey({ route, viewport, theme }) {
-  return `${route}@${viewport}@${theme}`;
+export function buildRouteKey({ route, viewport, theme, lang }) {
+  const base = `${route}@${viewport}@${theme}`;
+  return lang ? `${base}@${lang}` : base;
 }
 
 /**

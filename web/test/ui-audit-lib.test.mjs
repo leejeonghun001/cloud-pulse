@@ -200,6 +200,13 @@ test("violationKey/buildRouteKey: stable composition", () => {
   assert.equal(violationKey("contrast", routeKey), "contrast:#/settings/billing@360x800@dark");
 });
 
+test("buildRouteKey: appends a lang segment only when provided", () => {
+  const withLang = buildRouteKey({ route: "#/", viewport: "390x844", theme: "light", lang: "ko" });
+  assert.equal(withLang, "#/@390x844@light@ko");
+  const withoutLang = buildRouteKey({ route: "#/", viewport: "390x844", theme: "light" });
+  assert.equal(withoutLang, "#/@390x844@light");
+});
+
 test("parseViewportSpec: parses WxH", () => {
   assert.deepEqual(parseViewportSpec("390x844"), { width: 390, height: 844, label: "390x844" });
 });

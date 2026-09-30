@@ -1,0 +1,94 @@
+{
+  "common": {
+    "app_name": "cloud-pulse",
+    "cancel": "Cancel",
+    "save": "Save",
+    "close": "Close",
+    "loading": "Loading…",
+    "sign_out": "Sign out",
+    "language": "Language",
+    "language_auto": "Auto",
+    "language_en": "English",
+    "language_ko": "한국어"
+  },
+  "nav": {
+    "overview": "Overview",
+    "alerts": "Alerts",
+    "alerts_firing": "Alerts, {count} firing",
+    "alerts_firing_count": "{count} firing",
+    "no_active_alerts": "No active alerts.",
+    "view_all": "View all",
+    "costs": "Costs",
+    "rollout": "Rollout",
+    "settings": "Settings",
+    "search_placeholder": "Search…",
+    "open_command_palette": "Open command palette",
+    "primary": "Primary",
+    "toggle_theme": "Toggle theme",
+    "theme_label": "Theme: {theme}",
+    "user_menu": "User menu",
+    "change_password": "Change password",
+    "add_agent": "Add agent",
+    "more_actions": "More actions",
+    "skip_to_main": "Skip to main content",
+    "update_command_copied": "Update command copied to clipboard.",
+    "add_agent_dialog_title": "Add an agent",
+    "add_agent_dialog_description": "Run this on the host you want to monitor:",
+    "operating_system": "Operating system",
+    "copy_command": "Copy command",
+    "install_command_copied": "Install command copied.",
+    "copy_failed_manual": "Could not copy automatically — select and copy manually."
+  },
+  "login": {
+    "title": "cloud-pulse",
+    "subtitle": "Sign in to your hub",
+    "username_label": "Username",
+    "password_label": "Password",
+    "sign_in": "Sign in",
+    "signing_in": "Signing in…",
+    "invalid_credentials": "Invalid username or password.",
+    "unreachable": "Unable to reach the hub. Check your connection and try again.",
+    "rate_limited": "Too many attempts. Try again in {seconds}s.",
+    "footer": "cloud-pulse hub",
+    "forced_change_title": "Set a new password",
+    "forced_change_description": "You're signing in with the default password. Choose a new one to continue.",
+    "current_password_label": "Current password",
+    "new_password_label": "New password",
+    "confirm_password_label": "Confirm new password",
+    "set_password": "Set password",
+    "password_requirements_unmet": "Please satisfy every password requirement.",
+    "passwords_do_not_match": "Passwords do not match.",
+    "password_updated": "Password updated.",
+    "current_password_incorrect": "Current password is incorrect.",
+    "unreachable_retry": "Unable to reach the hub. Try again."
+  },
+  "overview": {
+    "title": "Overview"
+  },
+  "host": {
+    "title": "Host"
+  },
+  "alerts": {
+    "title": "Alerts"
+  },
+  "costs": {
+    "title": "Costs"
+  },
+  "rollout": {
+    "title": "Rollout",
+    "placeholder": "The fleet rollout dashboard is coming soon."
+  },
+  "settings": {
+    "title": "Settings",
+    "subtitle": "Manage the hub, its network access, and your account."
+  },
+  "health": {
+    "title": "Health"
+  },
+  "errors": {
+    "generic": "Something went wrong. Please try again.",
+    "session_expired": "Session expired. Please sign in again.",
+    "please_sign_in": "Please sign in.",
+    "add_agent_sign_in_required": "Sign in as admin to reveal the install command, or use the Settings page."
+  }
+}

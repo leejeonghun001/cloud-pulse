@@ -3,6 +3,8 @@
 // interval), and an Appearance theme selector.
 import { el, clearChildren } from "../../ui/components.js";
 import { selectField } from "../../ui/select.js";
+import { languageSelector } from "../../ui/language-select.js";
+import { t } from "../../core/i18n.js";
 import { formatRelativeTimeFromUnixSeconds } from "../../core/format.js";
 import { hubInfoUpdateFields } from "../../core/updates.js";
 import { getSettings, getVersion } from "../../core/api.js";
@@ -40,6 +42,7 @@ export function mountGeneralSection(container, { announce }) {
     container.append(versionCard(view, versionInfo));
     container.append(hubInfoCard(view));
     container.append(appearanceCard({ announce }));
+    container.append(languageCard({ announce, onLanguageChange: refresh }));
   }
 
   function teardown() {
@@ -143,6 +146,32 @@ function appearanceCard({ announce }) {
     announce(`Theme set to ${select.value}.`);
   });
 
+  card.append(node);
+  return card;
+}
+
+/**
+ * languageCard renders the dashboard language selector (SPEC-v0.8
+ * §3-3): Auto / English / 한국어, persisted to localStorage "cp_lang".
+ * Switching re-renders the General section in place via
+ * onLanguageChange (this section has no other in-flight state worth
+ * preserving, so a full section refresh — not a full page reload — is
+ * the cheap option here).
+ * @param {Object} opts
+ * @param {(text: string) => void} opts.announce
+ * @param {() => void} opts.onLanguageChange
+ * @returns {HTMLElement}
+ */
+function languageCard({ announce, onLanguageChange }) {
+  const card = el("div", { class: "cp-card" });
+  card.append(el("h2", { class: "cp-card-title", text: t("common.language") }));
+
+  const { node } = languageSelector({
+    onChange: () => {
+      announce(t("common.language"));
+      onLanguageChange();
+    },
+  });
   card.append(node);
   return card;
 }

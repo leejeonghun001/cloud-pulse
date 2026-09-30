@@ -13,6 +13,7 @@ import { getStoredTheme, setStoredTheme, applyTheme, cycleTheme } from "../core/
 import { registerGlobalShortcuts } from "../core/shortcuts.js";
 import { logout } from "../core/api.js";
 import { clearSessionToken } from "../core/auth.js";
+import { t } from "../core/i18n.js";
 import { showToast } from "./toast.js";
 
 /**
@@ -36,7 +37,7 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
   const app = el("div", { class: "cp-app" });
 
   const header = el("header", { class: "cp-shell-header" });
-  const navbar = el("nav", { class: "cp-navbar", attrs: { "aria-label": "Primary" } });
+  const navbar = el("nav", { class: "cp-navbar", attrs: { "aria-label": t("nav.primary") } });
 
   const brand = el("a", { class: "cp-navbar-brand", attrs: { href: "#/" } });
   brand.append(icon("activity"), el("span", { class: "cp-navbar-wordmark", text: "cloud-pulse" }));
@@ -44,11 +45,11 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
 
   const searchBtn = el("button", {
     class: "cp-navbar-search",
-    attrs: { type: "button", "aria-label": "Open command palette" },
+    attrs: { type: "button", "aria-label": t("nav.open_command_palette") },
   });
   searchBtn.append(
     icon("search"),
-    el("span", { class: "cp-navbar-search-label", text: "Search…" }),
+    el("span", { class: "cp-navbar-search-label", text: t("nav.search_placeholder") }),
     el("kbd", { class: "cp-kbd", text: "Ctrl K" }),
   );
   navbar.append(searchBtn);
@@ -57,7 +58,7 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
 
   let activeAlertEvents = [];
   const bellBtn = /** @type {HTMLButtonElement} */ (
-    el("button", { class: "cp-icon-btn cp-navbar-bell", attrs: { type: "button", "aria-label": "Alerts" } })
+    el("button", { class: "cp-icon-btn cp-navbar-bell", attrs: { type: "button", "aria-label": t("nav.alerts") } })
   );
   const bellBadge = el("span", { class: "cp-navbar-bell-badge", attrs: { "aria-hidden": "true" } });
   bellBadge.hidden = true;
@@ -69,13 +70,13 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
   });
 
   const themeBtn = /** @type {HTMLButtonElement} */ (
-    el("button", { class: "cp-icon-btn", attrs: { type: "button", "aria-label": "Toggle theme" } })
+    el("button", { class: "cp-icon-btn", attrs: { type: "button", "aria-label": t("nav.toggle_theme") } })
   );
   function renderThemeIcon() {
     clearChildren(themeBtn);
     const pref = getStoredTheme();
     const iconName = pref === "dark" ? "moon" : pref === "light" ? "sun" : "monitor";
-    themeBtn.append(icon(iconName, { title: `Theme: ${pref}` }));
+    themeBtn.append(icon(iconName, { title: t("nav.theme_label", { theme: pref }) }));
   }
   renderThemeIcon();
   themeBtn.addEventListener("click", () => {
@@ -89,13 +90,13 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
 
   const settingsLink = el("a", {
     class: "cp-icon-btn cp-navbar-settings-link",
-    attrs: { href: "#/settings", "aria-label": "Settings" },
+    attrs: { href: "#/settings", "aria-label": t("nav.settings") },
   });
   settingsLink.append(icon("settings"));
   actions.append(settingsLink);
 
   const userBtn = /** @type {HTMLButtonElement} */ (
-    el("button", { class: "cp-icon-btn", attrs: { type: "button", "aria-label": "User menu" } })
+    el("button", { class: "cp-icon-btn", attrs: { type: "button", "aria-label": t("nav.user_menu") } })
   );
   userBtn.append(icon("user"));
   let username = "";
@@ -110,9 +111,9 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
         frag.append(label, dropdownSeparator());
       }
       frag.append(
-        dropdownItem({ label: "Change password", icon: icon("keyRound"), onClick: () => { globalThis.location.hash = "#/settings/security"; } }),
+        dropdownItem({ label: t("nav.change_password"), icon: icon("keyRound"), onClick: () => { globalThis.location.hash = "#/settings/security"; } }),
         dropdownItem({
-          label: "Sign out",
+          label: t("common.sign_out"),
           icon: icon("logOut"),
           onClick: async () => {
             try {
@@ -133,7 +134,7 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
     class: "cp-btn cp-btn-primary cp-navbar-primary-btn",
     attrs: { type: "button" },
   });
-  addAgentBtn.append(icon("plus"), el("span", { text: "Add agent" }));
+  addAgentBtn.append(icon("plus"), el("span", { text: t("nav.add_agent") }));
   addAgentBtn.addEventListener("click", () => onAddAgent());
   actions.append(addAgentBtn);
 
@@ -145,7 +146,7 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
   // its mirror actions) only shows there. Bell and user-menu stay
   // visible at every width as the two most frequently needed actions.
   const overflowBtn = /** @type {HTMLButtonElement} */ (
-    el("button", { class: "cp-icon-btn cp-navbar-overflow-btn", attrs: { type: "button", "aria-label": "More actions" } })
+    el("button", { class: "cp-icon-btn cp-navbar-overflow-btn", attrs: { type: "button", "aria-label": t("nav.more_actions") } })
   );
   overflowBtn.append(icon("ellipsisVertical"));
   actions.append(overflowBtn);
@@ -155,12 +156,12 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
       const frag = document.createDocumentFragment();
       frag.append(
         dropdownItem({
-          label: "Add agent",
+          label: t("nav.add_agent"),
           icon: icon("plus"),
           onClick: () => onAddAgent(),
         }),
         dropdownItem({
-          label: "Toggle theme",
+          label: t("nav.toggle_theme"),
           icon: icon("monitor"),
           onClick: () => {
             const next = cycleTheme(getStoredTheme());
@@ -170,7 +171,7 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
           },
         }),
         dropdownItem({
-          label: "Settings",
+          label: t("nav.settings"),
           icon: icon("settings"),
           onClick: () => { globalThis.location.hash = "#/settings"; },
         }),
@@ -226,7 +227,7 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
     const count = activeAlertEvents.length;
     bellBadge.hidden = count === 0;
     bellBadge.textContent = count > 99 ? "99+" : String(count);
-    bellBtn.setAttribute("aria-label", count > 0 ? `Alerts, ${count} firing` : "Alerts");
+    bellBtn.setAttribute("aria-label", count > 0 ? t("nav.alerts_firing", { count }) : t("nav.alerts"));
     bellBtn.classList.toggle("cp-navbar-bell-active", count > 0);
   }
 
@@ -245,12 +246,12 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
 function buildBellMenu(events) {
   const frag = document.createDocumentFragment();
   const header = el("div", { class: "cp-dropdown-item cp-navbar-bell-menu-title", attrs: { style: "pointer-events:none;font-weight:600" } });
-  header.textContent = events.length > 0 ? `${events.length} firing` : "Alerts";
+  header.textContent = events.length > 0 ? t("nav.alerts_firing_count", { count: events.length }) : t("nav.alerts");
   frag.append(header, dropdownSeparator());
 
   if (events.length === 0) {
     const empty = el("div", { class: "cp-dropdown-item cp-navbar-bell-empty", attrs: { style: "pointer-events:none" } });
-    empty.textContent = "No active alerts.";
+    empty.textContent = t("nav.no_active_alerts");
     frag.append(empty);
   } else {
     for (const ev of events.slice(0, 5)) {
@@ -263,7 +264,7 @@ function buildBellMenu(events) {
   }
 
   frag.append(dropdownSeparator());
-  frag.append(el("a", { class: "cp-dropdown-item", attrs: { href: "#/alerts" }, text: "View all" }));
+  frag.append(el("a", { class: "cp-dropdown-item", attrs: { href: "#/alerts" }, text: t("nav.view_all") }));
   return frag;
 }
 
@@ -285,8 +286,8 @@ function buildBellMenu(events) {
 export function openAddAgentDialog(installCommand, installCommands) {
   const { body, open } = createDialog({
     titleId: "cp-add-agent-title",
-    title: "Add an agent",
-    description: "Run this on the host you want to monitor:",
+    title: t("nav.add_agent_dialog_title"),
+    description: t("nav.add_agent_dialog_description"),
     wide: true,
   });
 
@@ -294,7 +295,7 @@ export function openAddAgentDialog(installCommand, installCommands) {
     ? installCommands
     : [{ os: "linux", label: "Linux / macOS", command: installCommand }];
 
-  const tabList = el("div", { class: "cp-btn-group", attrs: { role: "tablist", "aria-label": "Operating system" } });
+  const tabList = el("div", { class: "cp-btn-group", attrs: { role: "tablist", "aria-label": t("nav.operating_system") } });
   const pre = el("pre", { class: "cp-code-block cp-code-block-wrap" });
   const code = el("code", { text: tabs[0].command });
   pre.append(code);
@@ -324,13 +325,13 @@ export function openAddAgentDialog(installCommand, installCommands) {
   }
   body.append(pre);
 
-  const copyBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" }, text: "Copy command" });
+  const copyBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" }, text: t("nav.copy_command") });
   copyBtn.addEventListener("click", async () => {
     try {
       await globalThis.navigator.clipboard.writeText(activeCommand);
-      showToast({ message: "Install command copied.", variant: "success" });
+      showToast({ message: t("nav.install_command_copied"), variant: "success" });
     } catch {
-      showToast({ message: "Could not copy automatically — select and copy manually.", variant: "error" });
+      showToast({ message: t("nav.copy_failed_manual"), variant: "error" });
     }
   });
   body.append(buildDialogActions([copyBtn]));

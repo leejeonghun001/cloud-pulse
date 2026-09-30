@@ -30,7 +30,7 @@
 //     --user admin --password-file /path/to/pw.txt \
 //     --out /tmp/ui-audit-out [--routes a,b,c] \
 //     [--viewports 360x800,390x844,768x1024,1024x768,1440x900] \
-//     [--themes dark,light] [--allow scripts/ui-audit.allow.json] \
+//     [--themes dark,light] [--langs en,ko] [--allow scripts/ui-audit.allow.json] \
 //     [--timeout 120000] [--wait 1500] [--focus-sample 12]
 //
 // Exit codes: 0 = no unallowed violations, 1 = unallowed violations
@@ -58,7 +58,7 @@ import {
 // override with CP_UI_AUDIT_BROWSER_START_MS.
 const BROWSER_START_TIMEOUT_MS = Number(process.env.CP_UI_AUDIT_BROWSER_START_MS) || 90_000;
 
-const DEFAULT_ROUTES = ["#/login", "#/", "#/alerts", "#/costs", "#/updates"];
+const DEFAULT_ROUTES = ["#/login", "#/", "#/alerts", "#/costs", "#/rollout"];
 const SETTINGS_SECTIONS = [
   "general",
   "network",
@@ -72,6 +72,7 @@ const SETTINGS_SECTIONS = [
 ];
 const DEFAULT_VIEWPORTS = "360x800,390x844,768x1024,1024x768,1440x900";
 const DEFAULT_THEMES = "dark,light";
+const DEFAULT_LANGS = "en";
 
 function parseArgs(argv) {
   const opt = {
@@ -81,6 +82,7 @@ function parseArgs(argv) {
     routes: null,
     viewports: DEFAULT_VIEWPORTS,
     themes: DEFAULT_THEMES,
+    langs: DEFAULT_LANGS,
     out: null,
     allow: null,
     timeout: 180000,
@@ -98,6 +100,7 @@ function parseArgs(argv) {
       case "--routes": opt.routes = next().split(",").map((s) => s.trim()).filter(Boolean); break;
       case "--viewports": opt.viewports = next(); break;
       case "--themes": opt.themes = next(); break;
+      case "--langs": opt.langs = next(); break;
       case "--out": opt.out = next(); break;
       case "--allow": opt.allow = next(); break;
       case "--timeout": opt.timeout = Number(next()); break;
@@ -125,12 +128,12 @@ function printUsage() {
   process.stderr.write(
     "usage: node scripts/ui-audit.mjs --hub URL --password-file FILE --out DIR\n" +
       "  [--user admin] [--routes r1,r2,...] [--viewports WxH,...] [--themes dark,light]\n" +
-      "  [--allow FILE] [--timeout ms] [--wait ms] [--focus-sample N] [--no-host-route]\n" +
+      "  [--langs en,ko] [--allow FILE] [--timeout ms] [--wait ms] [--focus-sample N] [--no-host-route]\n" +
       "\n" +
       "The password is NEVER accepted on argv — only via --password-file (a plain-text\n" +
       "file containing exactly the password, trailing newline optional).\n" +
       "\n" +
-      "Default routes: login, #/, #/alerts, #/costs, #/updates, one #/host/<id> (unless\n" +
+      "Default routes: login, #/, #/alerts, #/costs, #/rollout, one #/host/<id> (unless\n" +
       "--no-host-route or no host exists yet), and every #/settings/<section>.\n",
   );
 }
@@ -544,6 +547,21 @@ async function setTheme(session, theme, waitMs) {
   await sleep(waitMs);
 }
 
+/**
+ * setLang sets the cp_lang localStorage key and reloads, exactly
+ * mirroring setTheme's workaround above for the same BiDi
+ * --localStorage-at-navigation race — main.js's i18n boot path
+ * (core/i18n.js's loadCatalogs + getLang) only re-resolves the active
+ * language on a fresh page load, so a reload here is required (not
+ * just a nice-to-have) for the audited page to actually render in the
+ * requested language.
+ */
+async function setLang(session, lang, waitMs) {
+  await session.evaluate(`localStorage.setItem("cp_lang", ${JSON.stringify(lang)})`);
+  await session.evaluate(`location.reload()`);
+  await sleep(waitMs);
+}
+
 async function resolveFirstHostRoute(session, waitMs) {
   await sleep(waitMs);
   try {
@@ -565,8 +583,14 @@ async function resolveFirstHostRoute(session, waitMs) {
 // Per-route check execution
 // ---------------------------------------------------------------------------
 
-async function runChecksForRoute(session, { route, viewportLabel, theme, waitMs, focusSample, outDir, screenshotIndex }) {
-  const routeKey = buildRouteKey({ route, viewport: viewportLabel, theme });
+async function runChecksForRoute(session, { route, viewportLabel, theme, lang, waitMs, focusSample, outDir, screenshotIndex }) {
+  // Omitting the lang segment when lang is the "en" default keeps
+  // every pre-v0.8 allow-list entry (route@viewport@theme, no lang
+  // segment) valid unchanged for a default (English-only) run; a
+  // --langs run that includes "ko" (or any non-"en" language)
+  // produces route@viewport@theme@lang keys instead (see
+  // buildRouteKey's doc comment in ui-audit-lib.mjs).
+  const routeKey = buildRouteKey({ route, viewport: viewportLabel, theme, lang: lang && lang !== "en" ? lang : undefined });
   const findings = [];
 
   await sleep(waitMs);
@@ -694,8 +718,12 @@ async function main() {
   const password = readPasswordFile(opt.passwordFile);
   const viewports = opt.viewports.split(",").map((s) => parseViewportSpec(s));
   const themes = opt.themes.split(",").map((s) => s.trim()).filter(Boolean);
+  const langs = opt.langs.split(",").map((s) => s.trim()).filter(Boolean);
   for (const t of themes) {
     if (t !== "dark" && t !== "light") fail(`invalid theme "${t}" (only "dark"/"light" are supported)`);
+  }
+  for (const l of langs) {
+    if (l !== "en" && l !== "ko") fail(`invalid lang "${l}" (only "en"/"ko" are supported)`);
   }
 
   mkdirSync(opt.out, { recursive: true });
@@ -738,25 +766,29 @@ async function main() {
     let screenshotIndex = 0;
     const visited = [];
 
-    for (const theme of themes) {
-      await setTheme(session, theme, opt.wait);
-      for (const vp of viewports) {
-        await session.setViewport(vp.width, vp.height);
-        for (const route of routes) {
-          if (hardTimedOut) break;
-          const url = `${opt.hub}/${route}`;
-          await session.navigate(url);
-          const findings = await runChecksForRoute(session, {
-            route,
-            viewportLabel: vp.label,
-            theme,
-            waitMs: opt.wait,
-            focusSample: opt.focusSample,
-            outDir: opt.out,
-            screenshotIndex: screenshotIndex++,
-          });
-          allFindings.push(...findings);
-          visited.push({ route, viewport: vp.label, theme, findingCount: findings.length });
+    for (const lang of langs) {
+      await setLang(session, lang, opt.wait);
+      for (const theme of themes) {
+        await setTheme(session, theme, opt.wait);
+        for (const vp of viewports) {
+          await session.setViewport(vp.width, vp.height);
+          for (const route of routes) {
+            if (hardTimedOut) break;
+            const url = `${opt.hub}/${route}`;
+            await session.navigate(url);
+            const findings = await runChecksForRoute(session, {
+              route,
+              viewportLabel: vp.label,
+              theme,
+              lang,
+              waitMs: opt.wait,
+              focusSample: opt.focusSample,
+              outDir: opt.out,
+              screenshotIndex: screenshotIndex++,
+            });
+            allFindings.push(...findings);
+            visited.push({ route, viewport: vp.label, theme, lang, findingCount: findings.length });
+          }
         }
       }
     }
@@ -768,6 +800,7 @@ async function main() {
       routes,
       viewports: viewports.map((v) => v.label),
       themes,
+      langs,
       visited,
       ...report,
     };
@@ -788,7 +821,7 @@ async function main() {
 
 function printSummary(report) {
   const lines = [
-    `ui-audit: ${report.summary.total} finding(s) across ${report.visited.length} route/viewport/theme combination(s)`,
+    `ui-audit: ${report.summary.total} finding(s) across ${report.visited.length} route/viewport/theme/lang combination(s)`,
     `  violations (not allow-listed): ${report.summary.violations}`,
     `  allowed (allow-listed, informational): ${report.summary.allowed}`,
   ];

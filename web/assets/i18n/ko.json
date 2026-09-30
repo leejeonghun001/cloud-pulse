@@ -1,0 +1,94 @@
+{
+  "common": {
+    "app_name": "cloud-pulse",
+    "cancel": "취소",
+    "save": "저장",
+    "close": "닫기",
+    "loading": "불러오는 중…",
+    "sign_out": "로그아웃",
+    "language": "언어",
+    "language_auto": "자동",
+    "language_en": "English",
+    "language_ko": "한국어"
+  },
+  "nav": {
+    "overview": "개요",
+    "alerts": "알림",
+    "alerts_firing": "알림, {count}건 발생 중",
+    "alerts_firing_count": "{count}건 발생 중",
+    "no_active_alerts": "발생 중인 알림이 없습니다.",
+    "view_all": "전체 보기",
+    "costs": "비용",
+    "rollout": "롤아웃",
+    "settings": "설정",
+    "search_placeholder": "검색…",
+    "open_command_palette": "명령 팔레트 열기",
+    "primary": "주요 메뉴",
+    "toggle_theme": "테마 전환",
+    "theme_label": "테마: {theme}",
+    "user_menu": "사용자 메뉴",
+    "change_password": "비밀번호 변경",
+    "add_agent": "에이전트 추가",
+    "more_actions": "더 보기",
+    "skip_to_main": "본문으로 바로가기",
+    "update_command_copied": "업데이트 명령을 클립보드에 복사했습니다.",
+    "add_agent_dialog_title": "에이전트 추가",
+    "add_agent_dialog_description": "모니터링할 호스트에서 다음을 실행하세요:",
+    "operating_system": "운영체제",
+    "copy_command": "명령 복사",
+    "install_command_copied": "설치 명령을 복사했습니다.",
+    "copy_failed_manual": "자동으로 복사할 수 없습니다 — 직접 선택하여 복사해 주세요."
+  },
+  "login": {
+    "title": "cloud-pulse",
+    "subtitle": "허브에 로그인하세요",
+    "username_label": "사용자 이름",
+    "password_label": "비밀번호",
+    "sign_in": "로그인",
+    "signing_in": "로그인 중…",
+    "invalid_credentials": "사용자 이름 또는 비밀번호가 올바르지 않습니다.",
+    "unreachable": "허브에 연결할 수 없습니다. 연결 상태를 확인한 뒤 다시 시도하세요.",
+    "rate_limited": "시도가 너무 많습니다. {seconds}초 후에 다시 시도하세요.",
+    "footer": "cloud-pulse hub",
+    "forced_change_title": "새 비밀번호 설정",
+    "forced_change_description": "기본 비밀번호로 로그인하셨습니다. 계속하려면 새 비밀번호를 설정하세요.",
+    "current_password_label": "현재 비밀번호",
+    "new_password_label": "새 비밀번호",
+    "confirm_password_label": "새 비밀번호 확인",
+    "set_password": "비밀번호 설정",
+    "password_requirements_unmet": "모든 비밀번호 요구사항을 충족해 주세요.",
+    "passwords_do_not_match": "비밀번호가 일치하지 않습니다.",
+    "password_updated": "비밀번호가 변경되었습니다.",
+    "current_password_incorrect": "현재 비밀번호가 올바르지 않습니다.",
+    "unreachable_retry": "허브에 연결할 수 없습니다. 다시 시도해 주세요."
+  },
+  "overview": {
+    "title": "개요"
+  },
+  "host": {
+    "title": "호스트"
+  },
+  "alerts": {
+    "title": "알림"
+  },
+  "costs": {
+    "title": "비용"
+  },
+  "rollout": {
+    "title": "롤아웃",
+    "placeholder": "플릿 롤아웃 대시보드가 곧 제공됩니다."
+  },
+  "settings": {
+    "title": "설정",
+    "subtitle": "허브, 네트워크 접근, 계정을 관리하세요."
+  },
+  "health": {
+    "title": "상태"
+  },
+  "errors": {
+    "generic": "문제가 발생했습니다. 다시 시도해 주세요.",
+    "session_expired": "세션이 만료되었습니다. 다시 로그인해 주세요.",
+    "please_sign_in": "로그인해 주세요.",
+    "add_agent_sign_in_required": "설치 명령을 확인하려면 관리자로 로그인하거나 설정 페이지를 이용하세요."
+  }
+}

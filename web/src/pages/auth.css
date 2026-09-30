@@ -30,6 +30,10 @@
     @apply flex flex-col gap-2 mt-1;
   }
 
+  .cp-auth-language-row {
+    @apply flex flex-col gap-1 pt-1 border-t border-[rgb(var(--border))];
+  }
+
   .cp-auth-footer {
     @apply text-center text-xs text-[rgb(var(--muted))];
   }

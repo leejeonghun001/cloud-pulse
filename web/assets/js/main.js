@@ -7,6 +7,7 @@ import { initThemeWatcher } from "./core/theme.js";
 import { Router } from "./core/router.js";
 import { getSessionToken, clearSessionToken, removeLegacyToken, parseLoginNext } from "./core/auth.js";
 import { onUnauthorized, onPasswordChangeRequired, getMe, getVersion, getAgentToken, getActiveAlerts } from "./core/api.js";
+import { loadCatalogs, htmlLang, t } from "./core/i18n.js";
 import { mountShell, openAddAgentDialog } from "./ui/shell.js";
 import { showToast } from "./ui/toast.js";
 import { mountLoginPage, openForcedChangeModal } from "./pages/login.js";
@@ -15,7 +16,7 @@ import { mountHostDetailPage } from "./pages/host.js";
 import { mountSettingsPage, copyToClipboard, SECTIONS as SETTINGS_SECTIONS } from "./pages/settings/index.js";
 import { mountAlertsPage } from "./pages/alerts.js";
 import { mountCostsPage } from "./pages/costs.js";
-import { mountUpdatesPage } from "./pages/updates.js";
+import { mountRolloutPage } from "./pages/rollout.js";
 import { updateBanner, clearChildren } from "./ui/components.js";
 import {
   shouldShowUpdateBanner,
@@ -118,11 +119,15 @@ function routeCosts() {
   mountPageWithAutoRefresh(handle);
 }
 
-function routeUpdates() {
+function routeRollout() {
   clearLoginRoot();
   const container = shell.mainEl;
-  const handle = mountUpdatesPage(container, { announce });
+  const handle = mountRolloutPage(container, { announce });
   mountPageWithAutoRefresh(handle);
+}
+
+function routeUpdatesRedirect() {
+  router.navigate("#/rollout");
 }
 
 function routeSettings(match, query) {
@@ -173,11 +178,11 @@ function isAuthenticated() {
 
 function buildPaletteItems() {
   const items = [
-    { id: "nav-overview", label: "Overview", group: "Pages", iconName: "house", onSelect: () => router.navigate("#/") },
-    { id: "nav-alerts", label: "Alerts", group: "Pages", iconName: "bell", onSelect: () => router.navigate("#/alerts") },
-    { id: "nav-costs", label: "Costs", group: "Pages", iconName: "cloud", onSelect: () => router.navigate("#/costs") },
-    { id: "nav-updates", label: "Updates", group: "Pages", iconName: "refreshCw", onSelect: () => router.navigate("#/updates") },
-    { id: "nav-settings", label: "Settings", group: "Pages", iconName: "settings", onSelect: () => router.navigate("#/settings") },
+    { id: "nav-overview", label: t("nav.overview"), group: "Pages", iconName: "house", onSelect: () => router.navigate("#/") },
+    { id: "nav-alerts", label: t("nav.alerts"), group: "Pages", iconName: "bell", onSelect: () => router.navigate("#/alerts") },
+    { id: "nav-costs", label: t("nav.costs"), group: "Pages", iconName: "cloud", onSelect: () => router.navigate("#/costs") },
+    { id: "nav-rollout", label: t("nav.rollout"), group: "Pages", iconName: "refreshCw", onSelect: () => router.navigate("#/rollout") },
+    { id: "nav-settings", label: t("nav.settings"), group: "Pages", iconName: "settings", onSelect: () => router.navigate("#/settings") },
   ];
   for (const section of SETTINGS_SECTIONS) {
     items.push({
@@ -201,21 +206,21 @@ function buildPaletteItems() {
   items.push(
     {
       id: "action-theme",
-      label: "Toggle theme",
+      label: t("nav.toggle_theme"),
       group: "Actions",
       iconName: "sun",
       onSelect: () => document.querySelector(".cp-icon-btn[aria-label='Toggle theme']")?.click(),
     },
     {
       id: "action-add-agent",
-      label: "Add agent",
+      label: t("nav.add_agent"),
       group: "Actions",
       iconName: "plus",
       onSelect: () => openAddAgent(),
     },
     {
       id: "action-signout",
-      label: "Sign out",
+      label: t("common.sign_out"),
       group: "Actions",
       iconName: "logOut",
       onSelect: () => document.querySelector(".cp-icon-btn[aria-label='User menu']")?.click(),
@@ -256,7 +261,7 @@ async function openAddAgent() {
     const data = await getAgentToken();
     openAddAgentDialog(data.install_command, data.install_commands);
   } catch {
-    showToast({ message: "Sign in as admin to reveal the install command, or use the Settings page.", variant: "error" });
+    showToast({ message: t("errors.add_agent_sign_in_required"), variant: "error" });
   }
 }
 
@@ -275,7 +280,7 @@ function renderUpdateBanner() {
   const { node, copyBtn, dismissBtn, command } = updateBanner({ versionInfo: latestVersionInfo });
   copyBtn.addEventListener("click", async () => {
     await copyToClipboard(command);
-    announce("Update command copied to clipboard.");
+    announce(t("nav.update_command_copied"));
   });
   dismissBtn.addEventListener("click", () => {
     setDismissedUpdateTag(latestVersionInfo.latest_version || "");
@@ -339,7 +344,10 @@ async function checkInitialAuth() {
   }
 }
 
-function bootstrap() {
+async function bootstrap() {
+  await loadCatalogs();
+  document.documentElement.lang = htmlLang();
+
   removeLegacyToken();
   initThemeWatcher();
 
@@ -364,7 +372,7 @@ function bootstrap() {
     shell.setActiveAlerts([]);
     paletteHostCache = [];
     if (wasAuthenticated) {
-      showToast({ message: sessionExpired ? "Session expired. Please sign in again." : "Please sign in.", variant: "error" });
+      showToast({ message: sessionExpired ? t("errors.session_expired") : t("errors.please_sign_in"), variant: "error" });
     }
     router.navigate("#/login");
   });
@@ -391,7 +399,8 @@ function bootstrap() {
   router.add(/^#\/settings(?:\/([^/?]+))?(?:\?.*)?$/, routeSettings);
   router.add(/^#\/alerts(?:\?.*)?$/, routeAlerts);
   router.add(/^#\/costs(?:\?.*)?$/, routeCosts);
-  router.add(/^#\/updates(?:\?.*)?$/, routeUpdates);
+  router.add(/^#\/rollout(?:\?.*)?$/, routeRollout);
+  router.add(/^#\/updates(?:\?.*)?$/, routeUpdatesRedirect);
   router.add(/^#\/$/, routeOverview);
   router.setNotFound(routeOverview);
 
