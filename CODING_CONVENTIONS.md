@@ -54,7 +54,7 @@ is wrong, change the enforcement and this doc together, don't bypass it.
 Dependencies point inward. Nothing inward-facing knows about anything
 outward-facing.
 
-```
+```text
 cmd/hub/main.go          wiring only: config → storage → cloud collectors → hub.Server; signal handling
 cmd/agent/main.go        wiring only: config → agent.Collector → agent.Reporter loop
 internal/models/         pure domain types + pure domain funcs (NO imports besides std lib)
@@ -325,6 +325,69 @@ require touching more than the files listed for that concept.
   bot-token shape, a webhook URL, a long opaque token) rather than
   accepting and using it.
 
+## User-facing validation error messages (audit item G-3)
+
+Every field-level validation error a hub API handler returns in
+`APIError.details` (a `field -> message` map — see `docs/api.md`) is
+rendered to the user **as the message string alone**: the dashboard's
+`renderErrors()` helper (`web/assets/js/pages/settings/*.js`) lists
+each `message` value verbatim and uses the map's *key* only internally
+to decide which input to highlight, never displaying the key itself.
+That means the message text is the entire user-facing sentence — it
+must read correctly on its own, with no field-name prefix supplied by
+the caller.
+
+Rules, effective for all new/changed validation messages:
+
+1. **Sentence case, no trailing period.** Start with a capital letter
+   only if the sentence would naturally start with one; a fragment
+   like `must not be empty` is fine lowercase since it's read as a
+   continuation of the field it's attached to. Never end with a `.` —
+   this matches how the dashboard already lists these as short `<li>`
+   fragments, not full prose sentences.
+2. **Refer to the field the way the UI labels it, not the API's
+   snake_case JSON key.** A message is standalone text with no visible
+   field-name prefix (see above), so if the message needs to name the
+   field at all, use the label a user actually sees on the form (e.g.
+   "Recipient phone number", not `to`; "Thread ID", not
+   `message_thread_id`) — or phrase the message so it doesn't need to
+   name the field, letting the UI's own input-highlight (driven by the
+   details map's key) carry that context instead.
+3. **Codes are stable.** Where a message doubles as a machine-checked
+   code (this codebase currently uses free-text messages, not a
+   separate stable code enum, for field-level `details` — contrast
+   with `models.DiagnosisCode` for notify-send failures, which *is* a
+   stable enum), do not casually reword an existing message's meaning
+   or the set of conditions it covers; adding detail or fixing a typo
+   is fine, changing what the message asserts is a breaking change for
+   any integration/test asserting on that string.
+
+### Known non-conforming messages (follow-up, not fixed in this pass)
+
+These exist today and violate rule 2 above (they name the field using
+its raw API key, not a UI label) — left as-is per this audit's scope
+(rule authored here; fixing existing call sites is out of scope for
+this change):
+
+- `internal/notify/whatsapp.go`: `errs["to"] = "must be E.164 digits
+  only (no +, spaces, or punctuation)"` — the WhatsApp channel form's
+  own field label is not `to`.
+- `internal/notify/telegram.go`: `errs["message_thread_id"] = "must be
+  an integer"` — the form's field label is not `message_thread_id`.
+- `internal/hub/admin.go`'s `validateAdminWebhookURL`: all four
+  messages are prefixed with the literal string `webhook_url` (e.g.
+  `"webhook_url exceeds maximum length of %d characters"`,
+  `"webhook_url missing host"`) instead of the Settings form's actual
+  "Webhook URL" label.
+- `internal/hub/networkroutes.go`'s `validateNetworkRequest`: messages
+  like `"allowed_cidrs must not be empty"` and `"mode must be %q or
+  %q"` name the JSON body field, not the Network settings form's
+  labels ("Access allowlist", "Listen mode").
+
+None of these currently end with a trailing period or use the wrong
+case, so they only need the field-name-as-shown-in-UI fix, not a
+full rewrite, whenever they're next touched.
+
 ## Exec rules: privileged child processes
 
 Any code that shells out to an external binary (`aws`, `oci`, or a
@@ -349,8 +412,9 @@ implementation:
 - **A minimal, explicit environment — never `os.Environ()`
   passthrough.** Build the child's `Env []string` from a fixed, named
   allowlist of variables the caller explicitly read from its own config
-  (see [Billing](README.md#billing)'s "Where the hub looks for CLI
-  config" for the exact list), plus a fixed `PATH` and a sandboxed
+  (see [Billing](docs/billing.md#where-the-hub-looks-for-cli-config)'s
+  "Where the hub looks for CLI config" for the exact list), plus a
+  fixed `PATH` and a sandboxed
   `HOME` redirected under the hub's own data directory. The child must
   never inherit the hub process's full environment, which could contain
   unrelated secrets (session-signing material, other integrations'
@@ -687,7 +751,7 @@ rules above are checked locally before they hit CI.
 
 [Conventional Commits](https://www.conventionalcommits.org/):
 
-```
+```text
 <type>(<scope>): <short summary>
 
 <optional body>
@@ -700,21 +764,21 @@ Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`,
 
 Examples:
 
-```
+```text
 feat(hub): add CIDR allowlist middleware
 
 Checks http.Request.RemoteAddr against CP_ALLOWED_CIDRS before routing.
 Never trusts X-Forwarded-For.
 ```
 
-```
+```text
 fix(agent): reset network delta to zero on counter rollover
 
 Prevents a huge negative-then-positive spike in net_tx_bps when an
 interface counter wraps.
 ```
 
-```
+```text
 docs(conventions): add errcheck justification example
 ```
 

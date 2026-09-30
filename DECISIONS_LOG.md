@@ -1095,7 +1095,7 @@ never rewrite history here, only add to it.
   child sees is passed through only if the hub itself was explicitly
   configured with it (`AWS_ACCESS_KEY_ID`, `AWS_PROFILE`,
   `OCI_CLI_CONFIG_FILE`, etc. — the full allowlist is in
-  README.md#billing) — never a blanket `os.Environ()` forward.
+  docs/billing.md) — never a blanket `os.Environ()` forward.
 - **Consequences**: an operator who already runs `aws`/`oci`
   interactively as the hub's own OS user must explicitly point
   `AWS_SHARED_CREDENTIALS_FILE`/`OCI_CLI_CONFIG_FILE` at their real
@@ -1309,5 +1309,129 @@ never rewrite history here, only add to it.
   CODING_CONVENTIONS.md now states generally (see that document's
   Security section) applied to a user-facing script rather than only to
   the hub's own internal `exec.Command` calls.
-right now" (a real `0`) — a distinction the dashboard's host list
-  needs to decide whether to show a "no inventory yet" hint or a literal
+
+### D-081 — `internal/storageusage`: `CP_STORAGE_ALLOW_CUSTOM_ENDPOINTS` + `CP_STORAGE_FAKE_BASE_URL`, mirroring D-069's escape hatch (2026-09-30)
+
+- **Context**: SPEC-v0.7 §3's test plan requires `scripts/smoke.sh` to
+  drive Google Drive's device flow and Dropbox's PKCE flow end to end
+  against fake local servers (never real Google/Dropbox), the same way
+  the v0.5.0 alerting smoke coverage already does for
+  Discord/Telegram/WhatsApp via `CP_NOTIFY_ALLOW_CUSTOM_ENDPOINTS`
+  (D-069). The storage stage's own `internal/storageusage/ssrf.go`
+  shipped with a code comment explicitly reasoning against adding such
+  an override ("no storage provider config field is meant to carry an
+  arbitrary endpoint URL, unlike notify's api_base"), and its own
+  `storageroutes_test.go` had a documented, accepted gap: the Dropbox
+  PKCE flow's HTTP round trip could not be tested hermetically, only
+  the flow-state plumbing around it, with a comment directing future
+  work to accept that limitation rather than weaken SSRF.
+- **Decision**: add the override anyway, narrowly scoped and via the
+  same "single, hub-wide, test-only escape hatch" contract as D-069 —
+  `CP_STORAGE_ALLOW_CUSTOM_ENDPOINTS=1` (default off) plus
+  `CP_STORAGE_FAKE_BASE_URL` (the fake server's base URL). Unlike
+  notify's flag, which only widens an allowlist (a channel's `api_base`
+  config field already carries the real target host), storage's fixed
+  endpoint constants (`tokenEndpoint`, `spaceUsageEndpoint`,
+  `deviceCodeEndpoint`, etc.) are never read from per-account config at
+  all — so widening the allowlist alone does not route a request
+  anywhere new; `storageusage.SSRFOptions` gained a `RedirectBase`
+  field that rewrites a validated URL's scheme+host onto the fake base
+  (path+query preserved), and `ValidateGoogleURLWithOptions`/
+  `ValidateDropboxURLWithOptions` apply it only when both the flag and
+  the base URL are set. The override must be threaded through **two**
+  independent call sites that each construct their own client: the
+  OAuth start/complete handlers' inline `googledrive.Client`/
+  `dropbox.Client` (`internal/hub/storageroutes.go`'s
+  `googleSSRFChecker`/`dropboxSSRFChecker`), and the process-wide
+  `Provider` registered for the background poller's periodic
+  `FetchQuota` calls (`cmd/hub/storage.go`'s `registerStorageProviders`,
+  which now takes an `SSRFOptions` built from the same config instead
+  of always passing the zero value) — missing either one leaves half
+  the connect→snapshot flow unreachable in a hermetic test, which is
+  exactly the gap this decision closes.
+- **Consequences**: `TestDropboxOAuthFlow_StartThenComplete` and the
+  new `TestGoogleOAuthFlow_StartThenPollThenComplete` now exercise the
+  real HTTP request/response path (RequestDeviceCode → Poll → token
+  persistence → immediate quota collection; PKCE authorize → exchange →
+  token persistence → immediate quota collection) against real
+  `httptest.Server` instances, replacing the previously-documented
+  "flow-state plumbing only" limitation with genuine end-to-end
+  coverage — and unblocks `scripts/smoke.sh`'s SPEC-v0.7 §3 requirement
+  the same way. A production hub that never sets
+  `CP_STORAGE_ALLOW_CUSTOM_ENDPOINTS` gets byte-identical behavior to
+  before this decision (verified by
+  `TestValidateGoogleURLWithOptions_DisabledMatchesProduction`/
+  `TestValidateDropboxURLWithOptions_DisabledMatchesProduction`); the
+  `-check-config` summary prints both new variables in full (neither is
+  a secret) with an explicit "test/smoke only; never set on a
+  production hub" label on the boolean flag, following D-069's own
+  operator-facing disclosure precedent.
+
+### D-082 — SPEC-v0.7 §7 defaults: proceed without user sign-off, six pre-cleared decisions (2026-09-30)
+
+- **Context**: SPEC-v0.7.md §7 ("사용자 결정·제공 필요 항목") lists six
+  items the spec author pre-decided rather than leaving open, each
+  phrased as "proceed with this default; tell us if you want it
+  changed" rather than a blocking question. Recording them here as a
+  single decision entry so a later contributor can see why v0.7.0
+  shipped with these specific boundaries without a corresponding
+  back-and-forth in an issue/PR thread.
+- **Decision** (one per §7 item):
+  1. **Real-account notification verification requires the repository
+     owner to add 7 named GitHub secrets themselves**
+     (`CP_VERIFY_DISCORD_WEBHOOK_URL`,
+     `CP_VERIFY_TELEGRAM_BOT_TOKEN`/`_CHAT_ID`,
+     `CP_VERIFY_WHATSAPP_ACCESS_TOKEN`/`_PHONE_NUMBER_ID`/`_TO`/
+     `_TEMPLATE_NAME`) — `notify-e2e.yml` passes with every platform
+     `skipped` until then, never fails for their absence. No token is
+     ever accepted into chat, an issue, or a commit; secrets are added
+     only through GitHub's own repository-settings UI. See
+     `docs/notifications.md`.
+  2. **Google Drive/Dropbox OAuth app registration is the repository
+     owner's own responsibility, not something this project can do on
+     their behalf** — cloud-pulse ships the connection *flow* (device
+     flow, PKCE) but a working integration needs a Google Cloud OAuth
+     client ("TVs and Limited Input devices" type) and a Dropbox app
+     with `account_info.read`, both created by the operator in each
+     provider's own console. Step-by-step registration instructions
+     live in `docs/storage.md` rather than being automated, since
+     neither provider offers an API to provision an OAuth client
+     programmatically for this device/PKCE use case.
+  3. **Repository-level GitHub settings (topics, labels, description)
+     are never changed by any automated process** — `scripts/
+     github-setup.sh` exists to apply them idempotently, but is
+     strictly user-run; no CI job, hook, or agent invocation in this
+     repository calls it.
+  4. **Service-account model is fixed, not configurable, per platform**:
+     macOS uses a dedicated hidden user `_cloudpulse` (created via
+     `dscl`, UID 200–400, reused if it already exists); Windows uses
+     the virtual account `NT SERVICE\cloud-pulse-agent` for the agent
+     itself plus a separate LocalSystem `cloud-pulse-agent-updater`
+     service (30-second polling — Windows has no simple
+     filesystem-watch trigger equivalent to launchd's `WatchPaths` or
+     systemd's path units, so polling was chosen as the deliberately
+     simplest safe mechanism rather than a more complex
+     notification-based approach). See `docs/install.md`.
+  5. **FreeBSD is explicitly out of scope for v0.7.0's cross-platform
+     agent work** — the agent binary still builds for `freebsd/amd64`
+     (unchanged from earlier releases) but gets no installer script,
+     no service integration, and no remote-update support in this
+     release. `docs/install.md` and `docs/remote-updates.md` both
+     document this as a stated limitation, not a bug.
+  6. **Of the two carried-over items SPEC-v0.7 flagged from earlier
+     specs, only the G-3 user-facing validation-error-message rule was
+     in this stage's scope** — the "installation process friction"
+     item is deferred until a concrete complaint is provided (per
+     SPEC-v0.7 §7 item 6's own wording), since there's nothing
+     specific yet to act on. G-3 itself is resolved as a documented
+     rule plus a named list of today's non-conforming messages, not a
+     code change — see `CODING_CONVENTIONS.md`'s "User-facing
+     validation error messages" section.
+- **Consequences**: none of these six items block v0.7.0's release —
+  every one of them degrades gracefully to a documented, inert state
+  (skipped CI checks, an unconnected storage provider, an unrun setup
+  script, an unsupported platform, a known-but-unfixed list of
+  messages) rather than a broken build or a silent gap. A future
+  session revisiting any of these six should treat this entry as the
+  record of "why," not re-litigate the choice without new information
+  changing the tradeoff.
