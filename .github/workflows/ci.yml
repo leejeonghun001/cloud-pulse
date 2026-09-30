@@ -507,7 +507,7 @@ jobs:
         run: |
           for _ in $(seq 1 40); do
             count="$(curl -fsS -H "Authorization: Bearer ${{ steps.session.outputs.token }}" \
-              http://127.0.0.1:18490/api/v1/hosts | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+              http://127.0.0.1:18490/api/v1/hosts | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["hosts"]))')"
             if [ "$count" -ge 1 ]; then
               exit 0
             fi
@@ -541,13 +541,23 @@ jobs:
             echo "_cloudpulse UID $uid is outside the required range [200, 400]" >&2
             exit 1
           fi
+          gid="$(sudo dscl . -read /Groups/_cloudpulse PrimaryGroupID | awk '/^PrimaryGroupID: / { print $2 }')"
+          user_gid="$(sudo dscl . -read /Users/_cloudpulse PrimaryGroupID | awk '/^PrimaryGroupID: / { print $2 }')"
+          case "$gid:$user_gid" in
+            *[!0-9:]*|:*|*:) echo "_cloudpulse private group IDs are invalid" >&2; exit 1 ;;
+          esac
+          if [ "$gid" -lt 200 ] || [ "$gid" -gt 400 ] || [ "$user_gid" != "$gid" ]; then
+            echo "_cloudpulse user/group primary GID mismatch: user=$user_gid group=$gid" >&2
+            exit 1
+          fi
+          test "$(stat -f '%Sg' /usr/local/etc/cloud-pulse/agent.env)" = '_cloudpulse'
 
       - name: "[darwin] wait for agent report to arrive at the hub"
         if: matrix.os == 'macos-latest'
         run: |
           for _ in $(seq 1 40); do
             count="$(curl -fsS -H "Authorization: Bearer ${{ steps.session.outputs.token }}" \
-              http://127.0.0.1:18490/api/v1/hosts | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+              http://127.0.0.1:18490/api/v1/hosts | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["hosts"]))')"
             if [ "$count" -ge 1 ]; then
               exit 0
             fi
@@ -580,7 +590,7 @@ jobs:
           $headers = @{ Authorization = "Bearer ${{ steps.session.outputs.token }}" }
           for ($i = 0; $i -lt 40; $i++) {
             $hosts = Invoke-RestMethod -Uri http://127.0.0.1:18490/api/v1/hosts -Headers $headers
-            if ($hosts.Count -ge 1) { exit 0 }
+            if ($hosts.hosts.Count -ge 1) { exit 0 }
             Start-Sleep -Seconds 1
           }
           Get-Content hub.log
@@ -614,7 +624,7 @@ jobs:
         run: |
           host_id="$(curl -fsS -H "Authorization: Bearer ${{ steps.session.outputs.token }}" \
             http://127.0.0.1:18490/api/v1/hosts | \
-            python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[0]["id"])')"
+            python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["hosts"][0]["host"]["id"])')"
           batch_id="$(curl -fsS -X POST http://127.0.0.1:18490/api/v1/agents/updates \
             -H "Authorization: Bearer ${{ steps.session.outputs.token }}" \
             -H 'Content-Type: application/json' \
@@ -627,7 +637,7 @@ jobs:
           for _ in $(seq 1 90); do
             state="$(curl -fsS -H "Authorization: Bearer ${{ steps.session.outputs.token }}" \
               "http://127.0.0.1:18490/api/v1/agents/updates?batch=${{ steps.batch.outputs.batch_id }}" | \
-              python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[0]["state"] if d else "")')"
+              python3 -c 'import json,sys; d=json.load(sys.stdin); jobs=d["jobs"]; print(jobs[0]["state"] if jobs else "")')"
             echo "job state: ${state:-<none>}"
             if [ "$state" = "succeeded" ]; then
               exit 0

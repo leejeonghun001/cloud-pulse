@@ -114,6 +114,8 @@
 #                         CP_SYSTEMCTL).
 #   CP_DSCL               Override the `dscl` binary path
 #                         (darwin-launchd only; test hook).
+#   CP_CHOWN              Override the `chown` binary path
+#                         (darwin-launchd sandbox test hook).
 #   CP_NONINTERACTIVE     Set to "1" to force non-interactive behavior
 #                         (skip the menu) even when a tty is attached.
 #                         Always set by scripts/test-install.sh's
@@ -147,6 +149,7 @@ CP_SERVICE_GROUP="cloud-pulse"
 # system user the LaunchDaemon runs as, and the fixed launchd job
 # label/paths — see internal/launchd's identical Go-side constants.
 CP_DARWIN_USER="_cloudpulse"
+CP_DARWIN_GROUP="_cloudpulse"
 CP_LAUNCHD_LABEL="com.cloudpulse.agent"
 CP_LAUNCHD_UPDATE_LABEL="com.cloudpulse.agent-update"
 
@@ -175,6 +178,7 @@ SANDBOX_ROOT="${CP_INSTALL_ROOT:-}"
 SYSTEMCTL="${CP_SYSTEMCTL:-systemctl}"
 LAUNCHCTL="${CP_LAUNCHCTL:-launchctl}"
 DSCL="${CP_DSCL:-dscl}"
+CHOWN="${CP_CHOWN:-chown}"
 IS_SANDBOX=0
 
 # PLATFORM is set by detect_platform: "linux-systemd", "darwin-launchd",
@@ -742,52 +746,117 @@ ensure_system_user() {
   ensure_docker_group_membership
 }
 
-# ensure_system_user_darwin — creates the dedicated hidden macOS system
-# user _cloudpulse via dscl (SPEC-v0.7 §1), reusing it if it already
-# exists. UID is chosen from the conventional system-account range
-# 200-400 (below 500, where Directory-Services-visible regular user
-# accounts start) — the first unused UID in that range is picked by
-# scanning existing UniqueIDs, matching the "이미 있으면 재사용한다"
-# (reuse if it already exists) + "UID는 200-400 중 빈 값을 쓴다"
-# (use an unused value in 200-400) requirement. --docker has no meaning
-# on macOS (Docker Desktop's VM-backed socket is a different
-# integration than the Linux docker-group model) — warn and ignore
-# rather than silently doing nothing.
+# darwin_first_free_id USED_IDS PREFERRED — print an unused ID in the
+# dedicated 200-400 system-account range. PREFERRED (normally the chosen
+# user UID) is selected when available so the user and private group share an
+# ID; otherwise the first free ID is used. This uses shell arithmetic rather
+# than seq, which is not guaranteed by stock macOS.
+darwin_first_free_id() {
+  local used_ids="$1" preferred="$2" candidate
+  case "$preferred" in
+    ''|*[!0-9]*) ;;
+    *)
+      if [ "$preferred" -ge 200 ] && [ "$preferred" -le 400 ] && \
+          ! printf '%s\n' "$used_ids" | grep -qx "$preferred"; then
+        printf '%s\n' "$preferred"
+        return
+      fi
+      ;;
+  esac
+  candidate=200
+  while [ "$candidate" -le 400 ]; do
+    if ! printf '%s\n' "$used_ids" | grep -qx "$candidate"; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+    candidate=$((candidate + 1))
+  done
+  return 1
+}
+
+# darwin_chown OWNER PATH — preserve real ownership enforcement while letting
+# the Linux-run darwin sandbox supply CP_CHOWN and record every ownership
+# decision. Without that hook sandbox mode remains side-effect free.
+darwin_chown() {
+  local owner="$1" path="$2"
+  if [ "$IS_SANDBOX" -eq 1 ] && [ -z "${CP_CHOWN:-}" ]; then
+    log "sandbox: would run chown ${owner} ${path}"
+    return
+  fi
+  "$CHOWN" "$owner" "$path"
+}
+
+# ensure_system_user_darwin — creates/reuses a hidden _cloudpulse user and
+# its private hidden _cloudpulse group. The private group is essential: using
+# macOS's staff (GID 20) would expose the token-bearing agent.env to every
+# normal login account. IDs are selected independently from 200-400, with the
+# group preferring the user's UID when that GID is available.
 ensure_system_user_darwin() {
   if [ "$OPT_DOCKER" -eq 1 ]; then
     log "warning: --docker has no effect on macOS (Docker Desktop is not the Linux docker-group model); ignoring"
   fi
   if [ "$IS_SANDBOX" -eq 1 ] && [ -z "${CP_DSCL:-}" ]; then
-    log "sandbox: would run dscl . -create /Users/${CP_DARWIN_USER} (UID 200-400, hidden)"
+    log "sandbox: would create hidden system user/group ${CP_DARWIN_USER}/${CP_DARWIN_GROUP} (UID/GID 200-400)"
     return
   fi
+
+  local user_exists=0 group_exists=0 user_uid="" user_primary_gid="" group_gid="" used_uids used_gids
   if "$DSCL" . -read "/Users/${CP_DARWIN_USER}" UniqueID >/dev/null 2>&1; then
-    log "system user '${CP_DARWIN_USER}' already exists"
-    return
+    user_exists=1
+    user_uid="$("$DSCL" . -read "/Users/${CP_DARWIN_USER}" UniqueID | awk '/^UniqueID: / { print $2; exit }')"
+    user_primary_gid="$("$DSCL" . -read "/Users/${CP_DARWIN_USER}" PrimaryGroupID 2>/dev/null | awk '/^PrimaryGroupID: / { print $2; exit }' || true)"
+  fi
+  if "$DSCL" . -read "/Groups/${CP_DARWIN_GROUP}" PrimaryGroupID >/dev/null 2>&1; then
+    group_exists=1
+    group_gid="$("$DSCL" . -read "/Groups/${CP_DARWIN_GROUP}" PrimaryGroupID | awk '/^PrimaryGroupID: / { print $2; exit }')"
   fi
 
-  local uid used_uids candidate
   used_uids="$("$DSCL" . -list /Users UniqueID 2>/dev/null | awk '{print $2}' || true)"
-  uid=""
-  for candidate in $(seq 200 400); do
-    if ! printf '%s\n' "$used_uids" | grep -qx "$candidate"; then
-      uid="$candidate"
-      break
-    fi
-  done
-  if [ -z "$uid" ]; then
-    err "no unused UID available in the 200-400 system-account range for ${CP_DARWIN_USER}"
-    exit 1
+  used_gids="$("$DSCL" . -list /Groups PrimaryGroupID 2>/dev/null | awk '{print $2}' || true)"
+
+  if [ "$user_exists" -eq 0 ]; then
+    user_uid="$(darwin_first_free_id "$used_uids" "")" || {
+      err "no unused UID available in the 200-400 system-account range for ${CP_DARWIN_USER}"
+      exit 1
+    }
+  fi
+  if [ "$group_exists" -eq 0 ]; then
+    group_gid="$(darwin_first_free_id "$used_gids" "$user_uid")" || {
+      err "no unused GID available in the 200-400 system-account range for ${CP_DARWIN_GROUP}"
+      exit 1
+    }
+    "$DSCL" . -create "/Groups/${CP_DARWIN_GROUP}"
+    "$DSCL" . -create "/Groups/${CP_DARWIN_GROUP}" RecordName "$CP_DARWIN_GROUP"
+    "$DSCL" . -create "/Groups/${CP_DARWIN_GROUP}" RealName "cloud-pulse agent"
+    "$DSCL" . -create "/Groups/${CP_DARWIN_GROUP}" Password '*'
+    "$DSCL" . -create "/Groups/${CP_DARWIN_GROUP}" PrimaryGroupID "$group_gid"
+    log "created hidden system group '${CP_DARWIN_GROUP}' (GID ${group_gid})"
+  else
+    log "system group '${CP_DARWIN_GROUP}' already exists (GID ${group_gid})"
   fi
 
-  "$DSCL" . -create "/Users/${CP_DARWIN_USER}"
-  "$DSCL" . -create "/Users/${CP_DARWIN_USER}" UserShell /usr/bin/false
-  "$DSCL" . -create "/Users/${CP_DARWIN_USER}" RealName "cloud-pulse agent"
-  "$DSCL" . -create "/Users/${CP_DARWIN_USER}" UniqueID "$uid"
-  "$DSCL" . -create "/Users/${CP_DARWIN_USER}" PrimaryGroupID 20
-  "$DSCL" . -create "/Users/${CP_DARWIN_USER}" NFSHomeDirectory /var/empty
-  "$DSCL" . -create "/Users/${CP_DARWIN_USER}" IsHidden 1
-  log "created hidden system user '${CP_DARWIN_USER}' (UID ${uid})"
+  if [ "$user_exists" -eq 0 ]; then
+    "$DSCL" . -create "/Users/${CP_DARWIN_USER}"
+    "$DSCL" . -create "/Users/${CP_DARWIN_USER}" UserShell /usr/bin/false
+    "$DSCL" . -create "/Users/${CP_DARWIN_USER}" RealName "cloud-pulse agent"
+    "$DSCL" . -create "/Users/${CP_DARWIN_USER}" UniqueID "$user_uid"
+    "$DSCL" . -create "/Users/${CP_DARWIN_USER}" NFSHomeDirectory /var/empty
+    "$DSCL" . -create "/Users/${CP_DARWIN_USER}" IsHidden 1
+    log "created hidden system user '${CP_DARWIN_USER}' (UID ${user_uid})"
+  else
+    log "system user '${CP_DARWIN_USER}' already exists"
+  fi
+  # Set even for a reused account: existing pre-fix installs used staff and
+  # must be migrated to the private group before agent.env is written. Use
+  # -change when the attribute exists so this replaces (rather than appends
+  # to) its scalar Directory Services value.
+  if [ -n "$user_primary_gid" ]; then
+    if [ "$user_primary_gid" != "$group_gid" ]; then
+      "$DSCL" . -change "/Users/${CP_DARWIN_USER}" PrimaryGroupID "$user_primary_gid" "$group_gid"
+    fi
+  else
+    "$DSCL" . -create "/Users/${CP_DARWIN_USER}" PrimaryGroupID "$group_gid"
+  fi
 }
 
 # ensure_docker_group_membership — with --docker, add CP_SERVICE_USER to
@@ -1106,25 +1175,19 @@ write_env_file() {
   install -m 0640 "$tmp_env" "$ENV_FILE"
   local env_group
   env_group="$(env_file_group)"
-  if [ "$IS_SANDBOX" -eq 1 ]; then
-    log "sandbox: would run chown root:${env_group} ${ENV_FILE}"
-  else
-    chown "root:${env_group}" "$ENV_FILE"
-  fi
+  darwin_chown "root:${env_group}" "$ENV_FILE"
   log "wrote ${ENV_FILE}"
   RESOLVED_HUB_URL="$hub_url"
 }
 RESOLVED_HUB_URL=""
 
 # env_file_group — the group write_env_file chowns ENV_FILE to:
-# CP_SERVICE_GROUP on linux-systemd, _cloudpulse's own primary group on
-# darwin-launchd (dscl above sets PrimaryGroupID 20, "staff" — matching
-# SPEC-v0.7 §1's "root:_cloudpulse 0640" table via group membership,
-# since macOS has no separate "_cloudpulse" *group* by convention, only
-# the user).
+# CP_SERVICE_GROUP on linux-systemd and the private _cloudpulse group on
+# darwin-launchd. Never use staff/GID 20: its broad membership would expose
+# the agent token to ordinary macOS users.
 env_file_group() {
   if [ "$PLATFORM" = "darwin-launchd" ]; then
-    echo "$CP_DARWIN_USER"
+    echo "$CP_DARWIN_GROUP"
     return
   fi
   echo "$CP_SERVICE_GROUP"
@@ -1265,13 +1328,10 @@ install_update_units() {
 # result dir).
 install_update_plist() {
   mkdir -p "$(dirname "$UPDATE_PLIST_PATH")" "$UPDATE_STATE_DIR" "$UPDATE_RESULT_DIR"
-  if [ "$IS_SANDBOX" -eq 1 ] && [ -z "${CP_DSCL:-}" ]; then
-    log "sandbox: would chown ${CP_DARWIN_USER} ${UPDATE_STATE_DIR} (0750) and root ${UPDATE_RESULT_DIR} (0755)"
-  else
-    chown "$CP_DARWIN_USER" "$UPDATE_STATE_DIR" 2>/dev/null || true
-    chmod 0750 "$UPDATE_STATE_DIR"
-    chmod 0755 "$UPDATE_RESULT_DIR"
-  fi
+  darwin_chown "${CP_DARWIN_USER}:${CP_DARWIN_GROUP}" "$UPDATE_STATE_DIR"
+  darwin_chown root "$UPDATE_RESULT_DIR"
+  chmod 0750 "$UPDATE_STATE_DIR"
+  chmod 0755 "$UPDATE_RESULT_DIR"
 
   local tmp_plist="${TMP_DIR}/${CP_LAUNCHD_UPDATE_LABEL}.plist"
   {
@@ -1716,8 +1776,8 @@ print_dry_run() {
   echo "  - verify sha256 against checksums.txt"
   echo "  - install -m 0755 to ${BIN_PATH}"
   if [ "$PLATFORM" = "darwin-launchd" ]; then
-    echo "  - ensure hidden system user '${CP_DARWIN_USER}' exists (dscl, UID 200-400)"
-    echo "  - write ${ENV_FILE} (mode 0640, owner root:${CP_DARWIN_USER})"
+    echo "  - ensure hidden system user/group '${CP_DARWIN_USER}/${CP_DARWIN_GROUP}' exists (dscl, UID/GID 200-400)"
+    echo "  - write ${ENV_FILE} (mode 0640, owner root:${CP_DARWIN_GROUP})"
     echo "  - write ${PLIST_PATH}"
     if [ "$OPT_REMOTE_UPDATE" -eq 1 ]; then
       echo "  - write ${UPDATE_PLIST_PATH} (--remote-update, SPEC-v0.7 §1)"
@@ -2020,11 +2080,12 @@ do_uninstall_darwin() {
     rm -f "$ENV_FILE"
     rm -rf "$UPDATE_STATE_DIR" "$UPDATE_RESULT_DIR"
     if [ "$IS_SANDBOX" -eq 1 ] && [ -z "${CP_DSCL:-}" ]; then
-      log "sandbox: would run dscl . -delete /Users/${CP_DARWIN_USER}"
+      log "sandbox: would run dscl . -delete /Users/${CP_DARWIN_USER} and /Groups/${CP_DARWIN_GROUP}"
     else
       "$DSCL" . -delete "/Users/${CP_DARWIN_USER}" 2>/dev/null || true
+      "$DSCL" . -delete "/Groups/${CP_DARWIN_GROUP}" 2>/dev/null || true
     fi
-    log "purged config, remote-update state, and system user (--purge)"
+    log "purged config, remote-update state, system user, and private group (--purge)"
   else
     log "kept ${ENV_FILE} (pass --purge to remove it)"
   fi

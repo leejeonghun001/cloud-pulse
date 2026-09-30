@@ -181,6 +181,41 @@ switch ($ScArgs[0]) {
         New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
 
         $installScript = Join-Path $RepoRoot 'scripts' 'install-agent.ps1'
+
+        # Load installer functions without invoking Main, then exercise the
+        # real (non-sandbox) path branch. This caught the former Join-Path ''
+        # failure that made every normal Windows install abort before any
+        # service/ACL work began.
+        $previousNoMain = [Environment]::GetEnvironmentVariable('CP_INSTALL_AGENT_NO_MAIN', 'Process')
+        $previousInstallRoot = [Environment]::GetEnvironmentVariable('CP_INSTALL_ROOT', 'Process')
+        try {
+            [Environment]::SetEnvironmentVariable('CP_INSTALL_AGENT_NO_MAIN', '1', 'Process')
+            [Environment]::SetEnvironmentVariable('CP_INSTALL_ROOT', $null, 'Process')
+            . $installScript
+            $realPaths = Get-InstallPaths
+            $programFilesRoot = if ($env:ProgramFiles) { $env:ProgramFiles } else { Join-Path ($env:SystemDrive + '\') 'Program Files' }
+            $programDataRoot = if ($env:ProgramData) { $env:ProgramData } else { Join-Path ($env:SystemDrive + '\') 'ProgramData' }
+            $allPaths = @($realPaths.ProgramDir, $realPaths.BinPath, $realPaths.DataDir, $realPaths.EnvFile, $realPaths.RequestDir, $realPaths.ResultDir)
+            if ($allPaths | Where-Object { [string]::IsNullOrWhiteSpace($_) -or -not [System.IO.Path]::IsPathRooted($_) }) {
+                throw 'Get-InstallPaths returned an empty or relative real-mode path'
+            }
+            if (-not $realPaths.ProgramDir.StartsWith($programFilesRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+                -not $realPaths.DataDir.StartsWith($programDataRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+                -not $realPaths.EnvFile.StartsWith($programDataRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+                -not $realPaths.RequestDir.StartsWith($programDataRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+                -not $realPaths.ResultDir.StartsWith($programDataRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw 'Get-InstallPaths returned a real-mode path outside Program Files or ProgramData'
+            }
+            Write-Pass 'Get-InstallPaths loads without Main and returns non-empty absolute real-mode paths'
+        }
+        catch {
+            Write-Fail "Get-InstallPaths real-mode path regression: $_"
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('CP_INSTALL_AGENT_NO_MAIN', $previousNoMain, 'Process')
+            [Environment]::SetEnvironmentVariable('CP_INSTALL_ROOT', $previousInstallRoot, 'Process')
+        }
+
         $env:CP_RELEASE_BASE_URL = $baseUrl
         $env:CP_SC = $scShimPath
         $env:CP_TEST_UNAME_M = 'amd64'

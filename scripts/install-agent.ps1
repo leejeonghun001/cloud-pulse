@@ -113,14 +113,28 @@ $IsSandbox = [bool]$SandboxRoot
 # ---------------------------------------------------------------------------
 
 function Get-InstallPaths {
-    $root = if ($SandboxRoot) { $SandboxRoot } else { '' }
+    if ($SandboxRoot) {
+        $programFilesRoot = Join-Path $SandboxRoot 'Program Files'
+        $programDataRoot = Join-Path $SandboxRoot 'ProgramData'
+    }
+    else {
+        # ProgramFiles/ProgramData are always populated for a normal Windows
+        # service install. Keep the SystemDrive fallback for constrained test
+        # hosts, but never call Join-Path with the former empty sandbox root.
+        $systemDriveRoot = if ($env:SystemDrive) { $env:SystemDrive + '\' } else { 'C:\' }
+        $programFilesRoot = if ($env:ProgramFiles) { $env:ProgramFiles } else { Join-Path $systemDriveRoot 'Program Files' }
+        $programDataRoot = if ($env:ProgramData) { $env:ProgramData } else { Join-Path $systemDriveRoot 'ProgramData' }
+    }
+
+    $programDir = Join-Path $programFilesRoot 'cloud-pulse'
+    $dataDir = Join-Path $programDataRoot 'cloud-pulse'
     [PSCustomObject]@{
-        ProgramDir = Join-Path $root 'Program Files\cloud-pulse'
-        BinPath    = Join-Path $root 'Program Files\cloud-pulse\cloud-pulse-agent.exe'
-        DataDir    = Join-Path $root 'ProgramData\cloud-pulse'
-        EnvFile    = Join-Path $root 'ProgramData\cloud-pulse\agent.env'
-        RequestDir = Join-Path $root 'ProgramData\cloud-pulse-agent'
-        ResultDir  = Join-Path $root 'ProgramData\cloud-pulse-agent-update'
+        ProgramDir = $programDir
+        BinPath    = Join-Path $programDir 'cloud-pulse-agent.exe'
+        DataDir    = $dataDir
+        EnvFile    = Join-Path $dataDir 'agent.env'
+        RequestDir = Join-Path $programDataRoot 'cloud-pulse-agent'
+        ResultDir  = Join-Path $programDataRoot 'cloud-pulse-agent-update'
     }
 }
 
@@ -472,4 +486,6 @@ function Main {
     Invoke-InstallFlow
 }
 
-Main
+if ($env:CP_INSTALL_AGENT_NO_MAIN -ne '1') {
+    Main
+}

@@ -155,6 +155,26 @@ assert_file_contains() {
   fi
 }
 
+assert_equal() {
+  local desc="$1" got="$2" want="$3"
+  if [ "$got" = "$want" ]; then
+    pass "$desc"
+  else
+    fail "$desc (got '$got', want '$want')"
+  fi
+}
+
+assert_file_order() {
+  local desc="$1" path="$2" first="$3" second="$4" first_line second_line
+  first_line="$(grep -n -m1 -F -- "$first" "$path" 2>/dev/null | cut -d: -f1 || true)"
+  second_line="$(grep -n -m1 -F -- "$second" "$path" 2>/dev/null | cut -d: -f1 || true)"
+  if [ -n "$first_line" ] && [ -n "$second_line" ] && [ "$first_line" -lt "$second_line" ]; then
+    pass "$desc"
+  else
+    fail "$desc (first='$first' line=${first_line:-missing}, second='$second' line=${second_line:-missing})"
+  fi
+}
+
 find_free_port() {
   python3 - <<'PY'
 import socket
@@ -544,27 +564,64 @@ EOF
 set -euo pipefail
 DIR="$(dirname "$0")"
 echo "$*" >> "${DIR}/dscl.log"
+printf 'dscl %s\n' "$*" >> "${DIR}/calls.log"
+record_prefix() {
+  case "$1" in
+    /Users/_cloudpulse) echo user ;;
+    /Groups/_cloudpulse) echo group ;;
+    *) exit 1 ;;
+  esac
+}
 case "$2" in
   -read)
-    [ -f "${DIR}/user-exists" ]
+    prefix="$(record_prefix "$3")"
+    [ -f "${DIR}/${prefix}-exists" ] || exit 1
+    [ -f "${DIR}/${prefix}-$4" ] || exit 1
+    printf '%s: %s\n' "$4" "$(cat "${DIR}/${prefix}-$4")"
     ;;
   -create)
-    touch "${DIR}/user-exists"
-    exit 0
+    prefix="$(record_prefix "$3")"
+    touch "${DIR}/${prefix}-exists"
+    if [ "$#" -ge 5 ]; then
+      printf '%s\n' "$5" > "${DIR}/${prefix}-$4"
+    fi
     ;;
   -delete)
-    rm -f "${DIR}/user-exists"
-    exit 0
+    prefix="$(record_prefix "$3")"
+    rm -f "${DIR}/${prefix}-exists" "${DIR}/${prefix}-"*
+    ;;
+  -change)
+    prefix="$(record_prefix "$3")"
+    [ -f "${DIR}/${prefix}-exists" ] || exit 1
+    printf '%s\n' "$6" > "${DIR}/${prefix}-$4"
     ;;
   -list)
-    exit 0
+    case "$3:$4" in
+      /Users:UniqueID)
+        if [ -f "${DIR}/user-exists" ] && [ -f "${DIR}/user-UniqueID" ]; then
+          printf '_cloudpulse %s\n' "$(cat "${DIR}/user-UniqueID")"
+        fi
+        ;;
+      /Groups:PrimaryGroupID)
+        if [ -f "${DIR}/group-exists" ] && [ -f "${DIR}/group-PrimaryGroupID" ]; then
+          printf '_cloudpulse %s\n' "$(cat "${DIR}/group-PrimaryGroupID")"
+        fi
+        ;;
+    esac
     ;;
-  *)
-    exit 0
-    ;;
+  *) exit 0 ;;
 esac
 EOF
   chmod +x "${dir}/dscl"
+
+  cat > "${dir}/chown" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+DIR="$(dirname "$0")"
+printf '%s\n' "$*" >> "${DIR}/chown.log"
+printf 'chown %s\n' "$*" >> "${DIR}/calls.log"
+EOF
+  chmod +x "${dir}/chown"
 }
 
 test_agent_darwin_sandbox_install() {
@@ -577,7 +634,7 @@ test_agent_darwin_sandbox_install() {
   local out
   out="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$sandbox" \
     CP_TEST_UNAME_S=Darwin CP_TEST_UNAME_M=arm64 \
-    CP_LAUNCHCTL="${hooks}/launchctl" CP_DSCL="${hooks}/dscl" \
+    CP_LAUNCHCTL="${hooks}/launchctl" CP_DSCL="${hooks}/dscl" CP_CHOWN="${hooks}/chown" \
     timeout 60 bash scripts/install-agent.sh --hub-url "http://127.0.0.1:${SERVER_PORT}" --token "$HUB_TOKEN" 2>&1)" || {
     fail "install-agent.sh darwin sandbox install exited 0"
     echo "$out" >&2
@@ -606,8 +663,16 @@ test_agent_darwin_sandbox_install() {
     echo "SKIP: plutil not available on this host; skipping darwin plist lint"
   fi
 
-  assert_file_exists "darwin dscl hook was invoked (user creation)" "${hooks}/dscl.log"
-  assert_file_contains "darwin dscl hook created _cloudpulse" "${hooks}/dscl.log" "_cloudpulse"
+  assert_file_exists "darwin dscl hook was invoked (user/group creation)" "${hooks}/dscl.log"
+  assert_file_contains "darwin dscl hook created private _cloudpulse group" "${hooks}/dscl.log" "-create /Groups/_cloudpulse"
+  assert_file_contains "darwin dscl hook created _cloudpulse user" "${hooks}/dscl.log" "-create /Users/_cloudpulse"
+  assert_equal "darwin user's PrimaryGroupID equals private group GID"     "$(cat "${hooks}/user-PrimaryGroupID")" "$(cat "${hooks}/group-PrimaryGroupID")"
+  assert_file_exists "darwin chown hook exercised ownership decisions" "${hooks}/chown.log"
+  assert_file_contains "darwin env ownership is root:_cloudpulse" "${hooks}/chown.log" "root:_cloudpulse ${env_file}"
+  assert_file_order "darwin private group is created before root:_cloudpulse chown" "${hooks}/calls.log" \
+    "dscl . -create /Groups/_cloudpulse" "chown root:_cloudpulse ${env_file}"
+  assert_not_contains "darwin ownership never uses staff" "$(cat "${hooks}/chown.log")" "staff"
+  assert_not_contains "darwin ownership never uses GID 20" "$(cat "${hooks}/chown.log")" "root:20"
   assert_file_exists "darwin launchctl hook was invoked (bootstrap+kickstart)" "${hooks}/launchctl.log"
   assert_file_contains "darwin launchctl hook ran bootstrap" "${hooks}/launchctl.log" "bootstrap"
   assert_file_contains "darwin launchctl hook ran kickstart" "${hooks}/launchctl.log" "kickstart"
@@ -623,7 +688,7 @@ test_agent_darwin_sandbox_reinstall() {
   local out
   out="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$sandbox" \
     CP_TEST_UNAME_S=Darwin CP_TEST_UNAME_M=arm64 \
-    CP_LAUNCHCTL="${hooks}/launchctl" CP_DSCL="${hooks}/dscl" \
+    CP_LAUNCHCTL="${hooks}/launchctl" CP_DSCL="${hooks}/dscl" CP_CHOWN="${hooks}/chown" \
     timeout 60 bash scripts/install-agent.sh 2>&1)" || {
     fail "install-agent.sh darwin sandbox reinstall exited 0"
     echo "$out" >&2
@@ -675,7 +740,7 @@ test_agent_darwin_sandbox_remote_update() {
   local out
   out="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$sandbox" \
     CP_TEST_UNAME_S=Darwin CP_TEST_UNAME_M=arm64 \
-    CP_LAUNCHCTL="${hooks}/launchctl" CP_DSCL="${hooks}/dscl" \
+    CP_LAUNCHCTL="${hooks}/launchctl" CP_DSCL="${hooks}/dscl" CP_CHOWN="${hooks}/chown" \
     timeout 60 bash scripts/install-agent.sh --hub-url "http://127.0.0.1:${SERVER_PORT}" --token "$HUB_TOKEN" --remote-update 2>&1)" || {
     fail "install-agent.sh darwin --remote-update sandbox install exited 0"
     echo "$out" >&2
@@ -693,6 +758,10 @@ test_agent_darwin_sandbox_remote_update() {
   assert_file_exists "darwin update request dir created" "$request_dir"
   assert_file_exists "darwin update result dir created" "$result_dir"
   assert_file_contains "darwin launchctl hook bootstrapped the update plist" "${hooks}/launchctl.log" "agent-update"
+  assert_file_contains "darwin update request directory ownership is private user/group" "${hooks}/chown.log" "_cloudpulse:_cloudpulse ${request_dir}"
+  assert_file_contains "darwin update result directory ownership is root" "${hooks}/chown.log" "root ${result_dir}"
+  assert_perm "darwin update request directory mode is 0750" "$request_dir" "750"
+  assert_perm "darwin update result directory mode is 0755" "$result_dir" "755"
 }
 
 test_agent_darwin_sandbox_uninstall() {
@@ -703,7 +772,7 @@ test_agent_darwin_sandbox_uninstall() {
   local out
   out="$(CP_RELEASE_BASE_URL="http://127.0.0.1:${SERVER_PORT}" CP_INSTALL_ROOT="$sandbox" \
     CP_TEST_UNAME_S=Darwin CP_TEST_UNAME_M=arm64 \
-    CP_LAUNCHCTL="${hooks}/launchctl" CP_DSCL="${hooks}/dscl" \
+    CP_LAUNCHCTL="${hooks}/launchctl" CP_DSCL="${hooks}/dscl" CP_CHOWN="${hooks}/chown" \
     timeout 30 bash scripts/install-agent.sh --uninstall --purge 2>&1)" || {
     fail "install-agent.sh darwin --uninstall --purge exited 0"
     echo "$out" >&2
@@ -716,6 +785,8 @@ test_agent_darwin_sandbox_uninstall() {
   assert_file_absent "darwin purge removed agent.env" "${sandbox}/usr/local/etc/cloud-pulse/agent.env"
   assert_file_contains "darwin uninstall issued a bootout" "${hooks}/launchctl.log" "bootout"
   assert_file_absent "darwin purge removed the _cloudpulse user marker" "${hooks}/user-exists"
+  assert_file_absent "darwin purge removed the _cloudpulse group marker" "${hooks}/group-exists"
+  assert_file_contains "darwin purge deletes the private _cloudpulse group" "${hooks}/dscl.log" "-delete /Groups/_cloudpulse"
 }
 
 test_agent_unknown_arch() {
