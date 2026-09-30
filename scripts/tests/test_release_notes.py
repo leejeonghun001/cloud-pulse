@@ -37,9 +37,24 @@ def run_git(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
 
 
 def _base_os_env() -> dict[str, str]:
+    # Strip GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_COMMON_DIR/GIT_PREFIX:
+    # when this test suite runs from inside a git hook (e.g.
+    # .githooks/pre-commit's own `python3 -m unittest discover` step),
+    # git has already set those on *this* process's environment to point
+    # at the invoking repository. The `-C str(repo)` flag above only
+    # changes git's working-directory context for path resolution — it
+    # does not override an inherited GIT_DIR, which git-the-binary still
+    # prefers over path-based discovery. Without this scrub, every
+    # "isolated" fixture-repo git command in this file silently
+    # redirects onto the real repository's refs instead, corrupting its
+    # history. See DECISIONS_LOG.md for the incident this fixed.
     import os
 
-    return dict(os.environ)
+    return {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith(("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX"))
+    }
 
 
 def commit(repo: Path, message: str, *, date: str, filename: str = "file.txt") -> str:
@@ -64,6 +79,7 @@ def run_release_notes(repo: Path, *args: str) -> subprocess.CompletedProcess[str
         capture_output=True,
         text=True,
         check=False,
+        env=_base_os_env(),
     )
 
 

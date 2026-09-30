@@ -40,12 +40,25 @@ PC = load_script("prepublish-check.py", "cloud_pulse_prepublish_check_test")
 
 
 def _run_git(repo: Path, *args: str) -> str:
+    # Explicitly strip GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_COMMON_DIR
+    # (and GIT_PREFIX) from the child's environment: when this test suite
+    # runs from inside a git hook (e.g. .githooks/pre-commit's own
+    # `python3 -m unittest discover` step), git has already set those on
+    # *this* process's environment to point at the invoking repository.
+    # subprocess.run's `cwd=repo` alone does not override an inherited
+    # GIT_DIR — git-the-binary still prefers the environment variable
+    # over path-based discovery, so an un-scrubbed inherited GIT_DIR
+    # silently redirects every "isolated" fixture-repo git command in
+    # this file onto the real repository's refs, corrupting its history.
+    # See DECISIONS_LOG.md for the incident this fixed.
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX"))}
     result = subprocess.run(
         ["git", *args],
         cwd=repo,
         capture_output=True,
         text=True,
         check=True,
+        env=env,
     )
     return result.stdout
 

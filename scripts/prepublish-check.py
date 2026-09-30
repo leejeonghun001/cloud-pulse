@@ -58,6 +58,7 @@ import hashlib
 import ipaddress
 import json
 import math
+import os
 import re
 import struct
 import subprocess
@@ -590,14 +591,38 @@ _TEXT_LIKELY_SUFFIXES = {
 
 
 def _git(repo_root: Path, *args: str) -> str:
+    # Explicitly scrub GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_COMMON_DIR
+    # (and GIT_PREFIX) from the child's environment: when this script
+    # runs from inside a git hook (.githooks/pre-commit invokes it, and
+    # CI's lint job does too), git has already set those on *this*
+    # process's environment to point at the invoking repository. Passing
+    # `cwd=repo_root` alone does not override an inherited GIT_DIR — git
+    # itself still prefers the environment variable over path-based
+    # discovery — so scanning a *different* repo_root (as the test
+    # suite's TempGitRepo fixtures do) would otherwise silently scan the
+    # invoking repo's real history instead. See DECISIONS_LOG.md.
     result = subprocess.run(
         ["git", *args],
         cwd=repo_root,
         capture_output=True,
         text=True,
         check=True,
+        env=_scrubbed_git_env(),
     )
     return result.stdout
+
+
+def _scrubbed_git_env() -> dict[str, str]:
+    """Returns a copy of the current environment with every git
+    repository-location variable removed, for any subprocess whose
+    `cwd`/explicit path argument is meant to be the sole source of truth
+    for which repository a git (or git-invoking) subprocess operates on.
+    See _git's doc comment for why this matters."""
+    return {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith(("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX"))
+    }
 
 
 def list_tracked_files(repo_root: Path) -> list[str]:
@@ -693,6 +718,7 @@ def iter_history_added_lines(repo_root: Path) -> Iterator[tuple[str, str, int, s
         text=True,
         errors="surrogateescape",
         bufsize=1,
+        env=_scrubbed_git_env(),
     )
     assert proc.stdout is not None
     current_commit = ""
@@ -748,6 +774,7 @@ def scan_history_large_and_binary_blobs(repo_root: Path) -> list[Finding]:
         capture_output=True,
         text=True,
         check=True,
+        env=_scrubbed_git_env(),
     )
     batch_check = subprocess.run(
         ["git", "cat-file", "--batch-check=%(objecttype) %(objectname) %(objectsize) %(rest)"],
@@ -756,6 +783,7 @@ def scan_history_large_and_binary_blobs(repo_root: Path) -> list[Finding]:
         capture_output=True,
         text=True,
         check=True,
+        env=_scrubbed_git_env(),
     )
     for line in batch_check.stdout.splitlines():
         parts = line.split(" ", 3)
