@@ -40,9 +40,20 @@ PC = load_script("prepublish-check.py", "cloud_pulse_prepublish_check_test")
 
 
 def _run_git(repo: Path, *args: str) -> str:
+    # Strip every inherited GIT_* variable (GIT_DIR, GIT_WORK_TREE,
+    # GIT_INDEX_FILE, ...) before spawning git against this throwaway
+    # fixture repo. A wrapping `git commit`'s hook environment always
+    # sets these to the real repository; GIT_DIR takes precedence over
+    # `cwd=`'s directory for path resolution, so without this, running
+    # this test module from inside .githooks/pre-commit would make
+    # every call below operate against the real repository instead of
+    # the fixture (see the matching fix in test_release_notes.py's
+    # _base_os_env and DECISIONS_LOG.md's corresponding entry).
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     result = subprocess.run(
         ["git", *args],
         cwd=repo,
+        env=env,
         capture_output=True,
         text=True,
         check=True,

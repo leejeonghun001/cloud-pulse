@@ -58,6 +58,7 @@ import hashlib
 import ipaddress
 import json
 import math
+import os
 import re
 import struct
 import subprocess
@@ -590,9 +591,20 @@ _TEXT_LIKELY_SUFFIXES = {
 
 
 def _git(repo_root: Path, *args: str) -> str:
+    # Strip every inherited GIT_* variable (GIT_DIR, GIT_WORK_TREE,
+    # GIT_INDEX_FILE, ...) before spawning git against repo_root. A
+    # wrapping `git commit`'s hook environment always sets these to
+    # the repository running the hook; GIT_DIR takes precedence over
+    # `cwd=`'s directory for path resolution, so without this, a
+    # caller that passes a repo_root different from the ambient
+    # repository (this script's own test suite's TempGitRepo fixtures,
+    # or any future caller scanning a second checkout) would silently
+    # operate against the wrong repository instead of repo_root.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     result = subprocess.run(
         ["git", *args],
         cwd=repo_root,
+        env=env,
         capture_output=True,
         text=True,
         check=True,
@@ -685,9 +697,11 @@ _ADDED_LINE_RE = re.compile(r"^\+(?!\+\+)(.*)$")
 
 def iter_history_added_lines(repo_root: Path) -> Iterator[tuple[str, str, int, str]]:
     """Streams added lines with commit, path, and their real new-file line number."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     proc = subprocess.Popen(
         ["git", "log", "-p", "--all", "--no-color", "--unified=0"],
         cwd=repo_root,
+        env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         text=True,
@@ -742,9 +756,11 @@ def scan_history_large_and_binary_blobs(repo_root: Path) -> list[Finding]:
     file/branch) over MAX_BLOB_BYTES anywhere in history, via
     `git rev-list --all --objects` + `git cat-file --batch-check`."""
     findings: list[Finding] = []
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     rev_list = subprocess.run(
         ["git", "rev-list", "--all", "--objects"],
         cwd=repo_root,
+        env=env,
         capture_output=True,
         text=True,
         check=True,
@@ -752,6 +768,7 @@ def scan_history_large_and_binary_blobs(repo_root: Path) -> list[Finding]:
     batch_check = subprocess.run(
         ["git", "cat-file", "--batch-check=%(objecttype) %(objectname) %(objectsize) %(rest)"],
         cwd=repo_root,
+        env=env,
         input=rev_list.stdout,
         capture_output=True,
         text=True,

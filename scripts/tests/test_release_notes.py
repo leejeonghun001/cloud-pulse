@@ -39,7 +39,20 @@ def run_git(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
 def _base_os_env() -> dict[str, str]:
     import os
 
-    return dict(os.environ)
+    # Strip every GIT_* variable a wrapping `git commit`'s hook
+    # environment sets for its own hook subprocess (GIT_DIR,
+    # GIT_WORK_TREE, GIT_INDEX_FILE, GIT_PREFIX, ...) before layering
+    # this fixture's own env on top. Without this, running this test
+    # module from inside .githooks/pre-commit (which always runs with
+    # those variables set to the real repository) makes every "git -C
+    # <fixture-dir> ..." call below silently operate against the real
+    # repository's .git instead of the fixture's own — GIT_DIR takes
+    # precedence over -C's directory change for path resolution, so
+    # e.g. `git -C /tmp/fixture commit` would create a real commit on
+    # whatever branch the enclosing hook's repo has checked out. This
+    # bit the health/channel-health v0.8 Part B stage in exactly this
+    # way (see DECISIONS_LOG.md's corresponding entry) before this fix.
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 
 
 def commit(repo: Path, message: str, *, date: str, filename: str = "file.txt") -> str:
@@ -64,6 +77,7 @@ def run_release_notes(repo: Path, *args: str) -> subprocess.CompletedProcess[str
         capture_output=True,
         text=True,
         check=False,
+        env=_base_os_env(),
     )
 
 
