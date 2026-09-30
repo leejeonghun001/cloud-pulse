@@ -20,6 +20,7 @@ import {
   getHosts,
   getStorageAccounts,
   ApiError,
+  localizeApiError,
 } from "../../core/api.js";
 import {
   METRICS,
@@ -32,11 +33,12 @@ import {
   bestDurationParts,
   isStorageScopedMetric,
 } from "../../core/alerts.js";
+import { t } from "../../core/i18n.js";
 
 const DURATION_UNITS = [
-  { value: "seconds", label: "seconds" },
-  { value: "minutes", label: "minutes" },
-  { value: "hours", label: "hours" },
+  { value: "seconds", get label() { return t("alert_rules.unit_seconds"); } },
+  { value: "minutes", get label() { return t("alert_rules.unit_minutes"); } },
+  { value: "hours", get label() { return t("alert_rules.unit_hours"); } },
 ];
 
 /**
@@ -82,9 +84,9 @@ export function mountAlertRulesSection(container, { announce }) {
 function rulesCard({ rules, channels, hosts, storageAccounts, signal, announce, onChanged }) {
   const card = el("div", { class: "cp-card" });
   const head = el("div", { class: "cp-metric-head" });
-  head.append(el("h2", { class: "cp-card-title", text: "Alert rules" }));
+  head.append(el("h2", { class: "cp-card-title", text: t("alert_rules.title") }));
   const addBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" } });
-  addBtn.append(icon("plus"), el("span", { text: "Add rule" }));
+  addBtn.append(icon("plus"), el("span", { text: t("alert_rules.add_rule") }));
   addBtn.addEventListener("click", () => openRuleDialog({ channels, hosts, storageAccounts, signal, announce, onChanged }));
   head.append(addBtn);
   card.append(head);
@@ -92,8 +94,8 @@ function rulesCard({ rules, channels, hosts, storageAccounts, signal, announce, 
   if (rules.length === 0) {
     card.append(
       emptyState({
-        title: "No alert rules yet",
-        message: "Add a rule (or start from a preset) to be notified when a host crosses a threshold.",
+        title: t("alert_rules.empty_title"),
+        message: t("alert_rules.empty_message"),
         iconName: "triangleAlert",
       }),
     );
@@ -117,27 +119,27 @@ function ruleRow({ rule, channels, hosts, storageAccounts, hostnameByID, channel
   const top = el("div", { class: "cp-rule-row-top" });
   top.append(statusDot(rule.enabled ? "up" : "down"));
   top.append(el("span", { class: "cp-rule-row-name", text: rule.name }));
-  top.append(el("span", { class: `cp-chip ${rule.enabled ? "cp-chip-ok" : "cp-chip-other"}`, text: rule.enabled ? "Enabled" : "Disabled" }));
+  top.append(el("span", { class: `cp-chip ${rule.enabled ? "cp-chip-ok" : "cp-chip-other"}`, text: rule.enabled ? t("alert_rules.enabled") : t("alert_rules.disabled") }));
   row.append(top);
 
   row.append(el("p", { class: "cp-muted-small", text: ruleSummarySentence(rule, { hostnameByID, channelNameByID, storageAccountNameByID }) }));
 
   const actions = el("div", { class: "cp-rule-row-actions" });
   const editBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button" } });
-  editBtn.append(icon("pencil"), el("span", { text: "Edit" }));
+  editBtn.append(icon("pencil"), el("span", { text: t("common.edit") }));
   editBtn.addEventListener("click", () => openRuleDialog({ rule, channels, hosts, storageAccounts, signal, announce, onChanged }));
 
   const deleteBtn = el("button", { class: "cp-btn cp-btn-danger cp-btn-sm", attrs: { type: "button" } });
-  deleteBtn.append(icon("trash"), el("span", { text: "Delete" }));
+  deleteBtn.append(icon("trash"), el("span", { text: t("common.delete") }));
   deleteBtn.addEventListener("click", async () => {
-    if (!globalThis.confirm(`Delete rule "${rule.name}"?`)) return;
+    if (!globalThis.confirm(t("alert_rules.confirm_delete", { name: rule.name }))) return;
     try {
       await deleteAlertRule(rule.id, signal);
-      announce?.(`Deleted rule ${rule.name}.`);
+      announce?.(t("alert_rules.deleted_rule", { name: rule.name }));
       onChanged();
     } catch (err) {
       if (err?.name === "AbortError") return;
-      showToast({ message: `Delete failed: ${describeError(err)}`, variant: "error" });
+      showToast({ message: t("alert_rules.delete_failed", { reason: localizeApiError(err) }), variant: "error" });
     }
   });
 
@@ -162,7 +164,7 @@ function openRuleDialog({ rule, channels, hosts, storageAccounts = [], signal, a
   const isEdit = Boolean(rule);
   const { dialog, body, open, close } = createDialog({
     titleId: "cp-rule-dialog-title",
-    title: isEdit ? `Edit rule: ${rule.name}` : "Add alert rule",
+    title: isEdit ? t("alert_rules.edit_rule_title", { name: rule.name }) : t("alert_rules.add_rule_title"),
     wide: true,
   });
 
@@ -188,10 +190,13 @@ function openRuleDialog({ rule, channels, hosts, storageAccounts = [], signal, a
   const storageAccountNameByID = (id) => storageAccounts.find((a) => a.id === id)?.name;
   const channelNameByID = (id) => channels.find((c) => c.id === id)?.name;
 
-  // --- Presets (add mode only) ---
+  // --- Presets (add mode only) --- PRESETS itself (core/alerts.js) is
+  // already localized via getters; the rollout stage appends two more
+  // entries to that same array (SPEC-v0.8 §3-1) — not this file's to
+  // own, just iterated here like every other preset.
   if (!isEdit) {
     const presetRow = el("div", { class: "cp-rule-preset-row" });
-    presetRow.append(el("span", { class: "cp-muted-small", text: "Presets:" }));
+    presetRow.append(el("span", { class: "cp-muted-small", text: t("alert_rules.presets_label") }));
     for (const preset of PRESETS) {
       const btn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button" }, text: preset.label });
       btn.addEventListener("click", () => {
@@ -243,18 +248,18 @@ function openRuleDialog({ rule, channels, hosts, storageAccounts = [], signal, a
 
   if (isEdit) {
     const previewBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" } });
-    previewBtn.append(icon("zap"), el("span", { text: "Preview: would this fire now?" }));
+    previewBtn.append(icon("zap"), el("span", { text: t("alert_rules.preview_button") }));
     previewBtn.addEventListener("click", async () => {
       previewBtn.disabled = true;
       clearChildren(previewHost);
-      previewHost.append(el("p", { class: "cp-muted-small", text: "Checking current values…" }));
+      previewHost.append(el("p", { class: "cp-muted-small", text: t("alert_rules.checking_current_values") }));
       try {
         const result = await previewAlertRule(rule.id, signal);
         clearChildren(previewHost);
         previewHost.append(renderPreviewResult(result, hostnameByID));
       } catch (err) {
         clearChildren(previewHost);
-        previewHost.append(errorBanner(`Preview failed: ${describeError(err)}`));
+        previewHost.append(errorBanner(t("alert_rules.preview_failed", { reason: localizeApiError(err) })));
       } finally {
         previewBtn.disabled = false;
       }
@@ -262,10 +267,10 @@ function openRuleDialog({ rule, channels, hosts, storageAccounts = [], signal, a
     body.append(previewBtn);
   }
 
-  const cancelBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: "Cancel" });
+  const cancelBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: t("common.cancel") });
   cancelBtn.addEventListener("click", () => close());
 
-  const saveBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" }, text: isEdit ? "Save changes" : "Add rule" });
+  const saveBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" }, text: isEdit ? t("alert_rules.save_changes") : t("alert_rules.add_rule") });
   saveBtn.addEventListener("click", async () => {
     const durationSec = durationSecFromParts(draft.durationValue, draft.durationUnit);
     const cooldownSec = durationSecFromParts(draft.cooldownValue, draft.cooldownUnit);
@@ -300,10 +305,10 @@ function openRuleDialog({ rule, channels, hosts, storageAccounts = [], signal, a
     try {
       if (isEdit) {
         await updateAlertRule(rule.id, payload, signal);
-        announce?.(`Saved rule ${draft.name}.`);
+        announce?.(t("alert_rules.saved_rule", { name: draft.name }));
       } else {
         await createAlertRule(payload, signal);
-        announce?.(`Added rule ${draft.name}.`);
+        announce?.(t("alert_rules.added_rule", { name: draft.name }));
       }
       close();
       onChanged();
@@ -324,7 +329,7 @@ function buildRuleForm(draft, hosts, storageAccounts, channels, onChange, onFull
   const frag = document.createDocumentFragment();
 
   const nameField = el("div", { class: "cp-field" });
-  nameField.append(el("label", { class: "cp-label", attrs: { for: "cp-rule-name" }, text: "Name" }));
+  nameField.append(el("label", { class: "cp-label", attrs: { for: "cp-rule-name" }, text: t("alert_rules.name_label") }));
   const nameInput = /** @type {HTMLInputElement} */ (
     el("input", { class: "cp-input", attrs: { id: "cp-rule-name", type: "text", value: draft.name } })
   );
@@ -341,13 +346,13 @@ function buildRuleForm(draft, hosts, storageAccounts, channels, onChange, onFull
   enabledInput.addEventListener("change", () => {
     draft.enabled = enabledInput.checked;
   });
-  enabledField.append(enabledInput, el("span", { text: "Enabled" }));
+  enabledField.append(enabledInput, el("span", { text: t("alert_rules.enabled") }));
   frag.append(enabledField);
 
   const row1 = el("div", { class: "cp-rule-form-row" });
   const { node: metricNode, select: metricSelect } = selectField({
     id: "cp-rule-metric",
-    label: "Metric",
+    label: t("alert_rules.metric_label"),
     options: METRICS.map((m) => ({ value: m.value, label: m.label })),
     value: draft.metric,
   });
@@ -360,11 +365,11 @@ function buildRuleForm(draft, hosts, storageAccounts, channels, onChange, onFull
 
   const scopeIsStorage = isStorageScopedMetric(draft.metric);
   const hostOptions = scopeIsStorage
-    ? [{ value: "", label: "All connected storage accounts" }, ...storageAccounts.map((a) => ({ value: a.id, label: a.name }))]
-    : [{ value: "", label: "All hosts" }, ...hosts.map((h) => ({ value: h.id, label: h.hostname }))];
+    ? [{ value: "", label: t("alert_rules.all_connected_storage_accounts") }, ...storageAccounts.map((a) => ({ value: a.id, label: a.name }))]
+    : [{ value: "", label: t("alert_rules.all_hosts") }, ...hosts.map((h) => ({ value: h.id, label: h.hostname }))];
   const { node: hostNode, select: hostSelect } = selectField({
     id: "cp-rule-host",
-    label: "Scope",
+    label: t("alert_rules.scope_label"),
     options: hostOptions,
     value: draft.hostID,
   });
@@ -378,7 +383,7 @@ function buildRuleForm(draft, hosts, storageAccounts, channels, onChange, onFull
   const row2 = el("div", { class: "cp-rule-form-row" });
   const { node: opNode, select: opSelect } = selectField({
     id: "cp-rule-operator",
-    label: "Operator",
+    label: t("alert_rules.operator_label"),
     options: OPERATORS.map((o) => ({ value: o.value, label: o.label })),
     value: draft.operator,
   });
@@ -390,7 +395,7 @@ function buildRuleForm(draft, hosts, storageAccounts, channels, onChange, onFull
 
   if (draft.metric !== "host_down") {
     const thresholdField = el("div", { class: "cp-field" });
-    thresholdField.append(el("label", { class: "cp-label", attrs: { for: "cp-rule-threshold" }, text: "Threshold" }));
+    thresholdField.append(el("label", { class: "cp-label", attrs: { for: "cp-rule-threshold" }, text: t("alert_rules.threshold_label") }));
     const thresholdInput = /** @type {HTMLInputElement} */ (
       el("input", { class: "cp-input", attrs: { id: "cp-rule-threshold", type: "number", step: "0.1", min: "0", value: String(draft.threshold) } })
     );
@@ -403,8 +408,8 @@ function buildRuleForm(draft, hosts, storageAccounts, channels, onChange, onFull
   }
   frag.append(row2);
 
-  frag.append(durationField("cp-rule-duration", "Duration (sustained for)", draft, "durationValue", "durationUnit", onChange));
-  frag.append(durationField("cp-rule-cooldown", "Cooldown (re-notify while still firing)", draft, "cooldownValue", "cooldownUnit", onChange));
+  frag.append(durationField("cp-rule-duration", t("alert_rules.duration_label"), draft, "durationValue", "durationUnit", onChange));
+  frag.append(durationField("cp-rule-cooldown", t("alert_rules.cooldown_label"), draft, "cooldownValue", "cooldownUnit", onChange));
 
   const notifyResolvedField = el("label", { class: "cp-checkbox-field" });
   const notifyResolvedInput = /** @type {HTMLInputElement} */ (el("input", { attrs: { type: "checkbox" } }));
@@ -412,7 +417,7 @@ function buildRuleForm(draft, hosts, storageAccounts, channels, onChange, onFull
   notifyResolvedInput.addEventListener("change", () => {
     draft.notifyResolved = notifyResolvedInput.checked;
   });
-  notifyResolvedField.append(notifyResolvedInput, el("span", { text: "Also notify when resolved" }));
+  notifyResolvedField.append(notifyResolvedInput, el("span", { text: t("alert_rules.notify_when_resolved") }));
   frag.append(notifyResolvedField);
 
   frag.append(channelsMultiSelect(draft, channels, onChange));
@@ -434,7 +439,7 @@ function durationField(idPrefix, label, draft, valueKey, unitKey, onChange) {
   row.append(valueInput);
   const { node: unitNode, select: unitSelect } = selectField({
     id: `${idPrefix}-unit`,
-    ariaLabel: `${label} unit`,
+    ariaLabel: t("alert_rules.unit_aria_label", { label }),
     options: DURATION_UNITS,
     value: draft[unitKey],
   });
@@ -449,9 +454,9 @@ function durationField(idPrefix, label, draft, valueKey, unitKey, onChange) {
 
 function channelsMultiSelect(draft, channels, onChange) {
   const wrap = el("div", { class: "cp-field" });
-  wrap.append(el("span", { class: "cp-label", text: "Channels" }));
+  wrap.append(el("span", { class: "cp-label", text: t("alert_rules.channels_label") }));
   if (channels.length === 0) {
-    wrap.append(el("p", { class: "cp-muted-small", text: "No channels configured yet — add one in Notifications first." }));
+    wrap.append(el("p", { class: "cp-muted-small", text: t("alert_rules.no_channels_configured") }));
     return wrap;
   }
   const list = el("div", { class: "cp-rule-channels-list" });
@@ -478,14 +483,14 @@ function renderPreviewResult(result, hostnameByID) {
   const wrap = el("div", { class: "cp-rule-preview-result" });
   const entries = Object.entries(result || {});
   if (entries.length === 0) {
-    wrap.append(el("p", { class: "cp-muted-small", text: "No hosts in scope." }));
+    wrap.append(el("p", { class: "cp-muted-small", text: t("alert_rules.no_hosts_in_scope") }));
     return wrap;
   }
   const list = el("ul", { class: "cp-rule-preview-list", attrs: { role: "list" } });
   for (const [hostID, wouldFire] of entries) {
     const item = el("li", { class: "cp-rule-preview-item" });
     item.append(
-      el("span", { class: `cp-chip ${wouldFire ? "cp-chip-critical" : "cp-chip-ok"}`, text: wouldFire ? "Would fire" : "OK" }),
+      el("span", { class: `cp-chip ${wouldFire ? "cp-chip-critical" : "cp-chip-ok"}`, text: wouldFire ? t("alert_rules.would_fire") : t("alert_rules.preview_ok") }),
       el("span", { text: hostnameByID(hostID) || hostID }),
     );
     list.append(item);
@@ -513,6 +518,6 @@ function apiErrorDetails(err) {
 }
 
 function describeError(err) {
-  if (err instanceof ApiError) return err.message;
+  if (err instanceof ApiError) return localizeApiError(err);
   return String(err?.message || err);
 }
