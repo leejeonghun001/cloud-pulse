@@ -102,6 +102,11 @@ type FromRequestOptions struct {
 	Current string
 	GOOS    string
 	GOARCH  string
+	// HostGOOS is the operating system request mode checks before doing
+	// anything; empty means runtime.GOOS. Only tests set it, so the
+	// platform-independent pipeline logic can be exercised on every CI OS
+	// while production always gates on the real host.
+	HostGOOS string
 	// ExecPath overrides the binary path to replace, passed straight
 	// through to Run (empty resolves via os.Executable, same as Run's
 	// own default — tests set this to a temp file).
@@ -131,8 +136,12 @@ func RunFromRequest(ctx context.Context, o FromRequestOptions) (Result, error) {
 	// directory, which only the Linux + systemd deployment provides
 	// (SPEC-v0.6 §2). Refuse everywhere else instead of running with
 	// weaker file-handling guarantees.
-	if hostGOOS() != "linux" {
-		return Result{}, fmt.Errorf("selfupdate: from-request: remote updates require linux (running on %s): %w", hostGOOS(), ErrUnsupported)
+	hostOS := o.HostGOOS
+	if hostOS == "" {
+		hostOS = runtime.GOOS
+	}
+	if hostOS != "linux" {
+		return Result{}, fmt.Errorf("selfupdate: from-request: remote updates require linux (running on %s): %w", hostOS, ErrUnsupported)
 	}
 	req, err := readRequestFile(o.RequestPath)
 	if err != nil {
@@ -324,8 +333,3 @@ func writeResultFileAtomic(dir string, rf UpdateResultFile) error {
 	}
 	return nil
 }
-
-// hostGOOS reports the operating system the process is actually running
-// on. It is a variable (not FromRequestOptions.GOOS, which only selects the
-// release asset) so tests can exercise the non-linux refusal on any host.
-var hostGOOS = func() string { return runtime.GOOS }

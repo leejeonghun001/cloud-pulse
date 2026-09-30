@@ -67,6 +67,7 @@ func TestRunFromRequest_Success(t *testing.T) {
 
 	var stdout bytes.Buffer
 	result, err := RunFromRequest(context.Background(), FromRequestOptions{
+		HostGOOS:    "linux",
 		RequestPath: reqPath,
 		ResultDir:   resultDir,
 		Binary:      "cloud-pulse-agent",
@@ -129,6 +130,7 @@ func TestRunFromRequest_LatestResolvedByAgentItself(t *testing.T) {
 	resultDir := filepath.Join(dir, "result")
 
 	result, err := RunFromRequest(context.Background(), FromRequestOptions{
+		HostGOOS:    "linux",
 		RequestPath: reqPath,
 		ResultDir:   resultDir,
 		Binary:      "cloud-pulse-agent",
@@ -174,6 +176,7 @@ func TestRunFromRequest_VerifyFailure(t *testing.T) {
 
 	verifyErr := errors.New("boom: simulated verify failure")
 	_, err := RunFromRequest(context.Background(), FromRequestOptions{
+		HostGOOS:    "linux",
 		RequestPath: reqPath,
 		ResultDir:   resultDir,
 		Binary:      "cloud-pulse-agent",
@@ -221,6 +224,7 @@ func TestRunFromRequest_RealChecksumMismatchClassifiedCorrectly(t *testing.T) {
 	resultDir := filepath.Join(dir, "result")
 
 	_, err := RunFromRequest(context.Background(), FromRequestOptions{
+		HostGOOS:    "linux",
 		RequestPath: reqPath,
 		ResultDir:   resultDir,
 		Binary:      "cloud-pulse-agent",
@@ -261,6 +265,7 @@ func TestRunFromRequest_DowngradeRefused(t *testing.T) {
 	resultDir := filepath.Join(dir, "result")
 
 	result, err := RunFromRequest(context.Background(), FromRequestOptions{
+		HostGOOS:    "linux",
 		RequestPath: reqPath,
 		ResultDir:   resultDir,
 		Binary:      "cloud-pulse-agent",
@@ -302,6 +307,7 @@ func TestRunFromRequest_AlreadyUpToDate(t *testing.T) {
 	resultDir := filepath.Join(dir, "result")
 
 	result, err := RunFromRequest(context.Background(), FromRequestOptions{
+		HostGOOS:    "linux",
 		RequestPath: reqPath,
 		ResultDir:   resultDir,
 		Binary:      "cloud-pulse-agent",
@@ -332,6 +338,7 @@ func TestRunFromRequest_MalformedRequestFile_ErrorsAndWritesNoResult(t *testing.
 	resultDir := filepath.Join(dir, "result")
 
 	_, err := RunFromRequest(context.Background(), FromRequestOptions{
+		HostGOOS:    "linux",
 		RequestPath: reqPath,
 		ResultDir:   resultDir,
 		Binary:      "cloud-pulse-agent",
@@ -352,6 +359,7 @@ func TestRunFromRequest_RejectsInvalidJobID(t *testing.T) {
 	reqPath := writeRequestFixture(t, dir, marshalRequest(t, UpdateRequestFile{JobID: 0, Target: "v0.6.1"}))
 
 	_, err := RunFromRequest(context.Background(), FromRequestOptions{
+		HostGOOS:    "linux",
 		RequestPath: reqPath,
 		ResultDir:   filepath.Join(dir, "result"),
 		Binary:      "cloud-pulse-agent",
@@ -369,6 +377,7 @@ func TestRunFromRequest_RejectsInvalidTargetTag(t *testing.T) {
 	reqPath := writeRequestFixture(t, dir, marshalRequest(t, UpdateRequestFile{JobID: 1, Target: "; rm -rf /"}))
 
 	_, err := RunFromRequest(context.Background(), FromRequestOptions{
+		HostGOOS:    "linux",
 		RequestPath: reqPath,
 		ResultDir:   filepath.Join(dir, "result"),
 		Binary:      "cloud-pulse-agent",
@@ -387,6 +396,7 @@ func TestRunFromRequest_RejectsOversizedRequestFile(t *testing.T) {
 	reqPath := writeRequestFixture(t, dir, oversized)
 
 	_, err := RunFromRequest(context.Background(), FromRequestOptions{
+		HostGOOS:    "linux",
 		RequestPath: reqPath,
 		ResultDir:   filepath.Join(dir, "result"),
 		Binary:      "cloud-pulse-agent",
@@ -414,6 +424,7 @@ func TestRunFromRequest_RefusesSymlinkRequestFile(t *testing.T) {
 	}
 
 	_, err := RunFromRequest(context.Background(), FromRequestOptions{
+		HostGOOS:    "linux",
 		RequestPath: link,
 		ResultDir:   filepath.Join(dir, "result"),
 		Binary:      "cloud-pulse-agent",
@@ -428,6 +439,7 @@ func TestRunFromRequest_MissingRequestPath(t *testing.T) {
 	t.Parallel()
 
 	_, err := RunFromRequest(context.Background(), FromRequestOptions{
+		HostGOOS:    "linux",
 		RequestPath: "",
 		ResultDir:   t.TempDir(),
 		Binary:      "cloud-pulse-agent",
@@ -455,6 +467,7 @@ func TestRunFromRequest_ResultFileWrittenAtomicallyWithCorrectMode(t *testing.T)
 	resultDir := filepath.Join(dir, "result")
 
 	if _, err := RunFromRequest(context.Background(), FromRequestOptions{
+		HostGOOS:    "linux",
 		RequestPath: reqPath,
 		ResultDir:   resultDir,
 		Binary:      "cloud-pulse-agent",
@@ -527,11 +540,9 @@ func corruptedAssetSource(t *testing.T, binary, tag, goos, goarch string) Source
 
 // TestRunFromRequest_RefusesNonLinuxHost guards the SPEC-v0.6 §2 rule that
 // request mode runs only on Linux, where O_NOFOLLOW and the root-owned
-// result directory are guaranteed. Not parallel: it swaps hostGOOS.
+// result directory are guaranteed.
 func TestRunFromRequest_RefusesNonLinuxHost(t *testing.T) {
-	orig := hostGOOS
-	hostGOOS = func() string { return "windows" }
-	t.Cleanup(func() { hostGOOS = orig })
+	t.Parallel()
 
 	dir := t.TempDir()
 	reqPath := filepath.Join(dir, "update-request.json")
@@ -544,6 +555,7 @@ func TestRunFromRequest_RefusesNonLinuxHost(t *testing.T) {
 		ResultDir:   resultDir,
 		Binary:      "cloud-pulse-agent",
 		Current:     "v0.6.0",
+		HostGOOS:    "windows",
 	})
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("RunFromRequest error = %v, want ErrUnsupported", err)
