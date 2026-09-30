@@ -23,7 +23,6 @@ func TestExecRunner_StubBinaryOnPATH(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script stub binaries require a POSIX shell")
 	}
-	t.Parallel()
 
 	dir := t.TempDir()
 	stubPath := filepath.Join(dir, "aws")
@@ -78,7 +77,6 @@ func TestExecRunner_NonZeroExit(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script stub binaries require a POSIX shell")
 	}
-	t.Parallel()
 
 	dir := t.TempDir()
 	stubPath := filepath.Join(dir, "aws")
@@ -108,7 +106,6 @@ func TestExecRunner_Timeout(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script stub binaries require a POSIX shell")
 	}
-	t.Parallel()
 
 	dir := t.TempDir()
 	stubPath := filepath.Join(dir, "aws")
@@ -138,12 +135,12 @@ func TestExecRunner_OutputCappedAt4MiB(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script stub binaries require a POSIX shell")
 	}
-	t.Parallel()
 
 	dir := t.TempDir()
 	stubPath := filepath.Join(dir, "aws")
-	// Print well over MaxOutputBytes (4 MiB) worth of 'x' characters.
-	script := "#!/bin/sh\nyes x | head -c 5000000\n"
+	// A single dd write avoids the yes|head SIGPIPE scheduling race while
+	// deterministically producing exactly one byte beyond the 4 MiB cap.
+	script := "#!/bin/sh\ndd if=/dev/zero bs=4194305 count=1 2>/dev/null\n"
 	if err := os.WriteFile(stubPath, []byte(script), 0o700); err != nil {
 		t.Fatalf("write stub binary: %v", err)
 	}
