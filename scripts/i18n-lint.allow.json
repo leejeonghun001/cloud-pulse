@@ -48,6 +48,10 @@
     {
       "key": "web/assets/js/core/notify-guides.js:85:key:placeholder",
       "reason": "\"en_US\" is a BCP-47-style WhatsApp template language code example (API identifier syntax), not translatable prose."
+    },
+    {
+      "key": "web/assets/js/core/ports.js:106:key:title",
+      "reason": "\"Docker\" is the product name shown when Docker collection is fully healthy (no message needed), kept in every language."
     }
   ]
 }

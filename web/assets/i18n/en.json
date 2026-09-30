@@ -66,7 +66,17 @@
     "title": "Overview"
   },
   "host": {
-    "title": "Host"
+    "title": "Host",
+    "process_unknown": "unknown",
+    "docker_not_detected": "Docker not detected",
+    "docker_not_detected_message": "No Docker (or Podman) Engine API socket was found on this host.",
+    "docker_access_denied": "Docker access denied",
+    "docker_access_denied_message": "The agent doesn't have permission to reach the Docker socket. Re-run the agent installer with --docker to add it to the docker group (docker group access is root-equivalent).",
+    "docker_collection_failed": "Docker collection failed",
+    "docker_collection_failed_message": "The agent reached the Docker socket but the last collection attempt failed.",
+    "docker_not_supported": "Docker monitoring not supported",
+    "docker_not_supported_message": "Docker container monitoring isn't implemented for this host's platform yet.",
+    "docker_status_unknown": "Docker status unknown"
   },
   "alerts": {
     "title": "Alerts"

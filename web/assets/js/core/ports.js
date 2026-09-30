@@ -3,6 +3,7 @@
 // formatting, container/port sorting, and the exact remediation copy
 // for each models.DockerStatus. No DOM access here so this module is
 // fully covered by node --test without a browser.
+import { t } from "./i18n.js";
 
 /**
  * formatPublishedPort renders one models.ContainerPort as the
@@ -82,7 +83,7 @@ export function runningContainerCount(containers) {
  * @returns {string}
  */
 export function processLabel(p) {
-  if (!p.process) return "unknown";
+  if (!p.process) return t("host.process_unknown");
   return p.pid ? `${p.process} (${p.pid})` : p.process;
 }
 
@@ -94,33 +95,31 @@ export function processLabel(p) {
  * unavailable/error/unsupported have no fix command (null) since no
  * single command resolves them (no daemon running, a transient error,
  * or an unimplemented platform, respectively).
- * @type {Object<string, {title: string, message: string, fixCommand: string|null}>}
+ *
+ * A getter (rather than a plain object literal) so its title/message
+ * strings re-resolve against the current language on every read, since
+ * this module's exports are evaluated once at import time.
+ * @returns {Object<string, {title: string, message: string, fixCommand: string|null}>}
  */
 export const DOCKER_STATUS_INFO = {
-  ok: {
-    title: "Docker",
-    message: "",
-    fixCommand: null,
+  get ok() {
+    return { title: "Docker", message: "", fixCommand: null };
   },
-  unavailable: {
-    title: "Docker not detected",
-    message: "No Docker (or Podman) Engine API socket was found on this host.",
-    fixCommand: null,
+  get unavailable() {
+    return { title: t("host.docker_not_detected"), message: t("host.docker_not_detected_message"), fixCommand: null };
   },
-  permission_denied: {
-    title: "Docker access denied",
-    message: "The agent doesn't have permission to reach the Docker socket. Re-run the agent installer with --docker to add it to the docker group (docker group access is root-equivalent).",
-    fixCommand: "curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scripts/install-agent.sh | sudo bash -s -- --reinstall --docker",
+  get permission_denied() {
+    return {
+      title: t("host.docker_access_denied"),
+      message: t("host.docker_access_denied_message"),
+      fixCommand: "curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scripts/install-agent.sh | sudo bash -s -- --reinstall --docker",
+    };
   },
-  error: {
-    title: "Docker collection failed",
-    message: "The agent reached the Docker socket but the last collection attempt failed.",
-    fixCommand: null,
+  get error() {
+    return { title: t("host.docker_collection_failed"), message: t("host.docker_collection_failed_message"), fixCommand: null };
   },
-  unsupported: {
-    title: "Docker monitoring not supported",
-    message: "Docker container monitoring isn't implemented for this host's platform yet.",
-    fixCommand: null,
+  get unsupported() {
+    return { title: t("host.docker_not_supported"), message: t("host.docker_not_supported_message"), fixCommand: null };
   },
 };
 
@@ -132,7 +131,7 @@ export const DOCKER_STATUS_INFO = {
  * @returns {{title: string, message: string, fixCommand: string|null}}
  */
 export function dockerStatusInfo(status) {
-  return DOCKER_STATUS_INFO[status] || { title: "Docker status unknown", message: String(status), fixCommand: null };
+  return DOCKER_STATUS_INFO[status] || { title: t("host.docker_status_unknown"), message: String(status), fixCommand: null };
 }
 
 /**

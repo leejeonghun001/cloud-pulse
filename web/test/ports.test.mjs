@@ -3,6 +3,9 @@
 // "Services & ports" card and the overview "Containers" column).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { setCatalogs, setLang } from "../assets/js/core/i18n.js";
 import {
   formatPublishedPort,
   formatListeningAddress,
@@ -15,6 +18,22 @@ import {
   containerHealthLabel,
   containerComposeLabel,
 } from "../assets/js/core/ports.js";
+
+globalThis.localStorage = (() => {
+  const store = new Map();
+  return {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  };
+})();
+
+const assetsDir = fileURLToPath(new URL("../assets/i18n/", import.meta.url));
+setCatalogs({
+  en: JSON.parse(readFileSync(`${assetsDir}en.json`, "utf-8")),
+  ko: JSON.parse(readFileSync(`${assetsDir}ko.json`, "utf-8")),
+});
+setLang("en");
 
 test("formatPublishedPort: published port renders host:port→private/type", () => {
   assert.equal(formatPublishedPort({ ip: "0.0.0.0", private_port: 80, public_port: 8080, type: "tcp" }), "0.0.0.0:8080→80/tcp");
@@ -131,4 +150,14 @@ test("containerComposeLabel", () => {
   assert.equal(containerComposeLabel({ compose_project: "myapp" }), "myapp");
   assert.equal(containerComposeLabel({ compose_service: "web" }), "web");
   assert.equal(containerComposeLabel({}), "");
+});
+
+test("processLabel/dockerStatusInfo render Korean text when lang is ko", () => {
+  setLang("ko");
+  try {
+    assert.equal(processLabel({}), "알 수 없음");
+    assert.equal(dockerStatusInfo("permission_denied").title, "Docker 접근 거부됨");
+  } finally {
+    setLang("en");
+  }
 });
