@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"strings"
 	"time"
 
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
@@ -95,6 +96,21 @@ func discordColorFor(sev Severity) int {
 
 // Send implements Sender.
 func (s *discordSender) Send(ctx context.Context, msg Message) error {
+	_, err := s.sendWithRef(ctx, msg, false)
+	return err
+}
+
+// SendWithRef implements RefSender: sends msg exactly as Send does, but
+// appends ?wait=true to the webhook URL so Discord's Execute Webhook
+// endpoint returns the created message body instead of 204 No Content,
+// letting the caller learn the message's id and whether it carries an
+// attachment (see
+// https://discord.com/developers/docs/resources/webhook#execute-webhook).
+func (s *discordSender) SendWithRef(ctx context.Context, msg Message) (MessageRef, error) {
+	return s.sendWithRef(ctx, msg, true)
+}
+
+func (s *discordSender) sendWithRef(ctx context.Context, msg Message, wait bool) (MessageRef, error) {
 	embed := discordEmbed{
 		Title:       msg.Title,
 		Description: msg.Text,
@@ -117,33 +133,116 @@ func (s *discordSender) Send(ctx context.Context, msg Message) error {
 	payload := discordPayload{Embeds: []discordEmbed{embed}}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("notify: discord: marshal payload: %w", err)
+		return MessageRef{}, fmt.Errorf("notify: discord: marshal payload: %w", err)
 	}
 
 	body, contentType, err := buildDiscordMultipart(payloadJSON, msg, imageName)
 	if err != nil {
-		return err
+		return MessageRef{}, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.webhookURL, body)
+	url := s.webhookURL
+	if wait {
+		if strings.Contains(url, "?") {
+			url += "&wait=true"
+		} else {
+			url += "?wait=true"
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
 	if err != nil {
-		return fmt.Errorf("notify: discord: build request: %w", err)
+		return MessageRef{}, fmt.Errorf("notify: discord: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", contentType)
 
 	resp, err := doRequest(ctx, s.client, req)
 	if err != nil {
-		return fmt.Errorf("notify: discord: %w", err)
+		return MessageRef{}, fmt.Errorf("notify: discord: %w", err)
 	}
 	respBody := readLimitedBody(resp)
 
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return newRetryAfterError(resp, fmt.Errorf("notify: discord: rate limited: %s", string(respBody)))
+		return MessageRef{}, newRetryAfterError(resp, fmt.Errorf("notify: discord: rate limited: %s", string(respBody)))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return newStatusError("discord", "", resp.StatusCode, respBody, discordErrorMessage(respBody))
+		return MessageRef{}, newStatusError("discord", "", resp.StatusCode, respBody, discordErrorMessage(respBody))
+	}
+	if !wait {
+		return MessageRef{}, nil
+	}
+	var parsed struct {
+		ID          string `json:"id"`
+		Attachments []struct {
+			ID string `json:"id"`
+		} `json:"attachments"`
+	}
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return MessageRef{}, fmt.Errorf("notify: discord: parse wait=true response: %w", err)
+	}
+	return MessageRef{MessageID: parsed.ID, HasAttachment: len(parsed.Attachments) > 0}, nil
+}
+
+// ReadBack implements MessageReader: GETs the message back from Discord's
+// webhook-message endpoint and confirms it still carries an attachment
+// (https://discord.com/developers/docs/resources/webhook#get-webhook-message).
+func (s *discordSender) ReadBack(ctx context.Context, ref MessageRef) (bool, error) {
+	if ref.MessageID == "" {
+		return false, fmt.Errorf("notify: discord: read back: missing message id")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.messageURL(ref.MessageID), nil)
+	if err != nil {
+		return false, fmt.Errorf("notify: discord: build read-back request: %w", err)
+	}
+	resp, err := doRequest(ctx, s.client, req)
+	if err != nil {
+		return false, fmt.Errorf("notify: discord: read back: %w", err)
+	}
+	body := readLimitedBody(resp)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return false, newStatusError("discord", "read_back", resp.StatusCode, body, discordErrorMessage(body))
+	}
+	var parsed struct {
+		Attachments []struct {
+			ID string `json:"id"`
+		} `json:"attachments"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return false, fmt.Errorf("notify: discord: parse read-back response: %w", err)
+	}
+	return len(parsed.Attachments) > 0, nil
+}
+
+// Delete implements MessageDeleter
+// (https://discord.com/developers/docs/resources/webhook#delete-webhook-message).
+func (s *discordSender) Delete(ctx context.Context, ref MessageRef) error {
+	if ref.MessageID == "" {
+		return fmt.Errorf("notify: discord: delete: missing message id")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, s.messageURL(ref.MessageID), nil)
+	if err != nil {
+		return fmt.Errorf("notify: discord: build delete request: %w", err)
+	}
+	resp, err := doRequest(ctx, s.client, req)
+	if err != nil {
+		return fmt.Errorf("notify: discord: delete: %w", err)
+	}
+	body := readLimitedBody(resp)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return newStatusError("discord", "delete", resp.StatusCode, body, discordErrorMessage(body))
 	}
 	return nil
+}
+
+// messageURL builds the GET/DELETE .../messages/{id} URL from the sender's
+// webhook URL (which already has the form
+// https://discord.com/api/webhooks/{id}/{token}).
+func (s *discordSender) messageURL(messageID string) string {
+	base := s.webhookURL
+	if idx := strings.Index(base, "?"); idx >= 0 {
+		base = base[:idx]
+	}
+	return strings.TrimSuffix(base, "/") + "/messages/" + messageID
 }
 
 // discordErrorMessage extracts Discord's "message" field from an

@@ -137,11 +137,27 @@ func truncateCaption(s string) string {
 
 // Send implements Sender.
 func (s *telegramSender) Send(ctx context.Context, msg Message) error {
+	_, err := s.sendWithRef(ctx, msg)
+	return err
+}
+
+// SendWithRef implements RefSender: sends msg exactly as Send does,
+// additionally parsing the sendPhoto/sendMessage response's
+// result.message_id, result.chat.id, and (when sending a photo)
+// result.photo to report whether the chart attachment is confirmed present
+// directly in the send response — Telegram bots have no API to read a
+// message back afterward, so this is the only confirmation available (see
+// package doc comment in verify.go).
+func (s *telegramSender) SendWithRef(ctx context.Context, msg Message) (MessageRef, error) {
+	return s.sendWithRef(ctx, msg)
+}
+
+func (s *telegramSender) sendWithRef(ctx context.Context, msg Message) (MessageRef, error) {
 	text := telegramHTML(msg)
 	if msg.HasImage() {
-		return s.sendPhoto(ctx, text, msg.Image)
+		return s.sendPhotoWithRef(ctx, text, msg.Image)
 	}
-	return s.sendMessage(ctx, text)
+	return s.sendMessageWithRef(ctx, text)
 }
 
 func (s *telegramSender) methodURL(method string) string {
@@ -154,9 +170,23 @@ type telegramResponse struct {
 	Parameters  *struct {
 		RetryAfter int `json:"retry_after"`
 	} `json:"parameters"`
+	Result *telegramResultMessage `json:"result"`
 }
 
-func (s *telegramSender) sendMessage(ctx context.Context, htmlText string) error {
+// telegramResultMessage mirrors the subset of Telegram's Message object
+// this package needs from a sendMessage/sendPhoto response's "result"
+// field.
+type telegramResultMessage struct {
+	MessageID int `json:"message_id"`
+	Chat      struct {
+		ID int64 `json:"id"`
+	} `json:"chat"`
+	Photo []struct {
+		FileID string `json:"file_id"`
+	} `json:"photo"`
+}
+
+func (s *telegramSender) sendMessageWithRef(ctx context.Context, htmlText string) (MessageRef, error) {
 	form := url.Values{}
 	form.Set("chat_id", s.chatID)
 	form.Set("text", htmlText)
@@ -167,53 +197,58 @@ func (s *telegramSender) sendMessage(ctx context.Context, htmlText string) error
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.methodURL("sendMessage"), strings.NewReader(form.Encode()))
 	if err != nil {
-		return fmt.Errorf("notify: telegram: build request: %w", err)
+		return MessageRef{}, fmt.Errorf("notify: telegram: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	return s.do(ctx, req)
+	return s.doWithRef(ctx, req)
 }
 
-func (s *telegramSender) sendPhoto(ctx context.Context, htmlCaption string, image []byte) error {
+func (s *telegramSender) sendPhotoWithRef(ctx context.Context, htmlCaption string, image []byte) (MessageRef, error) {
 	buf := &bytes.Buffer{}
 	w := multipart.NewWriter(buf)
 
 	if err := w.WriteField("chat_id", s.chatID); err != nil {
-		return fmt.Errorf("notify: telegram: write chat_id field: %w", err)
+		return MessageRef{}, fmt.Errorf("notify: telegram: write chat_id field: %w", err)
 	}
 	if err := w.WriteField("caption", truncateCaption(htmlCaption)); err != nil {
-		return fmt.Errorf("notify: telegram: write caption field: %w", err)
+		return MessageRef{}, fmt.Errorf("notify: telegram: write caption field: %w", err)
 	}
 	if err := w.WriteField("parse_mode", "HTML"); err != nil {
-		return fmt.Errorf("notify: telegram: write parse_mode field: %w", err)
+		return MessageRef{}, fmt.Errorf("notify: telegram: write parse_mode field: %w", err)
 	}
 	if s.threadID != "" {
 		if err := w.WriteField("message_thread_id", s.threadID); err != nil {
-			return fmt.Errorf("notify: telegram: write message_thread_id field: %w", err)
+			return MessageRef{}, fmt.Errorf("notify: telegram: write message_thread_id field: %w", err)
 		}
 	}
 	part, err := createFormFilePart(w, "photo", "chart.png", "image/png")
 	if err != nil {
-		return fmt.Errorf("notify: telegram: create photo part: %w", err)
+		return MessageRef{}, fmt.Errorf("notify: telegram: create photo part: %w", err)
 	}
 	if _, err := part.Write(image); err != nil {
-		return fmt.Errorf("notify: telegram: write photo part: %w", err)
+		return MessageRef{}, fmt.Errorf("notify: telegram: write photo part: %w", err)
 	}
 	if err := w.Close(); err != nil {
-		return fmt.Errorf("notify: telegram: close multipart writer: %w", err)
+		return MessageRef{}, fmt.Errorf("notify: telegram: close multipart writer: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.methodURL("sendPhoto"), buf)
 	if err != nil {
-		return fmt.Errorf("notify: telegram: build request: %w", err)
+		return MessageRef{}, fmt.Errorf("notify: telegram: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
-	return s.do(ctx, req)
+	return s.doWithRef(ctx, req)
 }
 
 func (s *telegramSender) do(ctx context.Context, req *http.Request) error {
+	_, err := s.doWithRef(ctx, req)
+	return err
+}
+
+func (s *telegramSender) doWithRef(ctx context.Context, req *http.Request) (MessageRef, error) {
 	resp, err := doRequest(ctx, s.client, req)
 	if err != nil {
-		return fmt.Errorf("notify: telegram: %w", err)
+		return MessageRef{}, fmt.Errorf("notify: telegram: %w", err)
 	}
 	body := readLimitedBody(resp)
 
@@ -228,7 +263,7 @@ func (s *telegramSender) do(ctx context.Context, req *http.Request) error {
 		case resp.Header.Get("Retry-After") != "":
 			retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
 		}
-		return &RetryAfterError{After: retryAfter, Err: fmt.Errorf("notify: telegram: rate limited: %s", parsed.Description)}
+		return MessageRef{}, &RetryAfterError{After: retryAfter, Err: fmt.Errorf("notify: telegram: rate limited: %s", parsed.Description)}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || !parsed.OK {
 		msg := parsed.Description
@@ -239,7 +274,40 @@ func (s *telegramSender) do(ctx context.Context, req *http.Request) error {
 			}
 			msg = string(body)
 		}
-		return newStatusError("telegram", "", resp.StatusCode, body, msg)
+		return MessageRef{}, newStatusError("telegram", "", resp.StatusCode, body, msg)
 	}
-	return nil
+	ref := MessageRef{ChatID: s.chatID}
+	if parsed.Result != nil {
+		ref.MessageID = strconv.Itoa(parsed.Result.MessageID)
+		if parsed.Result.Chat.ID != 0 {
+			ref.ChatID = strconv.FormatInt(parsed.Result.Chat.ID, 10)
+		}
+		ref.HasAttachment = len(parsed.Result.Photo) > 0
+	}
+	return ref, nil
+}
+
+// Delete implements MessageDeleter. Telegram only allows deleting a
+// message sent less than 48 hours ago
+// (https://core.telegram.org/bots/api#deletemessage) — a delete attempted
+// well past that window fails with a platform error, which callers
+// surface as-is rather than special-casing.
+func (s *telegramSender) Delete(ctx context.Context, ref MessageRef) error {
+	if ref.MessageID == "" {
+		return fmt.Errorf("notify: telegram: delete: missing message id")
+	}
+	chatID := ref.ChatID
+	if chatID == "" {
+		chatID = s.chatID
+	}
+	form := url.Values{}
+	form.Set("chat_id", chatID)
+	form.Set("message_id", ref.MessageID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.methodURL("deleteMessage"), strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("notify: telegram: build delete request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return s.do(ctx, req)
 }

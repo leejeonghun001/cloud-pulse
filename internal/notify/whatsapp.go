@@ -121,19 +121,42 @@ type graphError struct {
 // messages are always sent with the chart per SPEC-v0.5 §B) then sends
 // either a template or plain image message.
 func (s *whatsappSender) Send(ctx context.Context, msg Message) error {
+	_, err := s.sendWithRef(ctx, msg)
+	return err
+}
+
+// SendWithRef implements RefSender: sends msg exactly as Send does,
+// additionally reporting the uploaded media id and the sent message's
+// WhatsApp message id (WAMID) from messages[0].id. WhatsApp's Cloud API has
+// no synchronous read-back endpoint — a 2xx response with a present
+// messages[0].id means the platform *accepted* the message for delivery,
+// not that it was delivered; genuine delivery confirmation requires the
+// asynchronous status webhook (see statuswebhook.go), which is why
+// whatsappSender does not implement MessageReader.
+func (s *whatsappSender) SendWithRef(ctx context.Context, msg Message) (MessageRef, error) {
+	return s.sendWithRef(ctx, msg)
+}
+
+func (s *whatsappSender) sendWithRef(ctx context.Context, msg Message) (MessageRef, error) {
 	if !msg.HasImage() {
-		return fmt.Errorf("notify: whatsapp: message has no image; whatsapp notifications require a chart image")
+		return MessageRef{}, fmt.Errorf("notify: whatsapp: message has no image; whatsapp notifications require a chart image")
 	}
 
 	mediaID, err := s.uploadMedia(ctx, msg.Image, msg.ImageName)
 	if err != nil {
-		return err
+		return MessageRef{}, err
 	}
 
+	var messageID string
 	if s.templateName != "" {
-		return s.sendTemplate(ctx, mediaID, msg)
+		messageID, err = s.sendTemplateWithRef(ctx, mediaID, msg)
+	} else {
+		messageID, err = s.sendImageMessageWithRef(ctx, mediaID, msg)
 	}
-	return s.sendImageMessage(ctx, mediaID, msg)
+	if err != nil {
+		return MessageRef{}, err
+	}
+	return MessageRef{MessageID: messageID, MediaID: mediaID, HasAttachment: true}, nil
 }
 
 // uploadMedia uploads image to POST /{phone_number_id}/media
@@ -189,11 +212,12 @@ func (s *whatsappSender) uploadMedia(ctx context.Context, image []byte, imageNam
 	return parsed.ID, nil
 }
 
-// sendTemplate sends an approved message template with a header image
-// (the uploaded media) and body parameters [title, text], via POST
-// /{phone_number_id}/messages. Works outside the 24-hour window (see
+// sendTemplateWithRef sends an approved message template with a header
+// image (the uploaded media) and body parameters [title, text], via POST
+// /{phone_number_id}/messages, returning the sent message's WAMID. Works
+// outside the 24-hour window (see
 // https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-message-templates).
-func (s *whatsappSender) sendTemplate(ctx context.Context, mediaID string, msg Message) error {
+func (s *whatsappSender) sendTemplateWithRef(ctx context.Context, mediaID string, msg Message) (string, error) {
 	body := map[string]any{
 		"messaging_product": "whatsapp",
 		"to":                s.to,
@@ -225,7 +249,7 @@ func (s *whatsappSender) sendTemplate(ctx context.Context, mediaID string, msg M
 			},
 		},
 	}
-	return s.postMessage(ctx, body)
+	return s.postMessageWithRef(ctx, body)
 }
 
 // templateParamText returns s, or a single space if empty — WhatsApp
@@ -237,13 +261,14 @@ func templateParamText(s string) string {
 	return s
 }
 
-// sendImageMessage sends a plain type:image message with a caption,
-// via POST /{phone_number_id}/messages. Only deliverable inside the
-// 24-hour customer-service window (see
+// sendImageMessageWithRef sends a plain type:image message with a
+// caption, via POST /{phone_number_id}/messages, returning the sent
+// message's WAMID. Only deliverable inside the 24-hour customer-service
+// window (see
 // https://developers.facebook.com/docs/whatsapp/cloud-api/messages/image-messages) —
 // callers configuring a channel without template_name should be told
 // this in the Settings UI's step-by-step guide.
-func (s *whatsappSender) sendImageMessage(ctx context.Context, mediaID string, msg Message) error {
+func (s *whatsappSender) sendImageMessageWithRef(ctx context.Context, mediaID string, msg Message) (string, error) {
 	body := map[string]any{
 		"messaging_product": "whatsapp",
 		"to":                s.to,
@@ -253,7 +278,7 @@ func (s *whatsappSender) sendImageMessage(ctx context.Context, mediaID string, m
 			"caption": whatsappCaption(msg),
 		},
 	}
-	return s.postMessage(ctx, body)
+	return s.postMessageWithRef(ctx, body)
 }
 
 // whatsappCaption renders a plain-text caption (WhatsApp image
@@ -282,32 +307,48 @@ func whatsappCaption(msg Message) string {
 	return b.String()
 }
 
-func (s *whatsappSender) postMessage(ctx context.Context, body map[string]any) error {
+// postMessageWithRef posts body to POST /{phone_number_id}/messages and
+// returns the sent message's WAMID from the response's messages[0].id
+// field — present on every successful WhatsApp Cloud API send response,
+// per
+// https://developers.facebook.com/docs/whatsapp/cloud-api/reference/messages.
+func (s *whatsappSender) postMessageWithRef(ctx context.Context, body map[string]any) (string, error) {
 	encoded, err := json.Marshal(body)
 	if err != nil {
-		return fmt.Errorf("notify: whatsapp: marshal message body: %w", err)
+		return "", fmt.Errorf("notify: whatsapp: marshal message body: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint(s.phoneNumberID+"/messages"), bytes.NewReader(encoded))
 	if err != nil {
-		return fmt.Errorf("notify: whatsapp: build message request: %w", err)
+		return "", fmt.Errorf("notify: whatsapp: build message request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+s.accessToken)
 
 	resp, err := doRequest(ctx, s.client, req)
 	if err != nil {
-		return fmt.Errorf("notify: whatsapp: %w", err)
+		return "", fmt.Errorf("notify: whatsapp: %w", err)
 	}
 	respBody := readLimitedBody(resp)
 
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return newRetryAfterError(resp, fmt.Errorf("notify: whatsapp: rate limited: %s", graphErrorMessage(respBody)))
+		return "", newRetryAfterError(resp, fmt.Errorf("notify: whatsapp: rate limited: %s", graphErrorMessage(respBody)))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return newStatusError("whatsapp", "message", resp.StatusCode, respBody, graphErrorMessage(respBody))
+		return "", newStatusError("whatsapp", "message", resp.StatusCode, respBody, graphErrorMessage(respBody))
 	}
-	return nil
+	var parsed struct {
+		Messages []struct {
+			ID string `json:"id"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return "", fmt.Errorf("notify: whatsapp: parse message response: %w", err)
+	}
+	if len(parsed.Messages) == 0 {
+		return "", fmt.Errorf("notify: whatsapp: message response missing messages[0].id: %s", string(respBody))
+	}
+	return parsed.Messages[0].ID, nil
 }
 
 // graphErrorMessage extracts the Graph API's error.message field,

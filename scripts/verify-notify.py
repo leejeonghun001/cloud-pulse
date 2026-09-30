@@ -159,11 +159,19 @@ class WhatsAppCredentials:
 
 @dataclass(frozen=True)
 class VerifyResult:
-    """The outcome of one platform's test send."""
+    """The outcome of one platform's test send.
+
+    message_id/chat_id and cleaned are populated only when the platform
+    supports the corresponding operation (see verify_discord/
+    verify_telegram's own docstrings for each platform's limitations).
+    """
 
     platform: str
     ok: bool
     detail: str = ""
+    verified: bool = False
+    message_id: str = ""
+    cleaned: bool | None = None
 
 
 def _check_credentials_file_permissions(path: Path) -> None:
@@ -281,6 +289,11 @@ class HTTPRequester:
         request = urllib.request.Request(url, method="GET")
         return self._send(request)
 
+    def delete(self, url: str) -> tuple[int, str]:
+        """DELETE url, returning (status, body text)."""
+        request = urllib.request.Request(url, method="DELETE")
+        return self._send(request)
+
     def _send(self, request: urllib.request.Request) -> tuple[int, str]:
         """Execute request, treating an HTTPError's body as a normal response."""
         try:
@@ -292,22 +305,111 @@ class HTTPRequester:
             return 0, str(exc.reason)
 
 
-def verify_discord(credentials: DiscordCredentials, requester: HTTPRequester) -> VerifyResult:
-    """Send a plain test message to a Discord webhook."""
-    status, body = requester.post_json(credentials.webhook_url, {"content": "cloud-pulse verify-notify.py test message"})
-    if 200 <= status < 300:
-        return VerifyResult(platform="discord", ok=True, detail="delivered")
-    return VerifyResult(platform="discord", ok=False, detail=_diagnose_discord(status, body))
+def verify_discord(credentials: DiscordCredentials, requester: HTTPRequester, cleanup: bool = False) -> VerifyResult:
+    """Send a test message to a Discord webhook, with optional read-back.
+
+    Uses ?wait=true so Discord returns the created message body (with
+    its id) instead of 204 No Content -- see
+    https://discord.com/developers/docs/resources/webhook#execute-webhook.
+    On a successful send, performs a read-back GET against
+    .../messages/{id} to confirm the message still exists, then (if
+    cleanup is set) deletes it via DELETE .../messages/{id}.
+    """
+    wait_url = credentials.webhook_url + ("&wait=true" if "?" in credentials.webhook_url else "?wait=true")
+    status, body = requester.post_json(wait_url, {"content": "cloud-pulse verify-notify.py test message"})
+    if not (200 <= status < 300):
+        return VerifyResult(platform="discord", ok=False, detail=_diagnose_discord(status, body))
+
+    message_id = _extract_json_field(body, ("id",))
+    if not message_id:
+        return VerifyResult(platform="discord", ok=True, detail="delivered (no message id in response to read back)")
+
+    verified, verify_detail = _discord_read_back(credentials, requester, message_id)
+    cleaned: bool | None = None
+    if cleanup:
+        cleaned = _discord_delete(credentials, requester, message_id)
+
+    detail = "delivered" if not verify_detail else f"delivered; {verify_detail}"
+    return VerifyResult(platform="discord", ok=True, detail=detail, verified=verified, message_id=message_id, cleaned=cleaned)
 
 
-def verify_telegram(credentials: TelegramCredentials, requester: HTTPRequester, api_base: str) -> VerifyResult:
-    """Send a plain test message via the Telegram Bot API's sendMessage."""
+def _discord_read_back(credentials: DiscordCredentials, requester: HTTPRequester, message_id: str) -> tuple[bool, str]:
+    """GET the message back and confirm it still carries an attachment.
+
+    Returns (verified, detail) -- verified is False (never raises) if the
+    message is missing or has no attachment; the caller still reports
+    the original send as ok=True since Discord already accepted it.
+    """
+    base = credentials.webhook_url.split("?", 1)[0].rstrip("/")
+    status, body = requester.get(f"{base}/messages/{message_id}")
+    if not (200 <= status < 300):
+        return False, f"read-back failed: {_diagnose_discord(status, body)}"
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError:
+        return False, "read-back failed: could not parse response"
+    attachments = parsed.get("attachments") if isinstance(parsed, dict) else None
+    if not attachments:
+        return False, "read-back succeeded but no attachment found"
+    return True, "read-back confirmed message and attachment"
+
+
+def _discord_delete(credentials: DiscordCredentials, requester: HTTPRequester, message_id: str) -> bool:
+    """DELETE the message, returning whether cleanup succeeded."""
+    base = credentials.webhook_url.split("?", 1)[0].rstrip("/")
+    status, _ = requester.delete(f"{base}/messages/{message_id}")
+    return 200 <= status < 300
+
+
+def verify_telegram(credentials: TelegramCredentials, requester: HTTPRequester, api_base: str, cleanup: bool = False) -> VerifyResult:
+    """Send a plain test message via the Telegram Bot API's sendMessage.
+
+    Telegram bots have no API to read a message back after sending it,
+    so "verified" here means only that the send response's own
+    result.message_id and result.chat.id fields are present and the
+    chat id matches what was configured -- the ceiling SPEC-v0.7 SS2
+    documents for this platform. With cleanup=True, deletes the sent
+    message via deleteMessage (subject to Telegram's 48-hour window,
+    https://core.telegram.org/bots/api#deletemessage).
+    """
     url = f"{api_base}/bot{credentials.bot_token}/sendMessage"
     status, body = requester.post_json(url, {"chat_id": credentials.chat_id, "text": "cloud-pulse verify-notify.py test message"})
     parsed_ok, description = _parse_telegram_response(body)
-    if 200 <= status < 300 and parsed_ok:
-        return VerifyResult(platform="telegram", ok=True, detail="delivered")
-    return VerifyResult(platform="telegram", ok=False, detail=_diagnose_telegram(status, description))
+    if not (200 <= status < 300 and parsed_ok):
+        return VerifyResult(platform="telegram", ok=False, detail=_diagnose_telegram(status, description))
+
+    message_id, chat_id, verified = _telegram_result_fields(body, credentials.chat_id)
+    cleaned: bool | None = None
+    if cleanup and message_id:
+        cleaned = _telegram_delete(credentials, requester, api_base, message_id)
+
+    detail = "delivered" if verified else "delivered; response fields incomplete or chat id mismatch"
+    return VerifyResult(platform="telegram", ok=True, detail=detail, verified=verified, message_id=message_id, cleaned=cleaned)
+
+
+def _telegram_result_fields(body: str, expected_chat_id: str) -> tuple[str, str, bool]:
+    """Extract result.message_id/result.chat.id and report whether both
+    are present and the chat id matches expected_chat_id."""
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError:
+        return "", "", False
+    result = parsed.get("result") if isinstance(parsed, dict) else None
+    if not isinstance(result, dict):
+        return "", "", False
+    message_id = str(result.get("message_id", "")) if result.get("message_id") is not None else ""
+    chat = result.get("chat")
+    chat_id = str(chat.get("id", "")) if isinstance(chat, dict) and chat.get("id") is not None else ""
+    verified = bool(message_id) and bool(chat_id) and chat_id == str(expected_chat_id)
+    return message_id, chat_id, verified
+
+
+def _telegram_delete(credentials: TelegramCredentials, requester: HTTPRequester, api_base: str, message_id: str) -> bool:
+    """Call deleteMessage, returning whether cleanup succeeded."""
+    url = f"{api_base}/bot{credentials.bot_token}/deleteMessage"
+    status, body = requester.post_json(url, {"chat_id": credentials.chat_id, "message_id": int(message_id)})
+    ok, _ = _parse_telegram_response(body)
+    return 200 <= status < 300 and ok
 
 
 def verify_whatsapp(credentials: WhatsAppCredentials, requester: HTTPRequester, api_base: str) -> VerifyResult:
@@ -460,6 +562,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Resolve and print which platforms would be tested, without sending anything.",
     )
+    parser.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="Delete the sent test message after verifying it (Discord/Telegram only; ignored for WhatsApp, which has no delete API).",
+    )
     return parser
 
 
@@ -480,6 +587,7 @@ class Verifier:
     discord_credentials: DiscordCredentials | None = None
     telegram_credentials: TelegramCredentials | None = None
     whatsapp_credentials: WhatsAppCredentials | None = None
+    cleanup: bool = False
     _senders: dict[str, Callable[[], VerifyResult]] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -494,13 +602,13 @@ class Verifier:
         """Send Discord's test message using this verifier's credentials."""
         if self.discord_credentials is None:
             return VerifyResult(platform="discord", ok=False, detail="no credentials configured")
-        return verify_discord(self.discord_credentials, self.requester)
+        return verify_discord(self.discord_credentials, self.requester, cleanup=self.cleanup)
 
     def _send_telegram(self) -> VerifyResult:
         """Send Telegram's test message using this verifier's credentials."""
         if self.telegram_credentials is None:
             return VerifyResult(platform="telegram", ok=False, detail="no credentials configured")
-        return verify_telegram(self.telegram_credentials, self.requester, self.telegram_api_base)
+        return verify_telegram(self.telegram_credentials, self.requester, self.telegram_api_base, cleanup=self.cleanup)
 
     def _send_whatsapp(self) -> VerifyResult:
         """Send WhatsApp's test message using this verifier's credentials."""
@@ -531,13 +639,14 @@ class Verifier:
         return results
 
 
-def build_verifier(values: dict[str, str], timeout_seconds: float) -> Verifier:
+def build_verifier(values: dict[str, str], timeout_seconds: float, cleanup: bool = False) -> Verifier:
     """Build a Verifier from resolved credential values."""
     return Verifier(
         requester=HTTPRequester(timeout_seconds=timeout_seconds),
         discord_credentials=discord_credentials_from(values),
         telegram_credentials=telegram_credentials_from(values),
         whatsapp_credentials=whatsapp_credentials_from(values),
+        cleanup=cleanup,
     )
 
 
@@ -571,7 +680,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    verifier = build_verifier(values, timeout_seconds=args.timeout)
+    verifier = build_verifier(values, timeout_seconds=args.timeout, cleanup=args.cleanup)
     configured = verifier.configured_platforms()
     if not configured:
         print("no platform credentials configured; nothing to do (set env vars or --credentials-file)")
@@ -589,7 +698,10 @@ def main(argv: list[str] | None = None) -> int:
     overall_ok = True
     for result in results:
         if result.ok:
-            print(f"{result.platform}: OK ({result.detail})")
+            suffix = " [verified]" if result.verified else ""
+            if result.cleaned is not None:
+                suffix += " [cleaned up]" if result.cleaned else " [cleanup failed]"
+            print(f"{result.platform}: OK ({result.detail}){suffix}")
         else:
             overall_ok = False
             print(f"{result.platform}: FAILED - {result.detail}")

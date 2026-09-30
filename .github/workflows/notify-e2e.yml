@@ -1,0 +1,110 @@
+name: Notify E2E
+
+# Sends real test notifications to Discord/Telegram/WhatsApp using
+# repository secrets, via `cloud-pulse-hub notify verify` (SPEC-v0.7 §2).
+# Deliberately never runs on pull_request (forked PRs never receive
+# secrets, and this workflow must never be triggerable by an untrusted
+# PR branch) -- only workflow_dispatch and a weekly schedule.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly, Monday 03:00 UTC.
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: read
+
+env:
+  CGO_ENABLED: "0"
+
+jobs:
+  notify-e2e:
+    # Never runs on pull_request (no such trigger is declared above), but
+    # this guard is kept as defense-in-depth in case a future edit adds
+    # one -- a workflow_dispatch/schedule run always has
+    # github.event_name != 'pull_request'.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build cloud-pulse-hub
+        run: go build -o /tmp/cloud-pulse-hub ./cmd/hub
+
+      - name: Write credentials file
+        id: write-creds
+        env:
+          CP_VERIFY_DISCORD_WEBHOOK_URL: ${{ secrets.CP_VERIFY_DISCORD_WEBHOOK_URL }}
+          CP_VERIFY_TELEGRAM_BOT_TOKEN: ${{ secrets.CP_VERIFY_TELEGRAM_BOT_TOKEN }}
+          CP_VERIFY_TELEGRAM_CHAT_ID: ${{ secrets.CP_VERIFY_TELEGRAM_CHAT_ID }}
+          CP_VERIFY_WHATSAPP_ACCESS_TOKEN: ${{ secrets.CP_VERIFY_WHATSAPP_ACCESS_TOKEN }}
+          CP_VERIFY_WHATSAPP_PHONE_NUMBER_ID: ${{ secrets.CP_VERIFY_WHATSAPP_PHONE_NUMBER_ID }}
+          CP_VERIFY_WHATSAPP_TO: ${{ secrets.CP_VERIFY_WHATSAPP_TO }}
+          CP_VERIFY_WHATSAPP_TEMPLATE_NAME: ${{ secrets.CP_VERIFY_WHATSAPP_TEMPLATE_NAME }}
+        run: |
+          set -euo pipefail
+          umask 077
+          creds_file="${RUNNER_TEMP}/notify-verify-creds.env"
+          {
+            echo "CP_VERIFY_DISCORD_WEBHOOK_URL=${CP_VERIFY_DISCORD_WEBHOOK_URL}"
+            echo "CP_VERIFY_TELEGRAM_BOT_TOKEN=${CP_VERIFY_TELEGRAM_BOT_TOKEN}"
+            echo "CP_VERIFY_TELEGRAM_CHAT_ID=${CP_VERIFY_TELEGRAM_CHAT_ID}"
+            echo "CP_VERIFY_WHATSAPP_ACCESS_TOKEN=${CP_VERIFY_WHATSAPP_ACCESS_TOKEN}"
+            echo "CP_VERIFY_WHATSAPP_PHONE_NUMBER_ID=${CP_VERIFY_WHATSAPP_PHONE_NUMBER_ID}"
+            echo "CP_VERIFY_WHATSAPP_TO=${CP_VERIFY_WHATSAPP_TO}"
+            echo "CP_VERIFY_WHATSAPP_TEMPLATE_NAME=${CP_VERIFY_WHATSAPP_TEMPLATE_NAME}"
+          } > "${creds_file}"
+          chmod 600 "${creds_file}"
+          echo "creds_file=${creds_file}" >> "${GITHUB_OUTPUT}"
+
+      - name: Run notify verify
+        id: verify
+        run: |
+          set -euo pipefail
+          set +e
+          /tmp/cloud-pulse-hub notify verify \
+            --credentials-file "${{ steps.write-creds.outputs.creds_file }}" \
+            --platform all \
+            --cleanup \
+            --json > "${RUNNER_TEMP}/notify-verify-report.json"
+          exit_code=$?
+          set -e
+          echo "exit_code=${exit_code}" >> "${GITHUB_OUTPUT}"
+          # A platform reporting "failed" (real credential/platform
+          # problem) should fail the job; a platform with no secrets
+          # configured reports "skipped", which notify verify already
+          # treats as non-fatal (report.OK stays true) -- so any
+          # non-zero exit here reflects a genuine failure, not an
+          # absent-secret no-op.
+          exit "${exit_code}"
+
+      - name: Write job summary (masked)
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "## Notify E2E results"
+            echo ""
+            echo '```json'
+            # models.NotifyVerifyResult is secret-free by construction
+            # (see internal/models/notifyverify.go) -- no masking pass
+            # is needed here beyond what the CLI itself already
+            # guarantees, but cat is still scoped to the one report file
+            # this job produced, never broader output.
+            cat "${RUNNER_TEMP}/notify-verify-report.json" 2>/dev/null || echo '{"note":"no report was produced"}'
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Delete credentials file
+        if: always()
+        run: |
+          set -euo pipefail
+          rm -f "${{ steps.write-creds.outputs.creds_file }}"
