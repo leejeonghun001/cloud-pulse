@@ -235,14 +235,15 @@ func TestStatus_ReflectsLastApply(t *testing.T) {
 
 func TestRun_RetriesWaitingAddressUntilBindable(t *testing.T) {
 	t.Parallel()
-	addr := freePort(t)
-
-	// Occupy the port so the first Apply fails, then free it and let Run
-	// pick it up on its next retry tick.
-	occupied, err := net.Listen("tcp", addr)
+	// Occupy a port so the first Apply fails, then free it and let Run
+	// pick it up on its next retry tick. Bind ":0" directly and occupy
+	// that listener: a freePort()-then-rebind sequence leaves a window in
+	// which a parallel test can take the port first.
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("occupy: listen: %v", err)
 	}
+	addr := occupied.Addr().String()
 
 	m := NewManagerWithOptions(testServer(), testLogger(), ManagerOptions{RetryInterval: 30 * time.Millisecond})
 	statuses, err := m.Apply(context.Background(), []string{addr})
