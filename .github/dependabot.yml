@@ -1,0 +1,32 @@
+version: 2
+updates:
+  # Keep GitHub Actions pinned-action versions current. Weekly cadence
+  # matches how infrequently these actions' major versions change; PRs
+  # only (no auto-merge), so a human reviews each bump.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(ci)"
+    labels:
+      - "dependencies"
+      - "ci"
+
+  # Go module updates. cloud-pulse deliberately keeps its dependency
+  # graph minimal and every version pinned exactly (see
+  # CODING_CONVENTIONS.md) — monthly keeps the PR volume low while still
+  # surfacing security/compatibility updates for review. Dependabot only
+  # opens PRs here; it never changes go.mod on its own without review,
+  # and it does not conflict with the "no new third-party modules"
+  # policy since it only proposes version bumps for modules already
+  # present in go.mod.
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - "dependencies"
+      - "go"

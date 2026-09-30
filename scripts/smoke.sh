@@ -15,6 +15,9 @@ SMOKE_PORT="${SMOKE_PORT:-18090}"
 HUB_ADDR="127.0.0.1:${SMOKE_PORT}"
 HUB_BASE_URL="http://${HUB_ADDR}"
 
+STORAGE_FAKE_PORT="${STORAGE_FAKE_PORT:-18197}"
+STORAGE_FAKE_BASE_URL="http://127.0.0.1:${STORAGE_FAKE_PORT}"
+
 AGENT_TOKEN="smoke-agent-token-0123456789"
 UI_TOKEN="smoke-ui-token"
 HOST_ID="smoke-host"
@@ -37,6 +40,8 @@ AGENT_PID=""
 FAKE_PID=""
 WEBHOOK_PID=""
 REMOTE_UPDATE_FAKE_PID=""
+STORAGE_FAKE_PID=""
+STORAGE_WEBHOOK_PID=""
 
 PASS_COUNT=0
 
@@ -79,6 +84,14 @@ cleanup() {
   if [ -n "$REMOTE_UPDATE_FAKE_PID" ] && kill -0 "$REMOTE_UPDATE_FAKE_PID" 2>/dev/null; then
     kill "$REMOTE_UPDATE_FAKE_PID" 2>/dev/null || true
     wait "$REMOTE_UPDATE_FAKE_PID" 2>/dev/null || true
+  fi
+  if [ -n "$STORAGE_FAKE_PID" ] && kill -0 "$STORAGE_FAKE_PID" 2>/dev/null; then
+    kill "$STORAGE_FAKE_PID" 2>/dev/null || true
+    wait "$STORAGE_FAKE_PID" 2>/dev/null || true
+  fi
+  if [ -n "$STORAGE_WEBHOOK_PID" ] && kill -0 "$STORAGE_WEBHOOK_PID" 2>/dev/null; then
+    kill "$STORAGE_WEBHOOK_PID" 2>/dev/null || true
+    wait "$STORAGE_WEBHOOK_PID" 2>/dev/null || true
   fi
   if [ "$status" -ne 0 ]; then
     dump_logs
@@ -200,6 +213,35 @@ chmod 0755 "${FAKE_CLI_DIR}/oci"
 pass "prepared fake aws (ok) and oci (auth_failed) CLI stubs in ${FAKE_CLI_DIR}"
 
 # ---------------------------------------------------------------------------
+# SPEC-v0.7 §3: fake combined Google Drive + Dropbox OAuth/API server
+#
+# Started before the hub so CP_STORAGE_FAKE_BASE_URL is reachable from
+# the first storage-usage request onward. Never real Google/Dropbox —
+# see scripts/fake_storage_provider.py and DECISIONS_LOG.md D-081.
+# ---------------------------------------------------------------------------
+
+echo "==> starting fake Google Drive + Dropbox server on ${STORAGE_FAKE_BASE_URL}"
+python3 "${REPO_ROOT}/scripts/fake_storage_provider.py" "$STORAGE_FAKE_PORT" \
+  >"${TMP_DIR}/fake-storage.log" 2>&1 &
+STORAGE_FAKE_PID=$!
+
+STORAGE_FAKE_UP=0
+for _ in $(seq 1 40); do
+  if curl -fsS -o /dev/null "${STORAGE_FAKE_BASE_URL}/healthz" 2>/dev/null; then
+    STORAGE_FAKE_UP=1
+    break
+  fi
+  if ! kill -0 "$STORAGE_FAKE_PID" 2>/dev/null; then
+    fail "fake storage provider server exited before becoming reachable"
+  fi
+  sleep 0.25
+done
+if [ "$STORAGE_FAKE_UP" -ne 1 ]; then
+  fail "fake storage provider server did not become reachable within 10s"
+fi
+pass "fake Google Drive + Dropbox server reachable on ${STORAGE_FAKE_BASE_URL}"
+
+# ---------------------------------------------------------------------------
 # Start hub
 # ---------------------------------------------------------------------------
 
@@ -219,6 +261,11 @@ echo "==> starting hub on ${HUB_ADDR}"
 # section below. CP_BILLING_INTERVAL=24h keeps the background scheduler
 # from firing on its own during the test; every assertion below drives
 # collection explicitly via POST /api/v1/billing/refresh.
+# CP_STORAGE_ALLOW_CUSTOM_ENDPOINTS + CP_STORAGE_FAKE_BASE_URL (SPEC-v0.7
+# §3, DECISIONS_LOG.md D-081) redirect every Google Drive/Dropbox OAuth
+# and API request onto scripts/fake_storage_provider.py, started below
+# — the storage-usage section never contacts a real Google/Dropbox
+# host.
 CP_LISTEN="${HUB_ADDR}" \
 CP_AGENT_TOKEN="${AGENT_TOKEN}" \
 CP_UI_TOKEN="${UI_TOKEN}" \
@@ -230,6 +277,8 @@ CP_BILLING="auto" \
 CP_BILLING_PATH="${FAKE_CLI_DIR}" \
 CP_BILLING_INTERVAL="24h" \
 CP_OCI_TENANCY_ID="ocid1.tenancy.oc1..smoketest" \
+CP_STORAGE_ALLOW_CUSTOM_ENDPOINTS="1" \
+CP_STORAGE_FAKE_BASE_URL="${STORAGE_FAKE_BASE_URL}" \
   "$HUB_BIN" >"$HUB_LOG" 2>&1 &
 HUB_PID=$!
 
@@ -1604,6 +1653,243 @@ pass "POST /api/v1/alerts/channels/${DIAG_CHANNEL_ID}/test against a closed port
 curl -fsS -X DELETE -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
   "${HUB_BASE_URL}/api/v1/alerts/channels/${DIAG_CHANNEL_ID}" >/dev/null
 pass "DELETE /api/v1/alerts/channels/${DIAG_CHANNEL_ID} -> cleaned up"
+
+# ---------------------------------------------------------------------------
+# SPEC-v0.7 §3: storage-usage accounts (Google Drive device flow +
+# Dropbox PKCE) -> snapshot -> storage_usage_pct alert -> local webhook
+#
+# Drives both connect flows through the hub's real HTTP OAuth handlers
+# against scripts/fake_storage_provider.py (started earlier, never real
+# Google/Dropbox — CP_STORAGE_ALLOW_CUSTOM_ENDPOINTS/
+# CP_STORAGE_FAKE_BASE_URL, see DECISIONS_LOG.md D-081), then attaches a
+# storage_usage_pct alert rule to a fresh webhook receiver instance
+# (the v0.5 alerting section's own receiver was already stopped above,
+# once its own rule was cleaned up), confirming end-to-end delivery for
+# this new account-scoped metric.
+# ---------------------------------------------------------------------------
+
+echo "==> SPEC-v0.7 storage-usage accounts"
+
+# --- Google Drive: device flow ---
+
+GOOGLE_ACCT_JSON="$(curl -fsS -X POST -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"googledrive","name":"smoke google drive","config":{"client_id":"smoke-fake-client-id"},"secret":{"client_secret":"smoke-fake-client-secret"}}' \
+  "${HUB_BASE_URL}/api/v1/storage/accounts")"
+GOOGLE_ACCT_ID="$(echo "$GOOGLE_ACCT_JSON" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+assert doc.get('id'), f'missing account id: {doc!r}'
+assert doc.get('secret') is None, f\"secret should be redacted (nil), got {doc.get('secret')!r}\"
+print(doc['id'])
+")"
+pass "POST /api/v1/storage/accounts (googledrive) creates an account (id=${GOOGLE_ACCT_ID}), secret redacted"
+
+GOOGLE_START_JSON="$(curl -fsS -X POST -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+  "${HUB_BASE_URL}/api/v1/storage/accounts/${GOOGLE_ACCT_ID}/oauth/start")"
+echo "$GOOGLE_START_JSON" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+assert doc.get('flow') == 'device', f\"flow {doc.get('flow')!r} != 'device': {doc!r}\"
+assert doc.get('user_code'), f'missing user_code: {doc!r}'
+assert doc.get('verification_url'), f'missing verification_url: {doc!r}'
+"
+pass "POST /api/v1/storage/accounts/${GOOGLE_ACCT_ID}/oauth/start -> device flow (user_code shown)"
+
+# Poll oauth/complete until the background device-flow poller (against
+# the fake server, which returns authorization_pending once, then
+# grants) reaches a terminal "connected" status.
+GOOGLE_CONNECTED=0
+for _ in $(seq 1 40); do
+  GOOGLE_COMPLETE_JSON="$(curl -fsS -X POST -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+    "${HUB_BASE_URL}/api/v1/storage/accounts/${GOOGLE_ACCT_ID}/oauth/complete")"
+  GOOGLE_STATUS="$(echo "$GOOGLE_COMPLETE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status',''))")"
+  if [ "$GOOGLE_STATUS" = "connected" ]; then
+    GOOGLE_CONNECTED=1
+    break
+  fi
+  sleep 0.5
+done
+if [ "$GOOGLE_CONNECTED" -ne 1 ]; then
+  fail "google drive device flow did not reach status=connected within 20s (last status=${GOOGLE_STATUS:-<none>})"
+fi
+pass "POST /api/v1/storage/accounts/${GOOGLE_ACCT_ID}/oauth/complete -> status=connected"
+
+# --- Dropbox: PKCE flow ---
+
+DROPBOX_ACCT_JSON="$(curl -fsS -X POST -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"dropbox","name":"smoke dropbox","config":{"app_key":"smoke-fake-app-key"}}' \
+  "${HUB_BASE_URL}/api/v1/storage/accounts")"
+DROPBOX_ACCT_ID="$(echo "$DROPBOX_ACCT_JSON" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+assert doc.get('id'), f'missing account id: {doc!r}'
+print(doc['id'])
+")"
+pass "POST /api/v1/storage/accounts (dropbox) creates an account (id=${DROPBOX_ACCT_ID})"
+
+DROPBOX_START_JSON="$(curl -fsS -X POST -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+  "${HUB_BASE_URL}/api/v1/storage/accounts/${DROPBOX_ACCT_ID}/oauth/start")"
+echo "$DROPBOX_START_JSON" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+assert doc.get('flow') == 'pkce', f\"flow {doc.get('flow')!r} != 'pkce': {doc!r}\"
+authorize_url = doc.get('authorize_url', '')
+assert authorize_url, f'missing authorize_url: {doc!r}'
+assert 'redirect_uri' not in authorize_url, 'dropbox authorize url must not include redirect_uri (no-redirect PKCE flow)'
+assert 'code_challenge_method=S256' in authorize_url, 'expected S256 code_challenge_method in authorize url'
+"
+pass "POST /api/v1/storage/accounts/${DROPBOX_ACCT_ID}/oauth/start -> pkce flow (authorize_url shown)"
+
+DROPBOX_COMPLETE_JSON="$(curl -fsS -X POST -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"code":"smoke-fake-user-pasted-code"}' \
+  "${HUB_BASE_URL}/api/v1/storage/accounts/${DROPBOX_ACCT_ID}/oauth/complete")"
+echo "$DROPBOX_COMPLETE_JSON" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+assert doc.get('status') == 'connected', f\"status {doc.get('status')!r} != 'connected': {doc!r}\"
+"
+pass "POST /api/v1/storage/accounts/${DROPBOX_ACCT_ID}/oauth/complete -> status=connected"
+
+# --- Snapshots: both accounts collected via the real fake-server HTTP round trip ---
+
+STORAGE_ACCOUNTS_JSON="$(curl -fsS -H "Authorization: Bearer ${NET_SESSION_TOKEN}" "${HUB_BASE_URL}/api/v1/storage/accounts")"
+echo "$STORAGE_ACCOUNTS_JSON" | GOOGLE_ACCT_ID="$GOOGLE_ACCT_ID" DROPBOX_ACCT_ID="$DROPBOX_ACCT_ID" python3 -c "
+import json, os, sys
+doc = json.load(sys.stdin)
+accounts = {str(a['account']['id']): a for a in doc.get('accounts', [])}
+
+google = accounts.get(os.environ['GOOGLE_ACCT_ID'])
+assert google, f'google account missing from list: {doc!r}'
+gsnap = google.get('snapshot') or {}
+assert gsnap.get('status') == 'ok', f\"google snapshot status {gsnap.get('status')!r} != 'ok': {gsnap!r}\"
+assert gsnap.get('account_email') == 'smoke-fake-google@example.test', f\"unexpected google account_email: {gsnap!r}\"
+gquota = gsnap.get('quota') or {}
+assert gquota.get('used_bytes') == 950000000, f\"google used_bytes {gquota.get('used_bytes')!r} != 950000000\"
+assert gquota.get('limit_bytes') == 1000000000, f\"google limit_bytes {gquota.get('limit_bytes')!r} != 1000000000\"
+
+dropbox = accounts.get(os.environ['DROPBOX_ACCT_ID'])
+assert dropbox, f'dropbox account missing from list: {doc!r}'
+dsnap = dropbox.get('snapshot') or {}
+assert dsnap.get('status') == 'ok', f\"dropbox snapshot status {dsnap.get('status')!r} != 'ok': {dsnap!r}\"
+assert dsnap.get('account_email') == 'smoke-fake-dropbox@example.test', f\"unexpected dropbox account_email: {dsnap!r}\"
+dquota = dsnap.get('quota') or {}
+assert dquota.get('used_bytes') == 1900000000, f\"dropbox used_bytes {dquota.get('used_bytes')!r} != 1900000000\"
+assert dquota.get('limit_bytes') == 2000000000, f\"dropbox limit_bytes {dquota.get('limit_bytes')!r} != 2000000000\"
+"
+pass "GET /api/v1/storage/accounts -> both accounts show status=ok snapshots from the real fake-server round trip (95%/95% used)"
+
+# --- Alert: storage_usage_pct rule scoped to the Google account, fired to a fresh webhook receiver ---
+
+# The v0.5 alerting section's own webhook receiver (WEBHOOK_PID) was
+# already stopped once that section's rule was cleaned up — start a
+# fresh instance on a different port for this section rather than
+# resurrecting it.
+STORAGE_WEBHOOK_PORT="${STORAGE_WEBHOOK_PORT:-18198}"
+STORAGE_WEBHOOK_BASE_URL="http://127.0.0.1:${STORAGE_WEBHOOK_PORT}"
+STORAGE_WEBHOOK_RECEIVED="${TMP_DIR}/storage-webhook-received.jsonl"
+: >"$STORAGE_WEBHOOK_RECEIVED"
+
+python3 "${REPO_ROOT}/scripts/webhook_receiver.py" "$STORAGE_WEBHOOK_PORT" "$STORAGE_WEBHOOK_RECEIVED" \
+  >"${TMP_DIR}/storage-webhook-receiver.log" 2>&1 &
+STORAGE_WEBHOOK_PID=$!
+
+STORAGE_WEBHOOK_UP=0
+for _ in $(seq 1 40); do
+  if curl -fsS -o /dev/null "${STORAGE_WEBHOOK_BASE_URL}/healthz" 2>/dev/null; then
+    STORAGE_WEBHOOK_UP=1
+    break
+  fi
+  if ! kill -0 "$STORAGE_WEBHOOK_PID" 2>/dev/null; then
+    fail "storage webhook receiver exited before becoming reachable"
+  fi
+  sleep 0.25
+done
+if [ "$STORAGE_WEBHOOK_UP" -ne 1 ]; then
+  fail "storage webhook receiver did not become reachable within 10s"
+fi
+pass "fresh local webhook receiver reachable on ${STORAGE_WEBHOOK_BASE_URL} for storage_usage_pct delivery"
+
+STORAGE_CHANNEL_JSON="$(curl -fsS -X POST -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"smoke storage webhook","type":"webhook","enabled":true,"config":{"url":"'"${STORAGE_WEBHOOK_BASE_URL}"'/webhook","include_image":"false"}}' \
+  "${HUB_BASE_URL}/api/v1/alerts/channels")"
+STORAGE_CHANNEL_ID="$(echo "$STORAGE_CHANNEL_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")"
+pass "POST /api/v1/alerts/channels creates a webhook channel for storage alerts (id=${STORAGE_CHANNEL_ID})"
+
+STORAGE_RULE_JSON="$(curl -fsS -X POST -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"smoke storage usage rule","enabled":true,"metric":"storage_usage_pct","host_id":"'"${GOOGLE_ACCT_ID}"'","operator":">=","threshold":90,"duration_sec":0,"cooldown_sec":0,"notify_resolved":false,"channel_ids":['"${STORAGE_CHANNEL_ID}"']}' \
+  "${HUB_BASE_URL}/api/v1/alerts/rules")"
+STORAGE_RULE_ID="$(echo "$STORAGE_RULE_JSON" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+assert doc.get('id'), f'missing rule id: {doc!r}'
+assert doc.get('host_id') == '$GOOGLE_ACCT_ID', f\"host_id (repurposed as account id) {doc.get('host_id')!r} != '$GOOGLE_ACCT_ID'\"
+print(doc['id'])
+")"
+pass "POST /api/v1/alerts/rules creates a storage_usage_pct rule scoped to account ${GOOGLE_ACCT_ID} (threshold >=90%, id=${STORAGE_RULE_ID})"
+
+# A manual refresh re-runs collectStorageOnce -> evaluateStorageAlerts,
+# which is what actually advances the rule's state machine (the
+# oauth/complete-triggered collection above ran before the rule
+# existed). This is the account-scoped rule's first-ever evaluation, so
+# it fires immediately (storage_usage_pct ignores duration_sec, and the
+# rule's own cooldown_sec=0 was just created — no prior "already
+# notified" state exists yet).
+STORAGE_REFRESH_STATUS="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer ${NET_SESSION_TOKEN}" "${HUB_BASE_URL}/api/v1/storage/refresh")"
+if [ "$STORAGE_REFRESH_STATUS" != "200" ]; then
+  fail "POST /api/v1/storage/refresh status = ${STORAGE_REFRESH_STATUS}, want 200"
+fi
+pass "POST /api/v1/storage/refresh -> 200 (re-evaluates storage_usage_pct alerts)"
+
+STORAGE_FIRING_LINE=""
+for _ in $(seq 1 40); do
+  if [ -s "$STORAGE_WEBHOOK_RECEIVED" ]; then
+    STORAGE_FIRING_LINE="$(grep -F "smoke storage usage rule" "$STORAGE_WEBHOOK_RECEIVED" | tail -1 || true)"
+    if [ -n "$STORAGE_FIRING_LINE" ]; then
+      break
+    fi
+  fi
+  sleep 0.25
+done
+if [ -z "$STORAGE_FIRING_LINE" ]; then
+  fail "storage_usage_pct alert was not delivered to the local webhook receiver within 10s"
+fi
+echo "$STORAGE_FIRING_LINE" | GOOGLE_ACCT_ID="$GOOGLE_ACCT_ID" python3 -c "
+import json, os, sys
+doc = json.loads(sys.stdin.read())
+assert doc.get('title'), f'missing title: {doc!r}'
+text = doc.get('text', '') + doc.get('content', '')
+assert '95' in text or '95.0' in text, f\"expected the fired notification to mention ~95% usage: {doc!r}\"
+"
+pass "storage_usage_pct alert (account ${GOOGLE_ACCT_ID}, ~95% used >= 90% threshold) delivered to the local webhook receiver"
+
+curl -fsS -X DELETE -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+  "${HUB_BASE_URL}/api/v1/alerts/rules/${STORAGE_RULE_ID}" >/dev/null
+curl -fsS -X DELETE -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+  "${HUB_BASE_URL}/api/v1/alerts/channels/${STORAGE_CHANNEL_ID}" >/dev/null
+pass "cleaned up storage_usage_pct rule and its webhook channel"
+
+if kill -0 "$STORAGE_WEBHOOK_PID" 2>/dev/null; then
+  kill "$STORAGE_WEBHOOK_PID" 2>/dev/null || true
+  wait "$STORAGE_WEBHOOK_PID" 2>/dev/null || true
+fi
+STORAGE_WEBHOOK_PID=""
+
+# Delete both storage accounts (best-effort RevokeToken against the
+# fake server, which has no revoke endpoint registered — Dropbox/Google
+# RevokeToken calls are expected to fail against a 404 here and are
+# logged as a warning, never fatal, per storageroutes.go's
+# handleDeleteStorageAccount doc comment).
+curl -fsS -X DELETE -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+  "${HUB_BASE_URL}/api/v1/storage/accounts/${GOOGLE_ACCT_ID}" >/dev/null
+curl -fsS -X DELETE -H "Authorization: Bearer ${NET_SESSION_TOKEN}" \
+  "${HUB_BASE_URL}/api/v1/storage/accounts/${DROPBOX_ACCT_ID}" >/dev/null
+pass "DELETE /api/v1/storage/accounts/{id} -> cleaned up both smoke storage accounts"
 
 # ---------------------------------------------------------------------------
 # SIGTERM hub -> exits within 10s, DB file exists

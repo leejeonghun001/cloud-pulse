@@ -10,14 +10,23 @@ body:
     id: version
     attributes:
       label: cloud-pulse version
-      placeholder: v0.5.0
+      description: "Output of `cloud-pulse-hub -version` and/or `cloud-pulse-agent -version`."
+      placeholder: "cloud-pulse-hub v0.7.0 (commit abc1234, built 2026-09-30)"
+    validations:
+      required: true
+  - type: input
+    id: os-arch
+    attributes:
+      label: OS / architecture
+      description: For each affected component (hub, agent), the OS and CPU architecture.
+      placeholder: "hub: linux/arm64 (Raspberry Pi 5); agent: darwin/arm64 (macOS 14)"
     validations:
       required: true
   - type: textarea
     id: environment
     attributes:
       label: Environment
-      description: OS, architecture, deployment method, and relevant non-secret configuration.
+      description: Deployment method (installer/manual/systemd/launchd/Windows service) and relevant non-secret configuration.
     validations:
       required: true
   - type: textarea
@@ -37,5 +46,6 @@ body:
     id: actual
     attributes:
       label: Actual behavior and sanitized logs
+      description: "Attach relevant log lines (`journalctl -u cloud-pulse-hub`, `log show` on macOS, Event Viewer on Windows, or stdout/stderr). Redact tokens/webhook URLs/IPs you don't want public."
     validations:
       required: true

@@ -60,6 +60,9 @@ jobs:
             echo "value=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Generate release notes
+        run: scripts/release-notes.sh "${TAG}" > /tmp/release-notes.md
+
       - name: Create or update GitHub release
         run: |
           if gh release view "${TAG}" >/dev/null 2>&1; then
@@ -69,7 +72,7 @@ jobs:
             if [ "${PRERELEASE}" = "true" ]; then
               extra_args+=(--prerelease)
             fi
-            gh release create "${TAG}" dist/* --title "${TAG}" --generate-notes --verify-tag "${extra_args[@]}"
+            gh release create "${TAG}" dist/* --title "${TAG}" --notes-file /tmp/release-notes.md --verify-tag "${extra_args[@]}"
           fi
         env:
           PRERELEASE: ${{ steps.prerelease.outputs.value }}

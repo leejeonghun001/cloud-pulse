@@ -243,3 +243,436 @@ jobs:
 
       - name: Run web/test/ (Node built-in test runner)
         run: node --test web/test/*.test.mjs
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check docs (links, anchors, fenced code languages, env/flag cross-reference, README length cap)
+        run: python3 scripts/check-docs.py
+
+      - name: release-notes.sh tests (temporary git fixture, snapshot compare)
+        run: python3 -m unittest scripts.tests.test_release_notes -v
+
+      - name: CONTRIBUTING.md commands actually work (fresh clone, empty caches)
+        run: bash scripts/test-contributing.sh
+
+  ui-audit:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Confirm Firefox is available
+        run: firefox --version
+
+      - name: Build hub + agent
+        run: |
+          mkdir -p /tmp/ui-audit-bin
+          go build -o /tmp/ui-audit-bin/cloud-pulse-hub ./cmd/hub
+          go build -o /tmp/ui-audit-bin/cloud-pulse-agent ./cmd/agent
+
+      - name: Start sandbox hub with demo data
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ui-audit-data
+          export CP_LISTEN="127.0.0.1:18190"
+          export CP_AGENT_TOKEN="ui-audit-ci-fake-agent-token-0123456789"
+          export CP_UI_TOKEN="ui-audit-ci-fake-ui-token-0123456789"
+          export CP_ALLOWED_CIDRS="127.0.0.0/8,::1/128"
+          export CP_DATA_DIR="/tmp/ui-audit-data"
+          export CP_UPDATE_CHECK="false"
+          nohup /tmp/ui-audit-bin/cloud-pulse-hub >/tmp/ui-audit-hub.log 2>&1 &
+          echo $! > /tmp/ui-audit-hub.pid
+          for _ in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:18190/healthz >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "hub did not become healthy in time" >&2
+          cat /tmp/ui-audit-hub.log >&2
+          exit 1
+
+      - name: Set admin password (non-interactive, never on argv)
+        run: |
+          set -euo pipefail
+          printf '%s' "CiUiAudit!Temp9Pass" | /tmp/ui-audit-bin/cloud-pulse-hub reset-password \
+            --data-dir /tmp/ui-audit-data --password-stdin
+          printf '%s' "CiUiAudit!Temp9Pass" > /tmp/ui-audit-pw.txt
+          chmod 600 /tmp/ui-audit-pw.txt
+
+      - name: Seed demo data
+        run: |
+          set -euo pipefail
+          python3 scripts/demo-seed.py \
+            --hub http://127.0.0.1:18190 \
+            --token ui-audit-ci-fake-agent-token-0123456789 \
+            --ui-token ui-audit-ci-fake-ui-token-0123456789 \
+            --db /tmp/ui-audit-data/cloud-pulse.db
+          if [ -f scripts/demo_seed_v05.py ]; then
+            python3 scripts/demo_seed_v05.py \
+              --hub http://127.0.0.1:18190 \
+              --ui-token ui-audit-ci-fake-ui-token-0123456789 \
+              --agent-token ui-audit-ci-fake-agent-token-0123456789 \
+              --db /tmp/ui-audit-data/cloud-pulse.db
+          fi
+
+      - name: Run UI audit
+        id: audit
+        continue-on-error: true
+        run: |
+          node scripts/ui-audit.mjs \
+            --hub http://127.0.0.1:18190 \
+            --user admin \
+            --password-file /tmp/ui-audit-pw.txt \
+            --out /tmp/ui-audit-out \
+            --allow scripts/ui-audit.allow.json \
+            --wait 800 \
+            --timeout 480000
+
+      - name: Stop sandbox hub
+        if: always()
+        run: |
+          if [ -f /tmp/ui-audit-hub.pid ]; then
+            kill "$(cat /tmp/ui-audit-hub.pid)" 2>/dev/null || true
+          fi
+
+      - name: Upload UI audit report + screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-audit-report
+          path: /tmp/ui-audit-out
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Fail the job on unallowed violations
+        if: steps.audit.outcome == 'failure'
+        run: |
+          echo "::error::ui-audit found violations not covered by scripts/ui-audit.allow.json — see the uploaded ui-audit-report artifact's report.json"
+          exit 1
+
+  # agent-e2e (SPEC-v0.7 §1 test plan): real service install/report/
+  # remote-update/uninstall E2E, one job per target OS, each using a
+  # *real* systemd/launchd/Windows-service install (not the sandbox
+  # CP_INSTALL_ROOT mode scripts/test-install.sh uses) since only a CI
+  # runner with admin/root/sudo can prove real service lifecycle
+  # behavior. This is the ONLY job block this stage (agent-platforms)
+  # owns in this file — every other job above is pre-existing and
+  # untouched.
+  agent-e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    needs: test
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # ---------------------------------------------------------------
+      # Build v0.7.0-ci1 (initial install) and v0.7.0-ci2 (remote-update
+      # target) release assets for this runner's own OS/arch, served by
+      # a local HTTP server standing in for GitHub Releases — never
+      # real network, matching this project's release-asset trust
+      # model test conventions (see scripts/test-update.sh).
+      # ---------------------------------------------------------------
+      - name: Determine target OS/arch
+        id: target
+        run: |
+          case "${{ matrix.os }}" in
+            ubuntu-latest) echo "goos=linux" >> "$GITHUB_OUTPUT"; echo "goarch=amd64" >> "$GITHUB_OUTPUT" ;;
+            macos-latest) echo "goos=darwin" >> "$GITHUB_OUTPUT"; echo "goarch=arm64" >> "$GITHUB_OUTPUT" ;;
+            windows-latest) echo "goos=windows" >> "$GITHUB_OUTPUT"; echo "goarch=amd64" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Build v0.7.0-ci1 assets
+        env:
+          TARGETS: "${{ steps.target.outputs.goos }}/${{ steps.target.outputs.goarch }}"
+          ALLOW_ANY_VERSION: "1"
+        run: bash scripts/build-release.sh v0.7.0-ci1 dist-ci1
+
+      - name: Build v0.7.0-ci2 assets (remote-update target)
+        env:
+          TARGETS: "${{ steps.target.outputs.goos }}/${{ steps.target.outputs.goarch }}"
+          ALLOW_ANY_VERSION: "1"
+        run: bash scripts/build-release.sh v0.7.0-ci2 dist-ci2
+
+      - name: Build hub binary (runs on this same runner to receive reports)
+        run: go build -o hub-bin/cloud-pulse-hub${{ matrix.os == 'windows-latest' && '.exe' || '' }} ./cmd/hub
+
+      - name: Serve release assets over local HTTP (ci1 initially; swapped to ci2 for the remote-update step)
+        id: assets
+        run: |
+          mkdir -p asset-root
+          cp -r dist-ci1/. asset-root/
+          python3 -m http.server --bind 127.0.0.1 18410 --directory asset-root &
+          echo $! > asset-server.pid
+          for _ in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:18410/checksums.txt >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "asset server did not become reachable" >&2
+          exit 1
+
+      - name: Start hub on this runner (127.0.0.1:18490, fake agent/UI tokens)
+        run: |
+          mkdir -p hub-data
+          export CP_LISTEN="127.0.0.1:18490"
+          export CP_AGENT_TOKEN="agent-e2e-ci-fake-agent-token-0123456789"
+          export CP_UI_TOKEN="agent-e2e-ci-fake-ui-token-0123456789"
+          export CP_ALLOWED_CIDRS="127.0.0.0/8,::1/128"
+          export CP_DATA_DIR="${{ github.workspace }}/hub-data"
+          export CP_UPDATE_CHECK="false"
+          export CP_OFFLINE_AFTER="120s"
+          nohup ./hub-bin/cloud-pulse-hub${{ matrix.os == 'windows-latest' && '.exe' || '' }} >hub.log 2>&1 &
+          echo $! > hub.pid
+          for _ in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:18490/healthz >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "hub did not become healthy in time" >&2
+          cat hub.log >&2
+          exit 1
+
+      - name: Set admin password (never on argv; via --password-stdin)
+        run: |
+          printf '%s' 'AgentE2ECiTemp!Pass9' | ./hub-bin/cloud-pulse-hub${{ matrix.os == 'windows-latest' && '.exe' || '' }} \
+            reset-password --data-dir "${{ github.workspace }}/hub-data" --password-stdin
+
+      - name: Obtain an admin session token
+        id: session
+        run: |
+          token="$(curl -fsS -X POST http://127.0.0.1:18490/api/v1/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"AgentE2ECiTemp!Pass9"}' | \
+            python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')"
+          if [ -z "$token" ]; then
+            echo "failed to obtain a session token" >&2
+            exit 1
+          fi
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      # ---------------------------------------------------------------
+      # Linux (ubuntu-latest, real sudo/systemd)
+      # ---------------------------------------------------------------
+      - name: "[linux] install via install-agent.sh (real systemd, sudo)"
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo CP_RELEASE_BASE_URL=http://127.0.0.1:18410 \
+            bash scripts/install-agent.sh --install --yes \
+            --hub-url http://127.0.0.1:18490 \
+            --token agent-e2e-ci-fake-agent-token-0123456789 \
+            --version v0.7.0-ci1 --remote-update
+          sleep 3
+          sudo systemctl is-active cloud-pulse-agent.service
+
+      - name: "[linux] wait for agent report to arrive at the hub"
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          for _ in $(seq 1 40); do
+            count="$(curl -fsS -H "Authorization: Bearer ${{ steps.session.outputs.token }}" \
+              http://127.0.0.1:18490/api/v1/hosts | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+            if [ "$count" -ge 1 ]; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "no agent report arrived within 40s" >&2
+          cat hub.log >&2
+          exit 1
+
+      # ---------------------------------------------------------------
+      # macOS (macos-latest, real sudo/launchd)
+      # ---------------------------------------------------------------
+      - name: "[darwin] install via install-agent.sh (real launchd, sudo)"
+        if: matrix.os == 'macos-latest'
+        run: |
+          sudo CP_RELEASE_BASE_URL=http://127.0.0.1:18410 \
+            bash scripts/install-agent.sh --install --yes \
+            --hub-url http://127.0.0.1:18490 \
+            --token agent-e2e-ci-fake-agent-token-0123456789 \
+            --version v0.7.0-ci1 --remote-update
+          sleep 3
+          sudo launchctl print system/com.cloudpulse.agent | grep -q 'state = running'
+          uid="$(sudo dscl . -read /Users/_cloudpulse UniqueID | awk '/^UniqueID: / { print $2 }')"
+          case "$uid" in
+            ''|*[!0-9]*)
+              echo "_cloudpulse has an invalid UID: ${uid:-<missing>}" >&2
+              exit 1
+              ;;
+          esac
+          if [ "$uid" -lt 200 ] || [ "$uid" -gt 400 ]; then
+            echo "_cloudpulse UID $uid is outside the required range [200, 400]" >&2
+            exit 1
+          fi
+
+      - name: "[darwin] wait for agent report to arrive at the hub"
+        if: matrix.os == 'macos-latest'
+        run: |
+          for _ in $(seq 1 40); do
+            count="$(curl -fsS -H "Authorization: Bearer ${{ steps.session.outputs.token }}" \
+              http://127.0.0.1:18490/api/v1/hosts | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+            if [ "$count" -ge 1 ]; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "no agent report arrived within 40s" >&2
+          cat hub.log >&2
+          exit 1
+
+      # ---------------------------------------------------------------
+      # Windows (windows-latest, real Administrator/SCM)
+      # ---------------------------------------------------------------
+      - name: "[windows] install via install-agent.ps1 (real Windows service, Administrator)"
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $env:CP_RELEASE_BASE_URL = "http://127.0.0.1:18410"
+          & ./scripts/install-agent.ps1 -Install -Yes `
+            -HubUrl http://127.0.0.1:18490 `
+            -Token agent-e2e-ci-fake-agent-token-0123456789 `
+            -Version v0.7.0-ci2 -RemoteUpdate
+          Start-Sleep -Seconds 3
+          $svc = Get-Service -Name cloud-pulse-agent
+          if ($svc.Status -ne 'Running') { throw "cloud-pulse-agent service is $($svc.Status), want Running" }
+
+      - name: "[windows] wait for agent report to arrive at the hub"
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $headers = @{ Authorization = "Bearer ${{ steps.session.outputs.token }}" }
+          for ($i = 0; $i -lt 40; $i++) {
+            $hosts = Invoke-RestMethod -Uri http://127.0.0.1:18490/api/v1/hosts -Headers $headers
+            if ($hosts.Count -ge 1) { exit 0 }
+            Start-Sleep -Seconds 1
+          }
+          Get-Content hub.log
+          throw "no agent report arrived within 40s"
+
+      # ---------------------------------------------------------------
+      # Common: swap the asset server to serve v0.7.0-ci2 (the update
+      # target), then drive a remote-update batch through the hub API
+      # exactly as an admin would from the dashboard.
+      # ---------------------------------------------------------------
+      - name: Swap asset server to serve v0.7.0-ci2
+        run: |
+          if [ -f asset-server.pid ]; then
+            kill "$(cat asset-server.pid)" 2>/dev/null || true
+          fi
+          rm -rf asset-root
+          mkdir -p asset-root
+          cp -r dist-ci2/. asset-root/
+          python3 -m http.server --bind 127.0.0.1 18410 --directory asset-root &
+          echo $! > asset-server.pid
+          for _ in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:18410/checksums.txt >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 0.5
+          done
+          exit 1
+
+      - name: Create a remote-update batch targeting v0.7.0-ci2
+        id: batch
+        run: |
+          host_id="$(curl -fsS -H "Authorization: Bearer ${{ steps.session.outputs.token }}" \
+            http://127.0.0.1:18490/api/v1/hosts | \
+            python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[0]["id"])')"
+          batch_id="$(curl -fsS -X POST http://127.0.0.1:18490/api/v1/agents/updates \
+            -H "Authorization: Bearer ${{ steps.session.outputs.token }}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"host_ids\":[\"${host_id}\"],\"target\":\"v0.7.0-ci2\"}" | \
+            python3 -c 'import json,sys; print(json.load(sys.stdin)["batch_id"])')"
+          echo "batch_id=$batch_id" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for the remote-update job to succeed
+        run: |
+          for _ in $(seq 1 90); do
+            state="$(curl -fsS -H "Authorization: Bearer ${{ steps.session.outputs.token }}" \
+              "http://127.0.0.1:18490/api/v1/agents/updates?batch=${{ steps.batch.outputs.batch_id }}" | \
+              python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[0]["state"] if d else "")')"
+            echo "job state: ${state:-<none>}"
+            if [ "$state" = "succeeded" ]; then
+              exit 0
+            fi
+            if [ "$state" = "failed" ]; then
+              echo "remote-update job failed" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "remote-update job did not reach 'succeeded' within 180s" >&2
+          exit 1
+
+      # ---------------------------------------------------------------
+      # Uninstall --purge (platform-specific), then clean up shared
+      # background processes (hub, asset server).
+      # ---------------------------------------------------------------
+      - name: "[linux] uninstall --purge"
+        if: always() && matrix.os == 'ubuntu-latest'
+        run: sudo bash scripts/install-agent.sh --uninstall --purge --yes || true
+
+      - name: "[darwin] uninstall --purge"
+        if: always() && matrix.os == 'macos-latest'
+        run: sudo bash scripts/install-agent.sh --uninstall --purge --yes || true
+
+      - name: "[windows] uninstall -Purge"
+        if: always() && matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          try { & ./scripts/install-agent.ps1 -Uninstall -Purge -Yes } catch { Write-Host $_ }
+
+      - name: Stop hub and asset server
+        if: always()
+        run: |
+          if [ -f hub.pid ]; then kill "$(cat hub.pid)" 2>/dev/null || true; fi
+          if [ -f asset-server.pid ]; then kill "$(cat asset-server.pid)" 2>/dev/null || true; fi
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-logs-${{ matrix.os }}
+          path: |
+            hub.log
+            dist-ci1
+            dist-ci2
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,31 @@
+# Secondary release-notes categorization config, consumed only by
+# GitHub's own "generate release notes" UI button/API
+# (--generate-notes) if anyone ever falls back to it manually. The
+# project's actual, deterministic release notes are produced by
+# scripts/release-notes.sh and passed to `gh release create` via
+# --notes-file (see .github/workflows/release.yml) — this file is not
+# used by that primary path at all.
+changelog:
+  exclude:
+    labels:
+      - dependencies
+      - ci
+  categories:
+    - title: Breaking changes
+      labels:
+        - breaking
+    - title: Features
+      labels:
+        - enhancement
+    - title: Fixes
+      labels:
+        - bug
+    - title: Security
+      labels:
+        - security
+    - title: Documentation
+      labels:
+        - documentation
+    - title: Other changes
+      labels:
+        - "*"

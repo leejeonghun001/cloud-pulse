@@ -1,0 +1,62 @@
+# Label definitions applied by scripts/github-setup.sh (dry-run by
+# default; requires --apply and a user-run `gh` session — never run
+# automatically as part of this repository's own CI/CD).
+#
+# Schema: name, color (6-digit hex, no '#'), description.
+- name: bug
+  color: "d73a4a"
+  description: Something isn't working as documented
+- name: enhancement
+  color: "a2eeef"
+  description: New feature or improvement request
+- name: documentation
+  color: "0075ca"
+  description: Documentation-only changes
+- name: security
+  color: "b60205"
+  description: Security-relevant issue or change
+- name: dependencies
+  color: "0366d6"
+  description: Dependency version updates
+- name: ci
+  color: "fbca04"
+  description: Continuous integration / workflow changes
+- name: go
+  color: "00add8"
+  description: Go module or code changes
+- name: hub
+  color: "5319e7"
+  description: cloud-pulse-hub specific
+- name: agent
+  color: "5319e7"
+  description: cloud-pulse-agent specific
+- name: dashboard
+  color: "c5def5"
+  description: Embedded web dashboard changes
+- name: alerting
+  color: "fef2c0"
+  description: Alert rules, notify channels, chart rendering
+- name: billing
+  color: "fef2c0"
+  description: Cloud cost polling and network cost estimates
+- name: storage
+  color: "fef2c0"
+  description: Google Drive / Dropbox storage usage monitoring
+- name: installer
+  color: "d4c5f9"
+  description: install/uninstall/update scripts
+- name: good first issue
+  color: "7057ff"
+  description: Good for newcomers
+- name: help wanted
+  color: "008672"
+  description: Extra attention is needed
+- name: wontfix
+  color: "ffffff"
+  description: This will not be worked on
+- name: duplicate
+  color: "cfd3d7"
+  description: This issue or pull request already exists
+- name: question
+  color: "d876e3"
+  description: Further information is requested

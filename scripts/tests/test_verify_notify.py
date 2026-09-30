@@ -128,10 +128,15 @@ class ArgumentValidationTests(unittest.TestCase):
             VERIFY.parse_args(["123456:AAAAAAAAAAAAAAAAAAAAAAAAAAA"])
 
     def test_valid_flags_accepted(self) -> None:
-        args = VERIFY.parse_args(["--platform", "discord", "--timeout", "5", "--dry-run"])
+        args = VERIFY.parse_args(["--platform", "discord", "--timeout", "5", "--dry-run", "--cleanup"])
         self.assertEqual(args.platform, "discord")
         self.assertEqual(args.timeout, 5.0)
         self.assertTrue(args.dry_run)
+        self.assertTrue(args.cleanup)
+
+    def test_cleanup_defaults_to_false(self) -> None:
+        args = VERIFY.parse_args(["--platform", "discord"])
+        self.assertFalse(args.cleanup)
 
     def test_invalid_platform_choice_rejected(self) -> None:
         with self.assertRaises(SystemExit):
@@ -252,6 +257,125 @@ class DiscordVerifyTests(unittest.TestCase):
         result = VERIFY.verify_discord(creds, VERIFY.HTTPRequester(timeout_seconds=5))
         self.assertNotIn(secret_token, result.detail)
 
+    def test_read_back_confirms_attachment(self) -> None:
+        # A single fake server can't easily distinguish "the initial
+        # ?wait=true POST" from "the follow-up GET read-back" by path
+        # alone since FakePlatformServer only implements do_POST -- so
+        # this test uses a server subclass that also serves GET, wired
+        # directly rather than through FakePlatformServer.
+        server = _DiscordReadBackFakeServer(message_id="42", attachments=[{"id": "9"}])
+        self.addCleanup(server.close)
+        creds = VERIFY.DiscordCredentials(webhook_url=server.base_url + "/api/webhooks/1/tok")
+        result = VERIFY.verify_discord(creds, VERIFY.HTTPRequester(timeout_seconds=5))
+        self.assertTrue(result.ok)
+        self.assertTrue(result.verified)
+        self.assertEqual(result.message_id, "42")
+
+    def test_read_back_message_missing(self) -> None:
+        server = _DiscordReadBackFakeServer(message_id="42", get_status=404, get_body='{"message":"Unknown Message"}')
+        self.addCleanup(server.close)
+        creds = VERIFY.DiscordCredentials(webhook_url=server.base_url + "/api/webhooks/1/tok")
+        result = VERIFY.verify_discord(creds, VERIFY.HTTPRequester(timeout_seconds=5))
+        # The original send still succeeded (ok=True); only the
+        # read-back confirmation failed.
+        self.assertTrue(result.ok)
+        self.assertFalse(result.verified)
+        self.assertIn("read-back failed", result.detail)
+
+    def test_read_back_attachment_missing(self) -> None:
+        server = _DiscordReadBackFakeServer(message_id="42", attachments=[])
+        self.addCleanup(server.close)
+        creds = VERIFY.DiscordCredentials(webhook_url=server.base_url + "/api/webhooks/1/tok")
+        result = VERIFY.verify_discord(creds, VERIFY.HTTPRequester(timeout_seconds=5))
+        self.assertTrue(result.ok)
+        self.assertFalse(result.verified)
+        self.assertIn("no attachment", result.detail)
+
+    def test_cleanup_calls_delete(self) -> None:
+        server = _DiscordReadBackFakeServer(message_id="42", attachments=[{"id": "9"}])
+        self.addCleanup(server.close)
+        creds = VERIFY.DiscordCredentials(webhook_url=server.base_url + "/api/webhooks/1/tok")
+        result = VERIFY.verify_discord(creds, VERIFY.HTTPRequester(timeout_seconds=5), cleanup=True)
+        self.assertTrue(result.ok)
+        self.assertTrue(result.cleaned)
+        self.assertEqual(server.delete_calls, 1)
+
+    def test_no_cleanup_by_default(self) -> None:
+        server = _DiscordReadBackFakeServer(message_id="42", attachments=[{"id": "9"}])
+        self.addCleanup(server.close)
+        creds = VERIFY.DiscordCredentials(webhook_url=server.base_url + "/api/webhooks/1/tok")
+        result = VERIFY.verify_discord(creds, VERIFY.HTTPRequester(timeout_seconds=5))
+        self.assertIsNone(result.cleaned)
+        self.assertEqual(server.delete_calls, 0)
+
+
+class _DiscordReadBackFakeServer:
+    """A fake Discord webhook server supporting POST (send), GET
+    (read-back), and DELETE (cleanup) -- used only where DiscordVerifyTests
+    needs to distinguish those three calls, which FakePlatformServer (POST
+    only) cannot do.
+    """
+
+    def __init__(
+        self,
+        message_id: str,
+        attachments: list[dict[str, object]] | None = None,
+        get_status: int = 200,
+        get_body: str | None = None,
+    ) -> None:
+        self.message_id = message_id
+        self.attachments = attachments if attachments is not None else []
+        self.get_status = get_status
+        self.get_body = get_body
+        self.delete_calls = 0
+
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                length = int(self.headers.get("Content-Length", "0"))
+                self.rfile.read(length)
+                body = json.dumps({"id": outer.message_id, "attachments": outer.attachments}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self) -> None:  # noqa: N802
+                body_text = outer.get_body if outer.get_body is not None else json.dumps({"id": outer.message_id, "attachments": outer.attachments})
+                body = body_text.encode("utf-8")
+                self.send_response(outer.get_status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_DELETE(self) -> None:  # noqa: N802
+                outer.delete_calls += 1
+                self.send_response(204)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, format_string: str, *args: object) -> None:
+                """Suppress per-request logging noise in test output."""
+
+        self._server = HTTPServer(("127.0.0.1", 0), Handler)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+
+    @property
+    def base_url(self) -> str:
+        """Return this fake server's http://127.0.0.1:<port> base URL."""
+        host, port = self._server.server_address[:2]
+        return f"http://{host}:{port}"
+
+    def close(self) -> None:
+        """Stop the server and join its thread."""
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join(timeout=5)
+
 
 class TelegramVerifyTests(unittest.TestCase):
     """verify_telegram against a fake Telegram-Bot-API-shaped HTTP server."""
@@ -297,6 +421,49 @@ class TelegramVerifyTests(unittest.TestCase):
         creds = VERIFY.TelegramCredentials(bot_token="123456:SUPER-SECRET-TOKEN-VALUE", chat_id="-100123")
         result = VERIFY.verify_telegram(creds, VERIFY.HTTPRequester(timeout_seconds=5), self.server.base_url)
         self.assertNotIn("SUPER-SECRET-TOKEN-VALUE", result.detail)
+
+    def test_read_back_fields_confirm_chat_id_match(self) -> None:
+        self.server.response_status = 200
+        self.server.response_body = json.dumps({"ok": True, "result": {"message_id": 555, "chat": {"id": -100123}}})
+        creds = VERIFY.TelegramCredentials(bot_token="123456:TEST-TOKEN", chat_id="-100123")
+        result = VERIFY.verify_telegram(creds, VERIFY.HTTPRequester(timeout_seconds=5), self.server.base_url)
+        self.assertTrue(result.ok)
+        self.assertTrue(result.verified)
+        self.assertEqual(result.message_id, "555")
+
+    def test_chat_id_mismatch_reported_as_unverified(self) -> None:
+        self.server.response_status = 200
+        # Response reports a different chat id than what was configured.
+        self.server.response_body = json.dumps({"ok": True, "result": {"message_id": 555, "chat": {"id": -999999}}})
+        creds = VERIFY.TelegramCredentials(bot_token="123456:TEST-TOKEN", chat_id="-100123")
+        result = VERIFY.verify_telegram(creds, VERIFY.HTTPRequester(timeout_seconds=5), self.server.base_url)
+        self.assertTrue(result.ok)
+        self.assertFalse(result.verified)
+        self.assertIn("mismatch", result.detail)
+
+    def test_cleanup_calls_delete_message(self) -> None:
+        calls: list[str] = []
+
+        self.server.response_status = 200
+        self.server.response_body = json.dumps({"ok": True, "result": {"message_id": 555, "chat": {"id": -100123}}})
+        creds = VERIFY.TelegramCredentials(bot_token="123456:TEST-TOKEN", chat_id="-100123")
+
+        original_post_json = VERIFY.HTTPRequester.post_json
+
+        def recording_post_json(self: VERIFY.HTTPRequester, url: str, payload: dict[str, object]) -> tuple[int, str]:
+            calls.append(url)
+            return original_post_json(self, url, payload)
+
+        VERIFY.HTTPRequester.post_json = recording_post_json  # type: ignore[method-assign]
+        try:
+            result = VERIFY.verify_telegram(creds, VERIFY.HTTPRequester(timeout_seconds=5), self.server.base_url, cleanup=True)
+        finally:
+            VERIFY.HTTPRequester.post_json = original_post_json  # type: ignore[method-assign]
+
+        self.assertTrue(result.ok)
+        self.assertTrue(result.cleaned)
+        self.assertTrue(any("deleteMessage" in url for url in calls))
+        self.assertTrue(any("sendMessage" in url for url in calls))
 
 
 class WhatsAppVerifyTests(unittest.TestCase):

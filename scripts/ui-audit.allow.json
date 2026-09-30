@@ -1,0 +1,4 @@
+{
+  "_comment": "scripts/ui-audit.allow.json — allow-list for scripts/ui-audit.mjs (SPEC-v0.7 §5). Each entry MUST carry a non-empty reason (enforced by ui-audit-lib.mjs's parseAllowList) explaining why the finding is accepted rather than fixed. Keys are `<checkId>:<route>@<viewport>@<theme>` — see ui-audit-lib.mjs's buildRouteKey/violationKey. This file is owned by the ui-audit-tool stage; entries here should only ever be ADDED by whichever stage does the actual dashboard CSS/JS fix work (see notes/v07-prep.md's flagged ownership gap for SPEC §5's UX work) after triaging a real finding, not pre-populated speculatively.",
+  "entries": []
+}
