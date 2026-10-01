@@ -128,6 +128,14 @@ grouped by OS/failure-reason, rather than the time-series line chart
 every other metric's chart image uses (there is no time series for a
 batch outcome — see the next section).
 
+### Evaluation timing
+
+`agent_outdated` is evaluated on the same 30-second scheduler tick as
+every other host-scoped metric. `update_batch_failed` runs on its own
+1-minute scan independent of that tick (batch completion isn't tied to
+any single host's report), scanning every batch's job list for one
+that just finished with a failure it hasn't notified yet.
+
 ## Chart images
 
 Every firing/resolved notification for a series-backed metric (cpu,
@@ -177,8 +185,34 @@ failure on any rule/channel `POST`/`PUT` responds `400` with
 `APIError.details` — a `field -> message` map — so the Settings UI can
 highlight the offending form field directly.
 
-`agent_outdated` is evaluated on the same 30-second scheduler tick as
-every other host-scoped metric. `update_batch_failed` runs on its own
-1-minute scan independent of that tick (batch completion isn't tied to
-any single host's report), scanning every batch's job list for one
-that just finished with a failure it hasn't notified yet.
+## Channel-failure fallback notification
+
+When a notification channel's weekly synthetic test fails, or 7-day
+delivery success drops below the failing threshold (see
+[notifications.md](notifications.md#health-report) for the full
+health-state model), the hub sends a "channel X is failing" message
+through a **different** channel — never back through the failing
+channel itself. Selection (`internal/channelhealth.SelectFallbackChannel`)
+is deterministic and excludes:
+
+- the failing channel itself,
+- disabled channels,
+- any other channel currently also classified `failing`,
+
+picking the lowest-ID remaining eligible channel. If no eligible
+channel exists, no notification is sent — instead, `GET
+/api/v1/alerts/channels/health`'s `banner_needed`/
+`banner_channel_names` fields surface it as a dashboard banner in the
+app shell instead.
+
+The fallback fires **once per incident**: a channel that stays failing
+across several scheduler ticks (or several consecutive delivery
+failures) is only notified about once, tracked by a
+`channel_failure_incidents` row that closes when the channel's health
+state recovers to healthy/degraded. Recovery optionally sends a second
+"channel X has recovered" message through the same fallback channel
+that carried the original failure notice. Both message bodies are
+built via `internal/i18n`'s `channel_health.channel_down`/
+`channel_recovered` keys, honoring the hub's `notify_language` setting
+exactly like every other notify_language-aware message (SPEC-v0.8
+§3-3).

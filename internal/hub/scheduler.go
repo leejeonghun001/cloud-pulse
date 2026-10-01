@@ -78,6 +78,12 @@ func (s *Server) RunBackground(ctx context.Context) {
 		}()
 	}
 
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.RunChannelHealthLoop(ctx)
+	}()
+
 	wg.Wait()
 }
 

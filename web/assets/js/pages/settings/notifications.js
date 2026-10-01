@@ -7,11 +7,19 @@
 // editor (the old PUT /api/v1/settings/alerts endpoint keeps working
 // server-side, mapped onto a "Default webhook" channel, but this page
 // now manages channels directly).
+//
+// SPEC-v0.8 §3-2 added a "Health" sub-tab (see
+// pages/settings/notifications-health.js) alongside this section's own
+// channel list/dialog ("Channels" sub-tab) — both share one
+// mountNotificationsSection entry point, switching via an in-page tab
+// row rather than a second route/nav entry, per the prep contract's
+// "pick one and document it" note.
 import { el, clearChildren, emptyState, errorBanner } from "../../ui/components.js";
 import { icon } from "../../ui/icons.js";
 import { createDialog, buildDialogActions } from "../../ui/dialog.js";
 import { selectField } from "../../ui/select.js";
 import { showToast } from "../../ui/toast.js";
+import { t } from "../../core/i18n.js";
 import {
   getNotifyChannels,
   createNotifyChannel,
@@ -29,8 +37,17 @@ import {
   saveChecklistProgress,
   checklistCompletionCount,
 } from "../../core/notify-checklists.js";
+import { mountChannelHealthTab } from "./notifications-health.js";
 
 const CHANNEL_TYPE_ICONS = { discord: "zap", telegram: "send", whatsapp: "smartphone", webhook: "webhook" };
+
+/** SUB_TABS lists this section's own in-page tab row: "Channels" (the
+ * list/dialog this file has always owned) and "Health" (SPEC-v0.8
+ * §3-2's report, delegated to notifications-health.js). */
+const SUB_TABS = [
+  { id: "channels", labelKey: "settings.notifications.tab_channels" },
+  { id: "health", labelKey: "settings.notifications.tab_health" },
+];
 
 /**
  * mountNotificationsSection renders the Notifications section into
@@ -42,24 +59,53 @@ const CHANNEL_TYPE_ICONS = { discord: "zap", telegram: "send", whatsapp: "smartp
  */
 export function mountNotificationsSection(container, { announce }) {
   const controller = new AbortController();
+  let activeTab = "channels";
+  let activeHandle = null;
 
   async function refresh() {
     clearChildren(container);
 
+    const tabRow = el("div", { class: "cp-tabs", attrs: { role: "tablist" } });
+    for (const tab of SUB_TABS) {
+      const btn = el("button", {
+        class: `cp-tab${tab.id === activeTab ? " cp-tab-active" : ""}`,
+        attrs: { type: "button", role: "tab", "aria-selected": String(tab.id === activeTab) },
+        text: t(tab.labelKey),
+      });
+      btn.addEventListener("click", () => {
+        if (tab.id === activeTab) return;
+        activeTab = tab.id;
+        refresh();
+      });
+      tabRow.append(btn);
+    }
+    container.append(tabRow);
+
+    const tabContent = el("div", { class: "cp-tab-content" });
+    container.append(tabContent);
+
+    if (activeTab === "health") {
+      activeHandle = mountChannelHealthTab(tabContent, { announce });
+      await activeHandle.refresh();
+      return;
+    }
+
+    activeHandle = null;
     let channels;
     try {
       channels = await getNotifyChannels(controller.signal);
     } catch (err) {
       if (err?.name === "AbortError") return;
-      container.append(errorBanner(describeError(err)));
+      tabContent.append(errorBanner(describeError(err)));
       return;
     }
 
-    container.append(channelsCard({ channels, signal: controller.signal, announce, onChanged: refresh }));
+    tabContent.append(channelsCard({ channels, signal: controller.signal, announce, onChanged: refresh }));
   }
 
   function teardown() {
     controller.abort();
+    activeHandle?.teardown?.();
   }
 
   return { refresh, teardown };
@@ -68,24 +114,24 @@ export function mountNotificationsSection(container, { announce }) {
 function channelsCard({ channels, signal, announce, onChanged }) {
   const card = el("div", { class: "cp-card" });
   const head = el("div", { class: "cp-metric-head" });
-  head.append(el("h2", { class: "cp-card-title", text: "Notification channels" }));
+  head.append(el("h2", { class: "cp-card-title", text: t("settings.notifications.section_title") }));
   const addBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" } });
-  addBtn.append(icon("plus"), el("span", { text: "Add channel" }));
+  addBtn.append(icon("plus"), el("span", { text: t("settings.notifications.add_channel") }));
   addBtn.addEventListener("click", () => openChannelDialog({ signal, announce, onChanged }));
   head.append(addBtn);
   card.append(head);
   card.append(
     el("p", {
       class: "cp-muted-small",
-      text: "Discord, Telegram, WhatsApp, or a generic webhook — alert rules deliver to any channel listed here.",
+      text: t("settings.notifications.section_description"),
     }),
   );
 
   if (channels.length === 0) {
     card.append(
       emptyState({
-        title: "No notification channels yet",
-        message: "Add a Discord, Telegram, WhatsApp, or webhook channel to start receiving alerts.",
+        title: t("settings.notifications.empty_title"),
+        message: t("settings.notifications.empty_message"),
         iconName: "bell",
       }),
     );
@@ -110,45 +156,58 @@ function channelRow({ channel, signal, announce, onChanged }) {
   info.append(el("span", { class: "cp-muted-small", text: typeDef?.label || channel.type }));
   row.append(info);
 
-  row.append(el("span", { class: `cp-chip ${channel.enabled ? "cp-chip-ok" : "cp-chip-other"}`, text: channel.enabled ? "Enabled" : "Disabled" }));
+  row.append(
+    el("span", {
+      class: `cp-chip ${channel.enabled ? "cp-chip-ok" : "cp-chip-other"}`,
+      text: channel.enabled ? t("settings.notifications.enabled") : t("settings.notifications.disabled"),
+    }),
+  );
 
   const status = el("span", { class: "cp-muted-small cp-channel-row-status", attrs: { role: "status", "aria-live": "polite" } });
 
   const testBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button" } });
-  testBtn.append(icon("send"), el("span", { text: "Send test" }));
+  testBtn.append(icon("send"), el("span", { text: t("settings.notifications.send_test") }));
   testBtn.addEventListener("click", async () => {
     testBtn.disabled = true;
-    status.textContent = "Sending…";
+    status.textContent = t("settings.notifications.sending");
     status.title = "";
     try {
       const result = await testNotifyChannel(channel.id, signal);
-      status.textContent = result.ok ? "Test delivered." : `Test failed: ${diagnosisSummaryText(result.diagnosis)}`;
+      status.textContent = result.ok
+        ? t("settings.notifications.test_delivered")
+        : t("settings.notifications.test_failed", { summary: diagnosisSummaryText(result.diagnosis) });
       status.title = result.ok ? "" : result.diagnosis?.detail || "";
       if (result.ok) recordChecklistTestSuccess(channel.type, channel.id);
       announce?.(status.textContent);
     } catch (err) {
       if (err?.name === "AbortError") return;
-      status.textContent = `Test failed: ${describeError(err)}`;
+      status.textContent = t("settings.notifications.test_failed", { summary: describeError(err) });
     } finally {
       testBtn.disabled = false;
     }
   });
 
-  const editBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm cp-btn-icon", attrs: { type: "button", "aria-label": `Edit ${channel.name}` } });
+  const editBtn = el("button", {
+    class: "cp-btn cp-btn-secondary cp-btn-sm cp-btn-icon",
+    attrs: { type: "button", "aria-label": t("settings.notifications.edit_channel_aria", { name: channel.name }) },
+  });
   editBtn.append(icon("pencil"));
   editBtn.addEventListener("click", () => openChannelDialog({ channel, signal, announce, onChanged }));
 
-  const deleteBtn = el("button", { class: "cp-btn cp-btn-danger cp-btn-sm cp-btn-icon", attrs: { type: "button", "aria-label": `Delete ${channel.name}` } });
+  const deleteBtn = el("button", {
+    class: "cp-btn cp-btn-danger cp-btn-sm cp-btn-icon",
+    attrs: { type: "button", "aria-label": t("settings.notifications.delete_channel_aria", { name: channel.name }) },
+  });
   deleteBtn.append(icon("trash"));
   deleteBtn.addEventListener("click", async () => {
-    if (!globalThis.confirm(`Delete channel "${channel.name}"? Rules referencing it will simply skip it.`)) return;
+    if (!globalThis.confirm(t("settings.notifications.delete_confirm", { name: channel.name }))) return;
     try {
       await deleteNotifyChannel(channel.id, signal);
-      announce?.(`Deleted channel ${channel.name}.`);
+      announce?.(t("settings.notifications.saved_channel", { name: channel.name }));
       onChanged();
     } catch (err) {
       if (err?.name === "AbortError") return;
-      showToast({ message: `Delete failed: ${describeError(err)}`, variant: "error" });
+      showToast({ message: t("settings.notifications.delete_failed", { error: describeError(err) }), variant: "error" });
     }
   });
 
@@ -174,7 +233,9 @@ function openChannelDialog({ channel, signal, announce, onChanged }) {
   const isEdit = Boolean(channel);
   const { dialog, body, open, close } = createDialog({
     titleId: "cp-channel-dialog-title",
-    title: isEdit ? `Edit channel: ${channel.name}` : "Add notification channel",
+    title: isEdit
+      ? t("settings.notifications.dialog_title_edit", { name: channel.name })
+      : t("settings.notifications.dialog_title_add"),
     wide: true,
   });
 
@@ -195,14 +256,14 @@ function openChannelDialog({ channel, signal, announce, onChanged }) {
   if (!isEdit) {
     const { node: typeNode, select: typeSelect } = selectField({
       id: "cp-channel-type",
-      label: "Platform",
-      options: CHANNEL_TYPES.map((t) => ({ value: t.value, label: t.label })),
+      label: t("settings.notifications.platform_label"),
+      options: CHANNEL_TYPES.map((tDef) => ({ value: tDef.value, label: tDef.label })),
       value: draft.type,
     });
     typeSelect.addEventListener("change", () => {
       draft.type = typeSelect.value;
       draft.config = {};
-      if (!draft.name || CHANNEL_TYPES.some((t) => t.label === draft.name)) {
+      if (!draft.name || CHANNEL_TYPES.some((tDef) => tDef.label === draft.name)) {
         draft.name = defaultChannelName(draft.type);
         nameInput.value = draft.name;
       }
@@ -214,7 +275,7 @@ function openChannelDialog({ channel, signal, announce, onChanged }) {
 
   // --- Name + enabled ---
   const nameField = el("div", { class: "cp-field" });
-  nameField.append(el("label", { class: "cp-label", attrs: { for: "cp-channel-name" }, text: "Name" }));
+  nameField.append(el("label", { class: "cp-label", attrs: { for: "cp-channel-name" }, text: t("settings.notifications.name_label") }));
   const nameInput = /** @type {HTMLInputElement} */ (
     el("input", { class: "cp-input", attrs: { id: "cp-channel-name", type: "text", value: draft.name || defaultChannelName(draft.type) } })
   );
@@ -231,7 +292,7 @@ function openChannelDialog({ channel, signal, announce, onChanged }) {
   enabledInput.addEventListener("change", () => {
     draft.enabled = enabledInput.checked;
   });
-  enabledField.append(enabledInput, el("span", { text: "Enabled" }));
+  enabledField.append(enabledInput, el("span", { text: t("settings.notifications.enabled") }));
   formCol.append(enabledField);
 
   const fieldsHost = el("div", { class: "cp-channel-dialog-fields" });
@@ -262,7 +323,9 @@ function openChannelDialog({ channel, signal, announce, onChanged }) {
   function renderGuide() {
     clearChildren(guideCol);
     const def = channelTypeByValue(draft.type);
-    guideCol.append(el("h3", { class: "cp-channel-guide-title", text: `Setting up ${def?.label || draft.type}` }));
+    guideCol.append(
+      el("h3", { class: "cp-channel-guide-title", text: t("settings.notifications.setup_guide_title", { platform: def?.label || draft.type }) }),
+    );
     const list = el("ol", { class: "cp-channel-guide-list" });
     for (const step of def?.steps || []) {
       list.append(el("li", { text: step }));
@@ -276,7 +339,7 @@ function openChannelDialog({ channel, signal, announce, onChanged }) {
   formCol.append(testResultHost);
 
   const testBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" } });
-  testBtn.append(icon("send"), el("span", { text: "Send test" }));
+  testBtn.append(icon("send"), el("span", { text: t("settings.notifications.send_test") }));
   testBtn.addEventListener("click", async () => {
     const errors = validateChannelConfig(draft.type, draft.config);
     clearChildren(errorsHost);
@@ -287,7 +350,7 @@ function openChannelDialog({ channel, signal, announce, onChanged }) {
     testBtn.disabled = true;
     clearChildren(testResultHost);
     clearFieldHighlights(fieldInputs);
-    testResultHost.append(el("p", { class: "cp-muted-small", text: "Sending test notification…" }));
+    testResultHost.append(el("p", { class: "cp-muted-small", text: t("settings.notifications.sending_test") }));
     try {
       const result = isEdit && !hasUnsavedSecretChanges(channel, draft)
         ? await testNotifyChannel(channel.id, signal)
@@ -298,24 +361,28 @@ function openChannelDialog({ channel, signal, announce, onChanged }) {
         recordChecklistTestSuccess(draft.type, isEdit ? channel.id : "draft");
         renderGuide();
       }
-      announce?.(result.ok ? "Test notification delivered." : "Test notification failed.");
+      announce?.(result.ok ? t("settings.notifications.test_notification_delivered") : t("settings.notifications.test_notification_failed"));
     } catch (err) {
       clearChildren(testResultHost);
-      testResultHost.append(errorBanner(`Test failed: ${describeError(err)}`));
+      testResultHost.append(errorBanner(t("settings.notifications.test_failed", { summary: describeError(err) })));
     } finally {
       testBtn.disabled = false;
     }
   });
   formCol.append(testBtn);
 
-  const cancelBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: "Cancel" });
+  const cancelBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: t("settings.notifications.cancel") });
   cancelBtn.addEventListener("click", () => close());
 
-  const saveBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" }, text: isEdit ? "Save changes" : "Add channel" });
+  const saveBtn = el("button", {
+    class: "cp-btn cp-btn-primary",
+    attrs: { type: "button" },
+    text: isEdit ? t("settings.notifications.save_changes") : t("settings.notifications.add_channel_submit"),
+  });
   saveBtn.addEventListener("click", async () => {
     const errors = validateChannelConfig(draft.type, draft.config);
     clearChildren(errorsHost);
-    if (!draft.name || draft.name.trim() === "") errors.name = "Name is required.";
+    if (!draft.name || draft.name.trim() === "") errors.name = t("settings.notifications.unnamed_field_error");
     if (Object.keys(errors).length > 0) {
       renderErrors(errorsHost, errors);
       return;
@@ -325,10 +392,10 @@ function openChannelDialog({ channel, signal, announce, onChanged }) {
       const payload = { name: draft.name, type: draft.type, enabled: draft.enabled, config: draft.config };
       if (isEdit) {
         await updateNotifyChannel(channel.id, payload, signal);
-        announce?.(`Saved channel ${draft.name}.`);
+        announce?.(t("settings.notifications.saved_channel", { name: draft.name }));
       } else {
         await createNotifyChannel(payload, signal);
-        announce?.(`Added channel ${draft.name}.`);
+        announce?.(t("settings.notifications.added_channel", { name: draft.name }));
       }
       close();
       onChanged();
@@ -393,7 +460,7 @@ function configFieldInput(field, draft, isEdit) {
       attrs: {
         id: inputID,
         type: field.type === "password" ? "password" : "text",
-        placeholder: isSecretPreserved ? "Unchanged (hidden)" : field.placeholder,
+        placeholder: isSecretPreserved ? t("settings.notifications.secret_field_unchanged_placeholder") : field.placeholder,
         value: isSecretPreserved ? "" : existingValue,
       },
     })
@@ -404,7 +471,7 @@ function configFieldInput(field, draft, isEdit) {
   });
   wrap.append(input);
   if (isSecretPreserved) {
-    wrap.append(el("p", { class: "cp-muted-small", text: "Leave blank to keep the currently stored value." }));
+    wrap.append(el("p", { class: "cp-muted-small", text: t("settings.notifications.secret_field_hint") }));
   }
   return { wrap, input };
 }
@@ -446,7 +513,8 @@ function checklistPanel(type, id) {
   }
 
   const { checked, total } = checklistCompletionCount(type, progress);
-  wrap.append(el("h4", { class: "cp-channel-checklist-title", text: `Real account verification checklist (${checked}/${total})` }));
+  const titleEl = el("h4", { class: "cp-channel-checklist-title", text: t("settings.notifications.checklist_title", { checked, total }) });
+  wrap.append(titleEl);
 
   const list = el("ul", { class: "cp-channel-checklist-list", attrs: { role: "list" } });
   for (const item of checklist.items) {
@@ -457,7 +525,7 @@ function checklistPanel(type, id) {
       progress.items[item.id] = checkbox.checked;
       persistChecklist(type, id, progress);
       const counts = checklistCompletionCount(type, progress);
-      titleEl.textContent = `Real account verification checklist (${counts.checked}/${counts.total})`;
+      titleEl.textContent = t("settings.notifications.checklist_title", { checked: counts.checked, total: counts.total });
     });
     li.append(checkbox, el("label", { attrs: { for: checkbox.id }, text: item.text }));
     list.append(li);
@@ -468,12 +536,11 @@ function checklistPanel(type, id) {
     wrap.append(
       el("p", {
         class: "cp-muted-small",
-        text: `Last successful Send test: ${new Date(progress.lastTestSuccessAt).toLocaleString()}.`,
+        text: t("settings.notifications.checklist_last_test", { when: new Date(progress.lastTestSuccessAt).toLocaleString() }),
       }),
     );
   }
 
-  const titleEl = wrap.firstChild;
   return wrap;
 }
 
@@ -516,7 +583,7 @@ function testResultBanner(result, platform, fieldInputs) {
   const wrap = el("div", { class: `cp-alerts-test-result ${result.ok ? "cp-alerts-test-ok" : "cp-alerts-test-fail"}` });
   if (result.ok) {
     wrap.append(icon("circleCheck"));
-    wrap.append(el("span", { text: result.delivery || "Delivered successfully." }));
+    wrap.append(el("span", { text: result.delivery || t("settings.notifications.test_notification_delivered") }));
     return wrap;
   }
   wrap.append(diagnosisCard(result.diagnosis, platform, fieldInputs));
@@ -552,7 +619,7 @@ function diagnosisCard(diagnosis, platform, fieldInputs) {
       el("a", {
         class: "cp-link",
         attrs: { href: vm.docsUrl, target: "_blank", rel: "noopener noreferrer" },
-        text: "Documentation",
+        text: t("settings.notifications.documentation_link"),
       }),
     );
   }

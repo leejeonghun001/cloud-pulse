@@ -25,6 +25,7 @@ import {
   VERSION_REFRESH_INTERVAL_MS,
 } from "./core/updates.js";
 import { getHosts } from "./core/api.js";
+import { channelHealthBanner, startChannelHealthBannerPolling } from "./ui/channel-health-banner.js";
 
 const REFRESH_INTERVAL_MS = 15000;
 
@@ -271,10 +272,18 @@ async function openAddAgent() {
 
 let latestVersionInfo = null;
 let updateBannerTimer = null;
+let channelHealthBannerNames = [];
 
 function renderUpdateBanner() {
   clearChildren(shell.bannerHost);
   if (!authState.authenticated) return;
+
+  const healthNode = channelHealthBanner(channelHealthBannerNames, () => {
+    channelHealthBannerNames = [];
+    renderUpdateBanner();
+  });
+  if (healthNode) shell.bannerHost.append(healthNode);
+
   if (!shouldShowUpdateBanner(latestVersionInfo, getDismissedUpdateTag())) return;
 
   const { node, copyBtn, dismissBtn, command } = updateBanner({ versionInfo: latestVersionInfo });
@@ -302,6 +311,13 @@ function startUpdateBannerPolling() {
   pollVersion();
   updateBannerTimer = setInterval(pollVersion, VERSION_REFRESH_INTERVAL_MS);
   void updateBannerTimer;
+  startChannelHealthBannerPolling(
+    (names) => {
+      channelHealthBannerNames = names;
+      renderUpdateBanner();
+    },
+    { isActive: () => authState.authenticated },
+  );
 }
 
 // ---------------------------------------------------------------------------

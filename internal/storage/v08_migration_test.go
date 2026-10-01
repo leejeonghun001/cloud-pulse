@@ -101,7 +101,7 @@ func TestOpen_UpgradeFrom0006AppliesV08Migration(t *testing.T) {
 	}
 
 	// New v0.8.0 tables must exist and be queryable.
-	for _, table := range []string{"channel_health_settings", "channel_synthetic_results"} {
+	for _, table := range []string{"channel_health_settings", "channel_synthetic_results", "channel_failure_incidents"} {
 		var count int
 		if err := db.sql.QueryRowContext(ctx, `SELECT count(*) FROM `+table).Scan(&count); err != nil {
 			t.Errorf("query %s: %v", table, err)
@@ -127,6 +127,12 @@ func TestOpen_UpgradeFrom0006AppliesV08Migration(t *testing.T) {
 	); err != nil {
 		t.Fatalf("insert channel_synthetic_results row: %v", err)
 	}
+	if _, err := db.sql.ExecContext(ctx,
+		`INSERT INTO channel_failure_incidents (channel_id, opened_at, notified_at) VALUES (?, 2000, 2000)`,
+		channelID,
+	); err != nil {
+		t.Fatalf("insert channel_failure_incidents row: %v", err)
+	}
 
 	// Deleting the channel must cascade into both new tables.
 	if _, err := db.sql.ExecContext(ctx, `DELETE FROM notify_channels WHERE id = ?`, channelID); err != nil {
@@ -144,6 +150,12 @@ func TestOpen_UpgradeFrom0006AppliesV08Migration(t *testing.T) {
 	}
 	if remaining != 0 {
 		t.Errorf("channel_synthetic_results rows after cascade delete = %d, want 0", remaining)
+	}
+	if err := db.sql.QueryRowContext(ctx, `SELECT count(*) FROM channel_failure_incidents WHERE channel_id = ?`, channelID).Scan(&remaining); err != nil {
+		t.Fatalf("count channel_failure_incidents after cascade: %v", err)
+	}
+	if remaining != 0 {
+		t.Errorf("channel_failure_incidents rows after cascade delete = %d, want 0", remaining)
 	}
 
 	// Inserting a new update_jobs row must still work, and the new
@@ -192,7 +204,7 @@ func TestOpen_FreshDBAppliesV08Migration(t *testing.T) {
 		}
 	})
 
-	for _, table := range []string{"channel_health_settings", "channel_synthetic_results"} {
+	for _, table := range []string{"channel_health_settings", "channel_synthetic_results", "channel_failure_incidents"} {
 		var count int
 		if err := db.sql.QueryRowContext(ctx, `SELECT count(*) FROM `+table).Scan(&count); err != nil {
 			t.Errorf("query %s: %v", table, err)

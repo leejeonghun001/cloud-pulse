@@ -157,6 +157,19 @@ NOTIFY_CHANNELS: tuple[NotifyChannelSpec, ...] = (
         type="webhook",
         config={"webhook_url": "https://example.invalid/cloud-pulse-demo-webhook", "include_image": "true"},
     ),
+    NotifyChannelSpec(
+        key="webhook-failing-demo",
+        name="Failing webhook (demo)",
+        type="webhook",
+        # https://127.0.0.1:9/... is deliberately unreachable (port 9 is
+        # "discard", nothing ever listens there) so this channel's real
+        # Send test/synthetic test genuinely fails with a
+        # connection_refused diagnosis, giving the SPEC-v0.8 §3-2 Health
+        # tab a real "failing" channel card to screenshot without ever
+        # depending on a network call actually succeeding or failing in
+        # a specific way that could flake between environments.
+        config={"webhook_url": "https://127.0.0.1:9/hook"},
+    ),
 )
 
 ALERT_RULES: tuple[AlertRuleSpec, ...] = (
@@ -901,6 +914,109 @@ def _demo_error_for_reason(reason: str) -> str:
     }.get(reason, "")
 
 
+class ChannelHealthSeeder:
+    """Writes channel_health_settings + channel_synthetic_results rows
+    directly into the hub's SQLite database (SPEC-v0.8 §3-2), so the
+    Settings → Notifications → Health tab has real-looking data for
+    ui-audit/screenshots: a 12-week synthetic-test history per opted-in
+    channel, plus recent delivery records on the seeded alert_events
+    rows (see FiringEventSeeder — this class extends those rows'
+    existing "deliveries" JSON rather than duplicating alert_events
+    seeding) so the 7-day/30-day success-rate figures aren't all
+    "no data yet."
+
+    Like FiringEventSeeder, there is no public hub API for backdating
+    synthetic-test history, hence direct DB access — demo/test only.
+    """
+
+    def __init__(self, db_path: Path) -> None:
+        self._db_path = db_path
+
+    def seed(self, channel_ids_by_key: dict[str, int]) -> None:
+        conn = sqlite3.connect(self._db_path)
+        try:
+            cur = conn.cursor()
+            now = int(time.time())
+
+            healthy_id = channel_ids_by_key.get("discord-ops")
+            failing_id = channel_ids_by_key.get("webhook-failing-demo")
+
+            if healthy_id is not None:
+                self._seed_schedule(cur, healthy_id, now, enabled=True)
+                self._seed_synthetic_history(cur, healthy_id, now, all_verified=True)
+            if failing_id is not None:
+                self._seed_schedule(cur, failing_id, now, enabled=True)
+                self._seed_synthetic_history(cur, failing_id, now, all_verified=False)
+                self._seed_failure_incident(cur, failing_id, now)
+
+            conn.commit()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _seed_schedule(cur: sqlite3.Cursor, channel_id: int, now: int, *, enabled: bool) -> None:
+        cur.execute(
+            """
+            INSERT INTO channel_health_settings (channel_id, enabled, weekday, minute_of_day, last_run_at, updated_at)
+            VALUES (?, ?, 1, 540, ?, ?)
+            ON CONFLICT (channel_id) DO UPDATE SET
+                enabled = excluded.enabled, weekday = excluded.weekday,
+                minute_of_day = excluded.minute_of_day, last_run_at = excluded.last_run_at,
+                updated_at = excluded.updated_at
+            """,
+            (channel_id, 1 if enabled else 0, now, now),
+        )
+
+    @staticmethod
+    def _seed_synthetic_history(cur: sqlite3.Cursor, channel_id: int, now: int, *, all_verified: bool) -> None:
+        """Inserts 12 weekly synthetic_results rows (oldest to newest),
+        every one "verified" for a healthy demo channel, or a mix ending
+        in a "failed" (connection_refused) most-recent run for the
+        failing demo channel — so the 12-week strip shows a visibly
+        different pattern per card."""
+        week = 7 * 86400
+        for i in range(12):
+            started_at = now - (11 - i) * week
+            finished_at = started_at + 3
+            if all_verified:
+                outcome, diagnosis, detail = "verified", "", ""
+            elif i < 9:
+                outcome, diagnosis, detail = "verified", "", ""
+            elif i == 9:
+                outcome, diagnosis, detail = "failed", "timeout", "The request did not complete within the delivery timeout."
+            else:
+                outcome, diagnosis, detail = (
+                    "failed",
+                    "connection_refused",
+                    "dial tcp 127.0.0.1:9: connect: connection refused",
+                )
+            cur.execute(
+                """
+                INSERT INTO channel_synthetic_results
+                    (channel_id, started_at, finished_at, outcome, diagnosis_code, detail)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (channel_id, started_at, finished_at, outcome, diagnosis, detail),
+            )
+
+    @staticmethod
+    def _seed_failure_incident(cur: sqlite3.Cursor, channel_id: int, now: int) -> None:
+        """Opens a channel_failure_incidents row for the failing demo
+        channel, un-notified (no other demo channel needs to be
+        disturbed) — this is enough for the Health tab's banner_needed
+        state to have a real case to render if no other channel happens
+        to be healthy/enabled at seed time; harmless if one is."""
+        cur.execute(
+            """
+            INSERT INTO channel_failure_incidents (channel_id, opened_at, notified_at, fallback_channel_id, recovered_at)
+            VALUES (?, ?, 0, NULL, 0)
+            ON CONFLICT (channel_id) DO UPDATE SET
+                opened_at = excluded.opened_at, notified_at = 0, fallback_channel_id = NULL, recovered_at = 0
+            """,
+            (channel_id, now - 3600),
+        )
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description="cloud-pulse v0.5.0 demo/dev seed data: alert channels, rules, firing events, and inventory (NOT for production hubs).",
@@ -921,7 +1037,7 @@ def main(argv: list[str]) -> int:
 
     print("==> seeding notify channels")
     alerting = AlertingSeeder(client)
-    alerting.seed_channels()
+    channel_ids_by_key = alerting.seed_channels()
 
     print("==> seeding alert rules")
     rules = alerting.seed_rules()
@@ -942,6 +1058,10 @@ def main(argv: list[str]) -> int:
         hosts = [{"id": h.host_id, "hostname": h.hostname} for h in INVENTORY_HOSTS]
         count = FiringEventSeeder(args.db).seed(rules, hosts)
         print(f"    inserted {count} firing alert_events rows")
+
+        print("==> seeding channel health (SPEC-v0.8 §3-2: synthetic-test history, schedules)")
+        ChannelHealthSeeder(args.db).seed(channel_ids_by_key)
+        print(f"    seeded schedules + 12-week synthetic history for {min(2, len(channel_ids_by_key))} channel(s)")
 
     print("==> demo_seed_v05 complete")
     return 0

@@ -656,7 +656,10 @@ binary.
 - Any git call that targets a repository by path (`cwd=`, `git -C`)
   must pass an environment with every `GIT_*` variable removed
   (`clean_git_env()` from `scripts/tests/_git_isolation.py` in tests).
-  Inside a hook, an inherited `GIT_DIR` overrides the path (D-089).
+  Inside a hook, git sets `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE`,
+  and an inherited `GIT_DIR` overrides the path — a fixture would then
+  configure and commit into the real repository (D-089). This is a
+  correctness rule, not style.
 - A test module that creates fixture repositories starts a
   `RepoConfigGuard` in `setUpModule()` and stops it in
   `tearDownModule()`.

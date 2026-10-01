@@ -5,6 +5,7 @@
   "channel_health": {
     "test_ok": "Synthetic test to {channel_name} succeeded.",
     "test_failed": "Synthetic test to {channel_name} failed: {detail}",
-    "channel_down": "Notification channel \"{channel_name}\" appears to be down."
+    "channel_down": "Notification channel \"{channel_name}\" appears to be down.",
+    "channel_recovered": "Notification channel \"{channel_name}\" has recovered."
   }
 }

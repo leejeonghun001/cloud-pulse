@@ -369,6 +369,41 @@ export function testDraftNotifyChannel(channel, signal) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Notification channel health report (SPEC-v0.8 §3-2).
+// ---------------------------------------------------------------------------
+
+/** getChannelsHealth fetches GET /api/v1/alerts/channels/health (admin):
+ * every channel's health state, delivery stats, synthetic-test
+ * schedule/history, and the dashboard-banner flag. */
+export function getChannelsHealth(signal) {
+  return apiFetch("/api/v1/alerts/channels/health", { signal });
+}
+
+/** runChannelSyntheticTest calls POST
+ * /api/v1/alerts/channels/{id}/synthetic-test (admin, "run now").
+ * Returns the resulting SyntheticResult. */
+export function runChannelSyntheticTest(id, signal) {
+  return apiFetch(`/api/v1/alerts/channels/${encodeURIComponent(id)}/synthetic-test`, { method: "POST", signal });
+}
+
+/**
+ * setChannelHealthSettings calls PUT
+ * /api/v1/alerts/channels/{id}/health-settings (admin). weekday/
+ * minuteOfDay must already be converted to UTC by the caller (see
+ * core/channel-health-schedule.js).
+ * @param {number} id
+ * @param {{enabled: boolean, weekday: number, minute_of_day: number}} settings
+ */
+export function setChannelHealthSettings(id, settings, signal) {
+  return apiFetch(`/api/v1/alerts/channels/${encodeURIComponent(id)}/health-settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+    signal,
+  });
+}
+
 /** getAlertRules fetches GET /api/v1/alerts/rules (admin). */
 export function getAlertRules(signal) {
   return apiFetch("/api/v1/alerts/rules", { signal });

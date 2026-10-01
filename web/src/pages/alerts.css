@@ -334,4 +334,64 @@
   .cp-systems-containers-cell .cp-icon {
     @apply h-4 w-4 text-[rgb(var(--muted))];
   }
+
+  /* ---------------------------------------------------------------- */
+  /* Notifications: in-page Channels/Health sub-tabs (SPEC-v0.8 §3-2)  */
+  /* ---------------------------------------------------------------- */
+
+  .cp-tabs {
+    @apply flex items-center gap-1 border-b border-[rgb(var(--border))] mb-4;
+  }
+
+  .cp-tab {
+    @apply px-3 py-2 text-sm font-medium text-[rgb(var(--muted))] border-b-2 border-transparent bg-transparent cursor-pointer min-h-6;
+  }
+
+  .cp-tab-active {
+    @apply text-[rgb(var(--text))] border-cp-accent;
+  }
+
+  .cp-tab-content {
+    @apply flex flex-col gap-4;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Notifications: Health tab (SPEC-v0.8 §3-2)                        */
+  /* ---------------------------------------------------------------- */
+
+  .cp-channel-health-grid {
+    @apply grid grid-cols-1 lg:grid-cols-2 gap-4;
+  }
+
+  .cp-channel-health-card {
+    @apply flex flex-col gap-3;
+  }
+
+  .cp-channel-health-stats {
+    @apply flex flex-col gap-1;
+  }
+
+  .cp-channel-health-strip-wrap {
+    @apply flex flex-col gap-1;
+  }
+
+  .cp-channel-health-strip {
+    @apply flex flex-wrap gap-1;
+  }
+
+  .cp-channel-health-strip-cell {
+    @apply inline-block w-4 h-4 rounded;
+  }
+
+  .cp-channel-health-schedule {
+    @apply flex flex-col gap-2 rounded-lg border border-[rgb(var(--border))] p-3;
+  }
+
+  .cp-channel-health-schedule-fields {
+    @apply grid grid-cols-1 sm:grid-cols-2 gap-3;
+  }
+
+  .cp-channel-health-banner {
+    @apply bg-cp-warning/10 border-cp-warning/40;
+  }
 }

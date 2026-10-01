@@ -1756,3 +1756,75 @@ never rewrite history here, only add to it.
   longer always mean literally "a host" — `internal/alerting`'s own
   doc comments (and this entry) are the source of truth for decoding
   which repurposing applies to which metric.
+
+### D-093 — Channel health state: two independent signals, synthetic-test failure overrides delivery-rate thresholds (2026-10-01)
+
+- **Context**: SPEC-v0.8 §3-2 needs one `healthy`/`degraded`/`failing`/
+  `unknown` state per channel, derived from two different kinds of
+  evidence that don't always agree: a weekly opt-in synthetic
+  connectivity test (present for some channels, absent for others) and
+  the channel's real delivery success rate over the last 7 days
+  (present only once at least one alert has actually fired through
+  it). Neither signal alone is sufficient — a channel with a perfect
+  delivery record might still be freshly broken (no alert has fired
+  recently to expose it) if a synthetic test just failed; a channel
+  with no synthetic testing enabled at all still needs a state derived
+  from whatever delivery history exists.
+- **Decision**: `models.ComputeChannelHealthState` (pure function,
+  documented thresholds in one place, table-tested) checks the most
+  recent synthetic result first — a `failed` outcome unconditionally
+  forces `failing`, regardless of the delivery success rate, even a
+  100% one. Only if the synthetic signal doesn't already say "failing"
+  does the function fall through to the 7-day success rate: no
+  deliveries and no failed synthetic test is `unknown` (not enough
+  data to say anything); below 50% success is `failing`; below 90% is
+  `degraded`; otherwise `healthy`. Both threshold constants
+  (`failingSuccessRateThreshold`, `degradedSuccessRateThreshold`) live
+  next to the function with a comment pointing back to it as the
+  single source of truth, so nothing else in the codebase re-derives
+  or duplicates these numbers.
+- **Consequences**: A channel can flip to `failing` the instant a
+  scheduled synthetic test fails, without waiting for a real alert to
+  fire and fail delivery first — which is the whole point of the
+  opt-in synthetic test feature. A channel that has never opted into
+  synthetic testing and has no delivery history yet (e.g. just
+  created) correctly reports `unknown` rather than a misleadingly
+  confident `healthy`.
+
+### D-094 — Channel-failure fallback: deterministic lowest-ID selection, one incident row per channel, banner as the explicit "nothing to notify" state (2026-10-01)
+
+- **Context**: SPEC-v0.8 §3-2 requires notifying "through a different
+  healthy channel" when one is failing, but a fleet may have zero,
+  one, or several other channels in varying health states, and the
+  same failure must not re-notify on every subsequent scheduler tick
+  while it remains unresolved.
+- **Decision**: `internal/channelhealth.SelectFallbackChannel` is a
+  pure function taking the full channel list, the failing channel's
+  ID, and a health-state map; it excludes the failing channel itself,
+  disabled channels, and any other channel also currently `failing`,
+  then deterministically picks the *lowest remaining ID* — not "first
+  enabled," not random, not "most recently healthy." Determinism was
+  chosen specifically so a hub restart, a retried tick, or a test
+  assertion always agrees on the same pick given the same channel set,
+  rather than depending on map iteration order or wall-clock timing.
+  De-duplication is a single `channel_failure_incidents` row per
+  channel (PK `channel_id`, so at most one open incident at a time),
+  tracking `notified_at`/`fallback_channel_id` — a fresh incident opens
+  un-notified, the fallback dispatch attempt sets `notified_at` only on
+  success, and a still-open, still-unnotified incident is retried on
+  the next opportunity (either the next scheduled synthetic test or
+  the next manual "run now"). When `SelectFallbackChannel` finds no
+  eligible candidate, the incident simply stays open and unnotified
+  forever until a fallback becomes available or the channel recovers
+  — `GET /api/v1/alerts/channels/health`'s `banner_needed`/
+  `banner_channel_names` fields surface exactly this state to the
+  dashboard, making "no healthy channel exists" a first-class,
+  explicitly-modeled outcome rather than a silent no-op.
+- **Consequences**: Adding a channel with a lower ID than an existing
+  fallback recipient changes which channel gets chosen for a *future*
+  incident (not a currently-open one, since dispatch only happens
+  once per incident) — an accepted tradeoff of determinism over
+  "prefer whichever channel is currently healthiest," which would add
+  a second, harder-to-test dimension to the selection rule for little
+  practical benefit (any enabled, non-failing channel is an acceptable
+  fallback recipient by definition).
