@@ -625,6 +625,24 @@ export function setDisplayCurrency(currency, krwPerUSD, signal) {
   });
 }
 
+/** getNotifyLanguage fetches GET /api/v1/settings/notify-language
+ * (admin): the language outbound notification text is written in.
+ * Returns {language: "en"|"ko"}. */
+export function getNotifyLanguage(signal) {
+  return apiFetch("/api/v1/settings/notify-language", { signal });
+}
+
+/** setNotifyLanguage calls PUT /api/v1/settings/notify-language (admin).
+ * @param {"en"|"ko"} language */
+export function setNotifyLanguage(language, signal) {
+  return apiFetch("/api/v1/settings/notify-language", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ language }),
+    signal,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Remote agent updates (SPEC-v0.6 §2).
 // ---------------------------------------------------------------------------

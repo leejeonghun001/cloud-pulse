@@ -204,3 +204,29 @@ test("findTranslationKeyUsages: extracts literal t('key') call sites", () => {
   const src = `t("common.cancel"); t('nav.overview', { x: 1 }); t(dynamicKey);`;
   assert.deepEqual(findTranslationKeyUsages(src), ["common.cancel", "nav.overview"]);
 });
+
+test("findHardcodedStrings: template literals with static text are flagged", () => {
+  const src = [
+    'el("p", { text: `Offline since ${when}` });',
+    'globalThis.confirm(`Delete plan "${name}"?`);',
+    'el("span", { text: `${a}${b}` });',
+    'el("span", { text: `↓ ${rate}` });',
+  ].join("\n");
+  const kinds = findHardcodedStrings(src, "x.js").map((f) => `${f.line}:${f.kind}`);
+  assert.deepEqual(kinds, ["1:key:text", "2:call:confirm"]);
+});
+
+test("findHardcodedStrings: both ternary branches are checked", () => {
+  const src = [
+    'el("button", { text: isEdit ? "Save changes" : t("billing.add_plan") });',
+    'el("button", { text: isEdit ? t("a.b") : t("c.d") });',
+    'el("div", { class: open ? "is-open" : "" });',
+  ].join("\n");
+  const kinds = findHardcodedStrings(src, "x.js").map((f) => `${f.line}:${f.kind}`);
+  assert.deepEqual(kinds, ["1:ternary:text"]);
+});
+
+test("findHardcodedStrings: command palette group labels are user-visible", () => {
+  const kinds = findHardcodedStrings('items.push({ id: "x", group: "Actions" });', "x.js").map((f) => f.kind);
+  assert.deepEqual(kinds, ["key:group"]);
+});

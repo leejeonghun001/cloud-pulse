@@ -3,6 +3,9 @@
 // hub info fields).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { setCatalogs, setLang } from "../assets/js/core/i18n.js";
 import {
   shouldShowUpdateBanner,
   bannerText,
@@ -11,9 +14,25 @@ import {
   outdatedAgentCount,
   agentUpdatePanelText,
   hubInfoUpdateFields,
-  LEGACY_AGENT_EXPLANATION,
+  legacyAgentExplanation,
   VERSION_REFRESH_INTERVAL_MS,
 } from "../assets/js/core/updates.js";
+
+globalThis.localStorage = (() => {
+  const store = new Map();
+  return {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  };
+})();
+
+const assetsDir = fileURLToPath(new URL("../assets/i18n/", import.meta.url));
+setCatalogs({
+  en: JSON.parse(readFileSync(`${assetsDir}en.json`, "utf-8")),
+  ko: JSON.parse(readFileSync(`${assetsDir}ko.json`, "utf-8")),
+});
+setLang("en");
 
 test("shouldShowUpdateBanner: false when update_available is false", () => {
   assert.equal(shouldShowUpdateBanner({ update_available: false, latest_version: "v0.3.1" }, null), false);
@@ -138,9 +157,9 @@ test("agentUpdatePanelText: up to date renders the up-to-date headline", () => {
   assert.equal(result.headline, "This agent is up to date.");
 });
 
-test("LEGACY_AGENT_EXPLANATION mentions the built-in updater", () => {
-  assert.match(LEGACY_AGENT_EXPLANATION, /built-in updater/);
-  assert.match(LEGACY_AGENT_EXPLANATION, /sudo cloud-pulse-agent update/);
+test("legacyAgentExplanation mentions the built-in updater", () => {
+  assert.match(legacyAgentExplanation(), /built-in updater/);
+  assert.match(legacyAgentExplanation(), /sudo cloud-pulse-agent update/);
 });
 
 test("hubInfoUpdateFields: maps versionInfo fields with fallbacks", () => {
@@ -177,4 +196,15 @@ test("hubInfoUpdateFields: propagates check_error when present", () => {
 
 test("VERSION_REFRESH_INTERVAL_MS is 30 minutes", () => {
   assert.equal(VERSION_REFRESH_INTERVAL_MS, 30 * 60 * 1000);
+});
+
+test("update texts render in Korean when the language is ko", () => {
+  setLang("ko");
+  try {
+    assert.equal(hostUpdateBadgeText({ available: true, latest: "v0.8.0" }).text, "업데이트 있음");
+    assert.equal(agentVersionText(""), "에이전트 알 수 없음");
+    assert.match(legacyAgentExplanation(), /sudo cloud-pulse-agent update/);
+  } finally {
+    setLang("en");
+  }
 });

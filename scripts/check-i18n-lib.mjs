@@ -20,6 +20,15 @@
 // aren't flagged the same way). Handles escaped quotes.
 const STRING_LITERAL = /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/;
 
+// TEMPLATE_LITERAL matches a single-line backtick template literal. It
+// is flagged when its static text (outside `${...}`) contains a letter,
+// e.g. `Delete ${name}?` — interpolation does not make text
+// translation-free.
+const TEMPLATE_LITERAL = /`(?:[^`\\]|\\.)*`/;
+
+// TEXT_VALUE is any value form findHardcodedStrings inspects.
+const TEXT_VALUE = new RegExp(`${STRING_LITERAL.source}|${TEMPLATE_LITERAL.source}`);
+
 // PROPERTY_PATTERNS: an object-literal property assignment whose value
 // is a plain string literal, keyed by the property name that makes it
 // user-visible text in this codebase's UI helper conventions (see
@@ -34,7 +43,7 @@ const STRING_LITERAL = /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/;
 // alone can't always distinguish "inside attrs" from "top-level" —
 // scanning is intentionally conservative (a few false positives that
 // get allow-listed are fine; missing a real one is not).
-const PROPERTY_KEYS = ["text", "label", "title", "message", "description", "alt", "aria-label", "placeholder"];
+const PROPERTY_KEYS = ["text", "label", "title", "message", "description", "alt", "aria-label", "placeholder", "group"];
 
 // ASSIGNMENT_PATTERNS: a direct DOM-property assignment to a string
 // literal.
@@ -67,18 +76,15 @@ export function findHardcodedStrings(source, filePath) {
   const lines = source.split("\n");
   let inBlockComment = false;
 
-  const propKeyPattern = new RegExp(
-    `(?:^|[{,(\\s])(?:"(${PROPERTY_KEYS.map(escapeForRegex).join("|")})"|'(${PROPERTY_KEYS.map(escapeForRegex).join("|")})'|(${PROPERTY_KEYS.map(escapeForRegex).join("|")}))\\s*:\\s*(${STRING_LITERAL.source})`,
+  const keyAlternatives = `(?:"(${PROPERTY_KEYS.map(escapeForRegex).join("|")})"|'(${PROPERTY_KEYS.map(escapeForRegex).join("|")})'|(${PROPERTY_KEYS.map(escapeForRegex).join("|")}))`;
+  const propKeyPattern = new RegExp(`(?:^|[{,(\\s])${keyAlternatives}\\s*:\\s*(${TEXT_VALUE.source})`, "g");
+  // `text: cond ? "A" : "B"` — both branches are user-visible.
+  const ternaryPattern = new RegExp(
+    `(?:^|[{,(\\s])${keyAlternatives}\\s*:\\s*[^,?:{}]+\\?\\s*(${TEXT_VALUE.source}|[^:?]+?)\\s*:\\s*(${TEXT_VALUE.source}|[^,}]+)`,
     "g",
   );
-  const assignPattern = new RegExp(
-    `\\.(${ASSIGNMENT_PROPS.join("|")})\\s*=\\s*(${STRING_LITERAL.source})`,
-    "g",
-  );
-  const callPattern = new RegExp(
-    `\\b(${CALL_NAMES.join("|")})\\s*\\(\\s*(${STRING_LITERAL.source})`,
-    "g",
-  );
+  const assignPattern = new RegExp(`\\.(${ASSIGNMENT_PROPS.join("|")})\\s*=\\s*(${TEXT_VALUE.source})`, "g");
+  const callPattern = new RegExp(`\\b(${CALL_NAMES.join("|")})\\s*\\(\\s*(${TEXT_VALUE.source})`, "g");
 
   for (let i = 0; i < lines.length; i++) {
     let line = lines[i];
@@ -109,6 +115,7 @@ export function findHardcodedStrings(source, filePath) {
     }
 
     findMatches(propKeyPattern, line, i, filePath, findings, (m) => ({ kind: `key:${m[1] || m[2] || m[3]}`, value: m[4] }));
+    findMatches(ternaryPattern, line, i, filePath, findings, (m) => ({ kind: `ternary:${m[1] || m[2] || m[3]}`, value: [m[4], m[5]] }));
     findMatches(assignPattern, line, i, filePath, findings, (m) => ({ kind: `assign:${m[1]}`, value: m[2] }));
     findMatches(callPattern, line, i, filePath, findings, (m) => ({ kind: `call:${m[1]}`, value: m[2] }));
   }
@@ -121,7 +128,8 @@ function findMatches(pattern, line, lineIndex, filePath, out, describe) {
   let m;
   while ((m = pattern.exec(line)) !== null) {
     const { kind, value } = describe(m);
-    if (!isFlaggable(value)) continue;
+    const values = Array.isArray(value) ? value : [value];
+    if (!values.some(isFlaggable)) continue;
     out.push({
       file: filePath,
       line: lineIndex + 1,
@@ -140,7 +148,9 @@ function findMatches(pattern, line, lineIndex, filePath, out, describe) {
  * @returns {boolean}
  */
 function isFlaggable(quoted) {
-  const inner = quoted.slice(1, -1);
+  if (!/^["'`]/.test(quoted)) return false; // an expression branch, e.g. t("key")
+  let inner = quoted.trim().slice(1, -1);
+  if (quoted.startsWith("`")) inner = inner.replace(/\$\{[^}]*\}/g, "");
   if (inner.trim() === "") return false;
   return /\p{L}/u.test(inner);
 }

@@ -3,6 +3,8 @@
 // are covered by node --test without a browser environment; DOM
 // building for these pieces lives in ui/components.js/pages/settings.
 
+import { t } from "./i18n.js";
+
 const DISMISSED_STORAGE_KEY = "cp_update_dismissed";
 
 /**
@@ -62,10 +64,10 @@ export function setDismissedUpdateTag(tag) {
  * @returns {{headline: string, command: string}}
  */
 export function bannerText(versionInfo) {
-  const latest = versionInfo?.latest_version || "unknown";
-  const current = versionInfo?.version || "unknown";
+  const latest = versionInfo?.latest_version || t("updates.unknown");
+  const current = versionInfo?.version || t("updates.unknown");
   return {
-    headline: `cloud-pulse ${latest} is available — hub is running ${current}`,
+    headline: t("updates.banner_headline", { latest, current }),
     command: versionInfo?.update_command || "",
   };
 }
@@ -80,10 +82,10 @@ export function bannerText(versionInfo) {
  */
 export function hostUpdateBadgeText(update) {
   if (!update || !update.available) return null;
-  const latest = update.latest || "a newer version";
+  const latest = update.latest || t("updates.a_newer_version");
   return {
-    text: "update available",
-    label: `A newer agent version (${latest}) is available`,
+    text: t("updates.badge_text"),
+    label: t("updates.badge_label", { latest }),
   };
 }
 
@@ -95,7 +97,7 @@ export function hostUpdateBadgeText(update) {
  * @returns {string}
  */
 export function agentVersionText(agentVersion) {
-  return `agent ${agentVersion || "unknown"}`;
+  return t("updates.agent_version", { version: agentVersion || t("updates.unknown") });
 }
 
 /**
@@ -111,12 +113,14 @@ export function outdatedAgentCount(hosts) {
 }
 
 /**
- * legacyAgentExplanation is the fixed explanatory copy shown in the host
+ * legacyAgentExplanation returns the explanatory copy shown in the host
  * detail "Agent update" panel when the agent predates the built-in
- * updater (self_update === false).
+ * updater (self_update === false), in the current language.
+ * @returns {string}
  */
-export const LEGACY_AGENT_EXPLANATION =
-  "This agent predates the built-in updater; run the installer once, later updates use `sudo cloud-pulse-agent update`.";
+export function legacyAgentExplanation() {
+  return t("updates.legacy_explanation");
+}
 
 /**
  * agentUpdatePanelText builds the host-detail "Agent update" panel's
@@ -129,10 +133,10 @@ export const LEGACY_AGENT_EXPLANATION =
  */
 export function agentUpdatePanelText(update) {
   if (!update) return null;
-  const latest = update.latest || "a newer version";
+  const latest = update.latest || t("updates.a_newer_version");
   const headline = update.available
-    ? `A newer agent version (${latest}) is available.`
-    : "This agent is up to date.";
+    ? t("updates.panel_available", { latest })
+    : t("updates.panel_up_to_date");
   return {
     headline,
     command: update.command || "",
@@ -150,7 +154,7 @@ export function agentUpdatePanelText(update) {
  */
 export function hubInfoUpdateFields(versionInfo) {
   return {
-    latest: versionInfo?.latest_version || "unknown",
+    latest: versionInfo?.latest_version || t("updates.unknown"),
     checkEnabled: Boolean(versionInfo?.update_check_enabled),
     checkedAtUnixSeconds: versionInfo?.checked_at ? versionInfo.checked_at : null,
     checkError: versionInfo?.check_error || "",

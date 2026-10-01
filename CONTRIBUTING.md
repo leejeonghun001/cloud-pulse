@@ -74,10 +74,14 @@ Every user-visible dashboard string goes through `t(key, params)` from
 `web/assets/js/core/i18n.js` — never a hard-coded string literal in
 `text:`/`textContent`/`innerText`/`title`/`aria-label`/`placeholder`/
 `alt`/`label:` (in an `el()`/`dropdownItem()`/`selectField()` call),
-`showToast({ message: ... })`, or `createDialog({ title, description })`.
+`showToast({ message: ... })`, `createDialog({ title, description })`,
+a command-palette `group:`, or `confirm()`/`alert()`.
 `scripts/check-i18n.mjs` enforces this (wired into `.githooks/pre-commit`
-and CI's `web` job) by scanning `web/assets/js/**` for exactly these
-patterns.
+and CI's `web` job) by scanning `web/assets/js/**` for these patterns,
+including template literals with static text (`` `Delete ${name}?` ``)
+and both branches of `key: cond ? "A" : "B"`. It is line-based, so a
+sentence returned from a helper (`return \`...\``) is not detected —
+reviewers still check those.
 
 **Adding/changing a string:**
 
@@ -98,11 +102,9 @@ patterns.
    an internal-only identifier the detector's heuristics mis-flagged),
    add a reasoned entry to `scripts/i18n-lint.allow.json` instead of a
    catalog key — every entry requires a non-empty `reason`.
-5. A file not yet converted to `t()` stays listed in
-   `scripts/i18n-lint.pending.json` (findings there don't fail the
-   lint); remove it from that list in the same commit that finishes
-   converting it — the lint fails if a listed file has zero findings,
-   forcing that cleanup rather than letting the list grow forever.
+5. `scripts/i18n-lint.pending.json` lists files not yet converted to
+   `t()` (findings there don't fail the lint). Since v0.8 it is empty;
+   keep it that way — new code is written with `t()` from the start.
 
 **Adding a third language:** extend `SUPPORTED_LANGUAGES` and the
 `getLang`/`detectAutoLang`/`intlLocale` resolution in
@@ -119,9 +121,10 @@ bodies, chart titles) is localized separately through the Go
 `internal/i18n` package (`T(lang, key, params)`, catalogs under
 `internal/i18n/catalog/*.json`), selected by the hub-wide
 `notify_language` setting (`en`/`ko`, default `en`) — independent of
-any signed-in admin's own dashboard language preference. Existing
-alert/notification message strings are migrated to it feature-by-
-feature, not all at once.
+any signed-in admin's own dashboard language preference. Admins change
+it in Settings → General → Notification language. Every alert, rollout
+and channel-health message goes through it; add new message text there,
+never as a Go string literal.
 
 ## Releasing (maintainers)
 

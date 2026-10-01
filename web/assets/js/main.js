@@ -179,17 +179,17 @@ function isAuthenticated() {
 
 function buildPaletteItems() {
   const items = [
-    { id: "nav-overview", label: t("nav.overview"), group: "Pages", iconName: "house", onSelect: () => router.navigate("#/") },
-    { id: "nav-alerts", label: t("nav.alerts"), group: "Pages", iconName: "bell", onSelect: () => router.navigate("#/alerts") },
-    { id: "nav-costs", label: t("nav.costs"), group: "Pages", iconName: "cloud", onSelect: () => router.navigate("#/costs") },
-    { id: "nav-rollout", label: t("nav.rollout"), group: "Pages", iconName: "refreshCw", onSelect: () => router.navigate("#/rollout") },
-    { id: "nav-settings", label: t("nav.settings"), group: "Pages", iconName: "settings", onSelect: () => router.navigate("#/settings") },
+    { id: "nav-overview", label: t("nav.overview"), group: t("nav.palette_group_pages"), iconName: "house", onSelect: () => router.navigate("#/") },
+    { id: "nav-alerts", label: t("nav.alerts"), group: t("nav.palette_group_pages"), iconName: "bell", onSelect: () => router.navigate("#/alerts") },
+    { id: "nav-costs", label: t("nav.costs"), group: t("nav.palette_group_pages"), iconName: "cloud", onSelect: () => router.navigate("#/costs") },
+    { id: "nav-rollout", label: t("nav.rollout"), group: t("nav.palette_group_pages"), iconName: "refreshCw", onSelect: () => router.navigate("#/rollout") },
+    { id: "nav-settings", label: t("nav.settings"), group: t("nav.palette_group_pages"), iconName: "settings", onSelect: () => router.navigate("#/settings") },
   ];
   for (const section of SETTINGS_SECTIONS) {
     items.push({
       id: `settings-${section.id}`,
-      label: `Settings: ${section.label}`,
-      group: "Settings",
+      label: t("nav.palette_settings_section", { section: section.label }),
+      group: t("nav.palette_group_settings"),
       iconName: section.iconName,
       onSelect: () => router.navigate(`#/settings/${section.id}`),
     });
@@ -198,7 +198,7 @@ function buildPaletteItems() {
     items.push({
       id: `host-${host.id}`,
       label: host.hostname || host.id,
-      group: "Hosts",
+      group: t("nav.palette_group_hosts"),
       iconName: "server",
       hint: host.status === "up" ? "Up" : "Down",
       onSelect: () => router.navigate(`#/host/${encodeURIComponent(host.id)}`),
@@ -208,21 +208,21 @@ function buildPaletteItems() {
     {
       id: "action-theme",
       label: t("nav.toggle_theme"),
-      group: "Actions",
+      group: t("nav.palette_group_actions"),
       iconName: "sun",
       onSelect: () => document.querySelector(".cp-icon-btn[aria-label='Toggle theme']")?.click(),
     },
     {
       id: "action-add-agent",
       label: t("nav.add_agent"),
-      group: "Actions",
+      group: t("nav.palette_group_actions"),
       iconName: "plus",
       onSelect: () => openAddAgent(),
     },
     {
       id: "action-signout",
       label: t("common.sign_out"),
-      group: "Actions",
+      group: t("nav.palette_group_actions"),
       iconName: "logOut",
       onSelect: () => document.querySelector(".cp-icon-btn[aria-label='User menu']")?.click(),
     }

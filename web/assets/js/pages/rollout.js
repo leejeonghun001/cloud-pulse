@@ -220,7 +220,7 @@ function distributionBar(bar) {
 
   const track = el("div", {
     class: "cp-rollout-distribution-track",
-    attrs: { role: "img", "aria-label": `${osLabel(bar.os)}: ${segments.map((s) => `${s.version} ${s.percent}%`).join(", ")}` },
+    attrs: { role: "img", "aria-label": t("rollout.distribution_row_aria", { os: osLabel(bar.os), segments: segments.map((s) => t("rollout.distribution_segment", { version: s.version, percent: s.percent })).join(", ") }) },
   });
   segments.forEach((seg, i) => {
     const fill = el("div", { class: `cp-rollout-distribution-fill ${SEGMENT_PALETTE[i % SEGMENT_PALETTE.length]}` });

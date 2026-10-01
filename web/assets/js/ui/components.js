@@ -15,7 +15,7 @@ import {
   formatLoad,
   clamp,
 } from "../core/format.js";
-import { bannerText, hostUpdateBadgeText, agentVersionText, agentUpdatePanelText, LEGACY_AGENT_EXPLANATION } from "../core/updates.js";
+import { bannerText, hostUpdateBadgeText, agentVersionText, agentUpdatePanelText, legacyAgentExplanation } from "../core/updates.js";
 import { icon } from "./icons.js";
 import { t } from "../core/i18n.js";
 
@@ -227,7 +227,7 @@ export function hostCard(summary, nowMs) {
   card.append(
     el("p", {
       class: "cp-host-card-meta",
-      text: `${host.os || "unknown"} / ${host.arch || "unknown"} · ${agentVersionText(host.agent_version)}`,
+      text: t("overview.grid_os_arch_agent", { os: host.os || t("overview.unknown"), arch: host.arch || t("overview.unknown"), agent: agentVersionText(host.agent_version) }),
     }),
   );
 
@@ -235,23 +235,23 @@ export function hostCard(summary, nowMs) {
     card.append(
       el("p", {
         class: "cp-host-card-offline-note",
-        text: `Offline since ${formatRelativeTimeFromUnixSeconds(summary.last_seen, nowMs)}`,
+        text: t("overview.offline_since", { relative: formatRelativeTimeFromUnixSeconds(summary.last_seen, nowMs) }),
       }),
     );
   }
 
   if (latest) {
-    card.append(metricRow("CPU", latest.cpu_percent));
+    card.append(metricRow(t("overview.metric_cpu"), latest.cpu_percent));
     card.append(
       metricRow(
-        "Memory",
+        t("overview.metric_memory"),
         latest.mem_used_percent,
         `${formatBytes(latest.mem_used)}/${formatBytes(latest.mem_total)}`,
       ),
     );
     card.append(
       metricRow(
-        "Disk",
+        t("overview.metric_disk"),
         latest.disk_used_percent,
         `${formatBytes(latest.disk_used)}/${formatBytes(latest.disk_total)}`,
       ),
@@ -261,14 +261,14 @@ export function hostCard(summary, nowMs) {
     netRow.append(
       el("span", { text: `↓ ${formatBitrate(latest.net_rx_bps)}` }),
       el("span", { text: `↑ ${formatBitrate(latest.net_tx_bps)}` }),
-      el("span", { text: `load ${formatLoad(latest.load1)}` }),
+      el("span", { text: t("overview.load_value", { value: formatLoad(latest.load1) }) }),
     );
     card.append(netRow);
 
     card.append(
       el("p", {
         class: "cp-host-card-uptime",
-        text: `Uptime ${formatDuration(latest.uptime_seconds)} · Last seen ${formatRelativeTimeFromUnixSeconds(summary.last_seen, nowMs)}`,
+        text: t("overview.uptime_last_seen", { uptime: formatDuration(latest.uptime_seconds), relative: formatRelativeTimeFromUnixSeconds(summary.last_seen, nowMs) }),
       }),
     );
   } else {
@@ -447,7 +447,7 @@ export function agentUpdatePanel(update) {
   }
 
   if (info.showLegacyNote) {
-    card.append(el("p", { class: "cp-muted-small cp-agent-update-legacy-note", text: LEGACY_AGENT_EXPLANATION }));
+    card.append(el("p", { class: "cp-muted-small cp-agent-update-legacy-note", text: legacyAgentExplanation() }));
   }
 
   return { node: card, copyBtn, command: info.command };

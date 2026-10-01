@@ -20,15 +20,18 @@ import {
   setDisplayCurrency,
   getAuditEntries,
   ApiError,
+  localizeApiError,
 } from "../../core/api.js";
+import { t } from "../../core/i18n.js";
 
 /** INTERVAL_API_COST_HINTS shows the AWS Cost Explorer API cost
  * estimate for each poll interval (SPEC-v0.6 §1: 24h ≈ $0.6/mo, 12h ≈
- * $1.2/mo, 6h ≈ $2.4/mo). */
+ * $1.2/mo, 6h ≈ $2.4/mo). A getter object so labels re-resolve against
+ * the current language on every read. */
 const INTERVAL_API_COST_HINTS = {
-  "6h": "6 hours (~$2.4/mo AWS Cost Explorer API cost)",
-  "12h": "12 hours (~$1.2/mo AWS Cost Explorer API cost)",
-  "24h": "24 hours (~$0.6/mo AWS Cost Explorer API cost, default)",
+  get "6h"() { return t("billing.interval_6h"); },
+  get "12h"() { return t("billing.interval_12h"); },
+  get "24h"() { return t("billing.interval_24h"); },
 };
 
 /**
@@ -75,30 +78,30 @@ export function mountBillingSection(container, { announce }) {
 /** intervalCard builds the provider status + polling interval card. */
 function intervalCard({ billing, signal, announce, onChanged }) {
   const card = el("div", { class: "cp-card" });
-  card.append(el("h2", { class: "cp-card-title", text: "Cloud billing polling" }));
+  card.append(el("h2", { class: "cp-card-title", text: t("billing.polling_title") }));
 
   const currentInterval = secondsToInterval(billing.interval_seconds);
   const { node: intervalNode, select: intervalSelect } = selectField({
     id: "cp-billing-interval",
-    label: "Polling interval",
+    label: t("billing.polling_interval_label"),
     options: Object.entries(INTERVAL_API_COST_HINTS).map(([value, label]) => ({ value, label })),
     value: currentInterval,
   });
   card.append(intervalNode);
 
   const status = el("p", { class: "cp-muted-small", attrs: { role: "status", "aria-live": "polite" } });
-  const saveBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: "Save interval" });
+  const saveBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: t("billing.save_interval") });
   saveBtn.addEventListener("click", async () => {
     saveBtn.disabled = true;
-    status.textContent = "Saving…";
+    status.textContent = t("billing.saving");
     try {
       await setBillingInterval(intervalSelect.value, signal);
-      status.textContent = "Saved. Takes effect on the next scheduled poll.";
-      announce?.(`Billing polling interval set to ${intervalSelect.value}.`);
+      status.textContent = t("billing.saved_takes_effect");
+      announce?.(t("billing.interval_set_to", { interval: intervalSelect.value }));
       await onChanged();
     } catch (err) {
       if (err?.name === "AbortError") return;
-      status.textContent = `Save failed: ${describeError(err)}`;
+      status.textContent = t("billing.save_failed", { reason: localizeApiError(err) });
     } finally {
       saveBtn.disabled = false;
     }
@@ -112,7 +115,7 @@ function intervalCard({ billing, signal, announce, onChanged }) {
       item.append(el("strong", { text: snap.provider.toUpperCase() }));
       item.append(el("span", { class: "cp-chip", text: snap.status }));
       if (snap.stale) {
-        item.append(el("span", { class: "cp-chip cp-chip-warning", text: "Stale data" }));
+        item.append(el("span", { class: "cp-chip cp-chip-warning", text: t("costs.stale_data") }));
       }
       const vm = freshnessViewModel({
         status: snap.status,
@@ -126,7 +129,7 @@ function intervalCard({ billing, signal, announce, onChanged }) {
     }
     card.append(list);
   } else {
-    card.append(el("p", { class: "cp-muted-small", text: "Billing is disabled on this hub (CP_BILLING=off, or no snapshots yet)." }));
+    card.append(el("p", { class: "cp-muted-small", text: t("billing.billing_disabled_note") }));
   }
 
   return card;
@@ -135,22 +138,22 @@ function intervalCard({ billing, signal, announce, onChanged }) {
 /** currencyCard builds the display currency settings card. */
 function currencyCard({ currency, signal, announce, onChanged }) {
   const card = el("div", { class: "cp-card" });
-  card.append(el("h2", { class: "cp-card-title", text: "Display currency" }));
-  card.append(el("p", { class: "cp-muted-small", text: "All amounts are stored and calculated in USD. KRW is a display-only conversion using a manually entered exchange rate — no external rate lookup is ever performed." }));
+  card.append(el("h2", { class: "cp-card-title", text: t("billing.display_currency_title") }));
+  card.append(el("p", { class: "cp-muted-small", text: t("billing.display_currency_description") }));
 
   const { node: currencyNode, select: currencySelect } = selectField({
     id: "cp-billing-currency",
-    label: "Currency",
+    label: t("billing.currency_label"),
     options: [
-      { value: "USD", label: "USD" },
-      { value: "KRW", label: "KRW (manual rate)" },
+      { value: "USD", get label() { return t("billing.usd"); } },
+      { value: "KRW", get label() { return t("billing.krw_manual_rate"); } },
     ],
     value: currency.currency || "USD",
   });
   card.append(currencyNode);
 
   const rateField = el("div", { class: "cp-field" });
-  rateField.append(el("label", { class: "cp-label", attrs: { for: "cp-billing-krw-rate" }, text: "KRW per 1 USD" }));
+  rateField.append(el("label", { class: "cp-label", attrs: { for: "cp-billing-krw-rate" }, text: t("billing.krw_per_usd_label") }));
   const rateInput = /** @type {HTMLInputElement} */ (
     el("input", {
       class: "cp-input",
@@ -170,32 +173,32 @@ function currencyCard({ currency, signal, announce, onChanged }) {
     card.append(
       el("p", {
         class: "cp-muted-small",
-        text: `Rate last entered ${new Date(currency.rate_updated_at * 1000).toISOString().slice(0, 10)}.`,
+        text: t("billing.rate_last_entered", { date: new Date(currency.rate_updated_at * 1000).toISOString().slice(0, 10) }),
       }),
     );
   }
 
   const status = el("p", { class: "cp-muted-small", attrs: { role: "status", "aria-live": "polite" } });
-  const saveBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: "Save currency" });
+  const saveBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: t("billing.save_currency") });
   saveBtn.addEventListener("click", async () => {
     const rate = Number(rateInput.value);
     if (currencySelect.value === "KRW" && (!Number.isFinite(rate) || rate <= 0)) {
-      status.textContent = "Enter a positive exchange rate to use KRW.";
+      status.textContent = t("billing.enter_positive_rate");
       return;
     }
     saveBtn.disabled = true;
-    status.textContent = "Saving…";
+    status.textContent = t("billing.saving");
     try {
       await setDisplayCurrency(currencySelect.value, rate, signal);
-      status.textContent = "Saved.";
-      announce?.(`Display currency set to ${currencySelect.value}.`);
+      status.textContent = t("billing.saved");
+      announce?.(t("billing.currency_set_to", { currency: currencySelect.value }));
       await onChanged();
     } catch (err) {
       if (err?.name === "AbortError") return;
       if (err instanceof ApiError && err.code === "rate_required") {
-        status.textContent = "KRW requires a positive exchange rate.";
+        status.textContent = t("billing.krw_requires_positive_rate");
       } else {
-        status.textContent = `Save failed: ${describeError(err)}`;
+        status.textContent = t("billing.save_failed", { reason: localizeApiError(err) });
       }
     } finally {
       saveBtn.disabled = false;
@@ -209,9 +212,9 @@ function currencyCard({ currency, signal, announce, onChanged }) {
 function plansCard({ plans, signal, announce, onChanged }) {
   const card = el("div", { class: "cp-card" });
   const head = el("div", { class: "cp-metric-head" });
-  head.append(el("h2", { class: "cp-card-title", text: "Pricing plans" }));
+  head.append(el("h2", { class: "cp-card-title", text: t("billing.plans_title") }));
   const addBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" } });
-  addBtn.append(icon("plus"), el("span", { text: "Add plan" }));
+  addBtn.append(icon("plus"), el("span", { text: t("billing.add_plan") }));
   addBtn.addEventListener("click", () => openPlanDialog({ signal, announce, onChanged }));
   head.append(addBtn);
   card.append(head);
@@ -245,25 +248,25 @@ function planRow({ plan, signal, announce, onChanged }) {
   const row = el("li", { class: "cp-billing-plan-row" });
   row.append(providerBadge(pricingPlanProviderFamily(plan.provider)));
   row.append(el("span", { class: "cp-billing-plan-row-name", text: plan.name }));
-  row.append(el("span", { class: "cp-muted-small", text: `Free: ${plan.egress_free_gb} GB${plan.pool_free_tier ? " (pooled)" : ""}` }));
+  row.append(el("span", { class: "cp-muted-small", text: plan.pool_free_tier ? t("billing.free_gb_pooled", { gb: plan.egress_free_gb }) : t("billing.free_gb", { gb: plan.egress_free_gb }) }));
   if (plan.builtin) {
-    row.append(el("span", { class: "cp-chip cp-chip-other", text: "Built-in" }));
+    row.append(el("span", { class: "cp-chip cp-chip-other", text: t("billing.builtin") }));
   } else {
-    const editBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm cp-btn-icon", attrs: { type: "button", "aria-label": `Edit ${plan.name}` } });
+    const editBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm cp-btn-icon", attrs: { type: "button", "aria-label": t("billing.edit_plan_aria", { name: plan.name }) } });
     editBtn.append(icon("pencil"));
     editBtn.addEventListener("click", () => openPlanDialog({ plan, signal, announce, onChanged }));
 
-    const deleteBtn = el("button", { class: "cp-btn cp-btn-danger cp-btn-sm cp-btn-icon", attrs: { type: "button", "aria-label": `Delete ${plan.name}` } });
+    const deleteBtn = el("button", { class: "cp-btn cp-btn-danger cp-btn-sm cp-btn-icon", attrs: { type: "button", "aria-label": t("billing.delete_plan_aria", { name: plan.name }) } });
     deleteBtn.append(icon("trash"));
     deleteBtn.addEventListener("click", async () => {
-      if (!globalThis.confirm(`Delete pricing plan "${plan.name}"?`)) return;
+      if (!globalThis.confirm(t("billing.delete_plan_confirm", { name: plan.name }))) return;
       try {
         await deletePricingPlan(plan.id, signal);
-        announce?.(`Deleted plan ${plan.name}.`);
+        announce?.(t("billing.plan_deleted", { name: plan.name }));
         await onChanged();
       } catch (err) {
         if (err?.name === "AbortError") return;
-        showToast({ message: `Delete failed: ${describeError(err)}`, variant: "error" });
+        showToast({ message: t("billing.delete_failed", { reason: describeError(err) }), variant: "error" });
       }
     });
     row.append(editBtn, deleteBtn);
@@ -280,7 +283,7 @@ function openPlanDialog({ plan, signal, announce, onChanged }) {
   const isEdit = Boolean(plan);
   const { dialog, body, open, close } = createDialog({
     titleId: "cp-plan-dialog-title",
-    title: isEdit ? `Edit plan: ${plan.name}` : "Add pricing plan",
+    title: isEdit ? t("billing.edit_plan_title", { name: plan.name }) : t("billing.add_plan_title"),
     wide: true,
   });
 
@@ -294,14 +297,14 @@ function openPlanDialog({ plan, signal, announce, onChanged }) {
   };
 
   const nameField = el("div", { class: "cp-field" });
-  nameField.append(el("label", { class: "cp-label", attrs: { for: "cp-plan-name" }, text: "Name" }));
+  nameField.append(el("label", { class: "cp-label", attrs: { for: "cp-plan-name" }, text: t("billing.plan_name") }));
   const nameInput = /** @type {HTMLInputElement} */ (el("input", { class: "cp-input", attrs: { id: "cp-plan-name", type: "text", value: draft.name } }));
   nameInput.addEventListener("input", () => (draft.name = nameInput.value));
   nameField.append(nameInput);
   body.append(nameField);
 
   const freeField = el("div", { class: "cp-field" });
-  freeField.append(el("label", { class: "cp-label", attrs: { for: "cp-plan-free" }, text: "Free egress allowance (GB)" }));
+  freeField.append(el("label", { class: "cp-label", attrs: { for: "cp-plan-free" }, text: t("billing.free_allowance_label") }));
   const freeInput = /** @type {HTMLInputElement} */ (el("input", { class: "cp-input", attrs: { id: "cp-plan-free", type: "text", inputmode: "decimal", value: String(draft.egressFreeGB) } }));
   freeInput.addEventListener("input", () => {
     draft.egressFreeGB = Number(freeInput.value) || 0;
@@ -315,11 +318,11 @@ function openPlanDialog({ plan, signal, announce, onChanged }) {
 
   function renderTiers() {
     clearChildren(tiersHost);
-    tiersHost.append(el("h3", { class: "cp-network-subheading", text: "Tiers" }));
+    tiersHost.append(el("h3", { class: "cp-network-subheading", text: t("billing.tiers") }));
     for (const [i, tier] of draft.egressTiers.entries()) {
       tiersHost.append(tierRow(tier, i));
     }
-    const addTierBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button" }, text: "Add tier" });
+    const addTierBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button" }, text: t("billing.add_tier") });
     addTierBtn.addEventListener("click", () => {
       draft.egressTiers.splice(draft.egressTiers.length - 1, 0, { up_to_gb: 0, price_per_gb: 0 });
       renderTiers();
@@ -334,7 +337,7 @@ function openPlanDialog({ plan, signal, announce, onChanged }) {
     const upToInput = /** @type {HTMLInputElement} */ (
       el("input", {
         class: "cp-input cp-limit-input",
-        attrs: { type: "text", inputmode: "decimal", value: isLast ? "" : String(tier.up_to_gb), placeholder: isLast ? "Unbounded" : "Up to GB", "aria-label": `Tier ${i + 1} upper bound in GB` },
+        attrs: { type: "text", inputmode: "decimal", value: isLast ? "" : String(tier.up_to_gb), placeholder: isLast ? t("billing.tier_unbounded") : t("billing.tier_up_to_placeholder"), "aria-label": t("billing.tier_upper_bound_aria", { n: i + 1 }) },
       })
     );
     upToInput.disabled = isLast;
@@ -345,16 +348,16 @@ function openPlanDialog({ plan, signal, announce, onChanged }) {
     const priceInput = /** @type {HTMLInputElement} */ (
       el("input", {
         class: "cp-input cp-limit-input",
-        attrs: { type: "text", inputmode: "decimal", value: String(tier.price_per_gb), "aria-label": `Tier ${i + 1} price per GB` },
+        attrs: { type: "text", inputmode: "decimal", value: String(tier.price_per_gb), "aria-label": t("billing.tier_price_aria", { n: i + 1 }) },
       })
     );
     priceInput.addEventListener("input", () => {
       tier.price_per_gb = Number(priceInput.value) || 0;
       renderPreview();
     });
-    row.append(upToInput, el("span", { text: "GB @ $" }), priceInput, el("span", { text: "/GB" }));
+    row.append(upToInput, el("span", { text: t("billing.tier_gb_at") }), priceInput, el("span", { text: t("billing.tier_per_gb") }));
     if (draft.egressTiers.length > 1) {
-      const removeBtn = el("button", { class: "cp-btn cp-btn-danger cp-btn-sm cp-btn-icon", attrs: { type: "button", "aria-label": `Remove tier ${i + 1}` } });
+      const removeBtn = el("button", { class: "cp-btn cp-btn-danger cp-btn-sm cp-btn-icon", attrs: { type: "button", "aria-label": t("billing.remove_tier_aria", { n: i + 1 }) } });
       removeBtn.append(icon("trash"));
       removeBtn.addEventListener("click", () => {
         draft.egressTiers.splice(i, 1);
@@ -368,7 +371,7 @@ function openPlanDialog({ plan, signal, announce, onChanged }) {
   renderTiers();
 
   const ingressField = el("div", { class: "cp-field" });
-  ingressField.append(el("label", { class: "cp-label", attrs: { for: "cp-plan-ingress" }, text: "Inbound price per GB (USD)" }));
+  ingressField.append(el("label", { class: "cp-label", attrs: { for: "cp-plan-ingress" }, text: t("billing.ingress_price_label") }));
   const ingressInput = /** @type {HTMLInputElement} */ (el("input", { class: "cp-input", attrs: { id: "cp-plan-ingress", type: "text", inputmode: "decimal", value: String(draft.ingressPricePerGB) } }));
   ingressInput.addEventListener("input", () => {
     draft.ingressPricePerGB = Number(ingressInput.value) || 0;
@@ -380,28 +383,28 @@ function openPlanDialog({ plan, signal, announce, onChanged }) {
   const poolInput = /** @type {HTMLInputElement} */ (el("input", { attrs: { type: "checkbox" } }));
   poolInput.checked = draft.poolFreeTier;
   poolInput.addEventListener("change", () => (draft.poolFreeTier = poolInput.checked));
-  poolField.append(poolInput, el("span", { text: "Share free tier across every host on this plan (account/tenancy-wide billing)" }));
+  poolField.append(poolInput, el("span", { text: t("billing.pool_free_tier_label") }));
   body.append(poolField);
 
   const previewHost = el("p", { class: "cp-muted-small" });
   body.append(previewHost);
   function renderPreview() {
     const cost = previewCostForOneTB(draft.egressFreeGB, draft.egressTiers);
-    previewHost.textContent = `Preview: 1 TB of egress on this plan costs ${formatUSD(cost)}.`;
+    previewHost.textContent = t("billing.preview_1tb", { cost: formatUSD(cost) });
   }
   renderPreview();
 
   const errorsHost = el("div");
   body.append(errorsHost);
 
-  const cancelBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: "Cancel" });
+  const cancelBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: t("common.cancel") });
   cancelBtn.addEventListener("click", () => close());
 
-  const saveBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" }, text: isEdit ? "Save changes" : "Add plan" });
+  const saveBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" }, text: isEdit ? t("billing.save_changes") : t("billing.add_plan") });
   saveBtn.addEventListener("click", async () => {
     clearChildren(errorsHost);
     if (!draft.name.trim()) {
-      errorsHost.append(el("p", { class: "cp-error-banner", text: "Name is required." }));
+      errorsHost.append(el("p", { class: "cp-error-banner", text: t("billing.name_required") }));
       return;
     }
     const payload = {
@@ -416,10 +419,10 @@ function openPlanDialog({ plan, signal, announce, onChanged }) {
     try {
       if (isEdit) {
         await updatePricingPlan(plan.id, payload, signal);
-        announce?.(`Saved plan ${draft.name}.`);
+        announce?.(t("billing.plan_saved", { name: draft.name }));
       } else {
         await createPricingPlan(payload, signal);
-        announce?.(`Added plan ${draft.name}.`);
+        announce?.(t("billing.plan_added", { name: draft.name }));
       }
       close();
       await onChanged();
@@ -468,7 +471,7 @@ function previewCostForOneTB(freeGB, tiers) {
 /** auditLogCard builds the "변경 이력" (change history) table. */
 function auditLogCard({ signal }) {
   const card = el("div", { class: "cp-card" });
-  card.append(el("h2", { class: "cp-card-title", text: "Change history" }));
+  card.append(el("h2", { class: "cp-card-title", text: t("billing.history_title") }));
 
   const tableHost = el("div");
   card.append(tableHost);
@@ -477,7 +480,7 @@ function auditLogCard({ signal }) {
 
   async function loadPage(before) {
     clearChildren(tableHost);
-    tableHost.append(el("p", { class: "cp-muted-small", text: "Loading…" }));
+    tableHost.append(el("p", { class: "cp-muted-small", text: t("common.loading") }));
     let view;
     try {
       view = await getAuditEntries({ limit: 20, before: before || undefined }, signal);
@@ -489,13 +492,13 @@ function auditLogCard({ signal }) {
     }
     clearChildren(tableHost);
     if ((view.entries || []).length === 0) {
-      tableHost.append(el("p", { class: "cp-muted", text: "No changes recorded yet." }));
+      tableHost.append(el("p", { class: "cp-muted", text: t("billing.history_empty") }));
       return;
     }
 
     const table = el("table", { class: "cp-table" });
     const thead = el("thead");
-    thead.append(el("tr", { children: ["When", "Who", "Action", "Entity", "Before → after"].map((t) => el("th", { text: t })) }));
+    thead.append(el("tr", { children: [t("billing.col_when"), t("billing.col_who"), t("billing.col_action"), t("billing.col_entity"), t("billing.col_before_after")].map((label) => el("th", { text: label })) }));
     table.append(thead);
     const tbody = el("tbody");
     for (const entry of view.entries) {
@@ -508,7 +511,7 @@ function auditLogCard({ signal }) {
 
     if (view.has_more) {
       const oldest = view.entries[view.entries.length - 1];
-      const moreBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button" }, text: "Load older entries" });
+      const moreBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button" }, text: t("billing.load_older") });
       moreBtn.addEventListener("click", () => loadPage(oldest.at));
       tableHost.append(moreBtn);
     }
@@ -526,11 +529,11 @@ export function auditRow(entry, nowMs = Date.now()) {
   row.append(el("td", { text: formatRelativeTimeFromUnixSeconds(entry.at, nowMs) }));
   row.append(el("td", { text: entry.actor }));
   row.append(el("td", { text: entry.action }));
-  row.append(el("td", { text: `${entry.entity_type}${entry.entity_id ? ` #${entry.entity_id}` : ""}` }));
+  row.append(el("td", { text: entry.entity_id ? t("billing.audit_entity_with_id", { type: entry.entity_type, id: entry.entity_id }) : entry.entity_type }));
   const diffCell = el("td", { class: "cp-billing-audit-diff" });
-  diffCell.append(auditJSONValue(entry.before_json, "(created)"));
+  diffCell.append(auditJSONValue(entry.before_json, t("billing.audit_created")));
   diffCell.append(el("span", { text: " → " }));
-  diffCell.append(auditJSONValue(entry.after_json, "(deleted)"));
+  diffCell.append(auditJSONValue(entry.after_json, t("billing.audit_deleted")));
   row.append(diffCell);
   return row;
 }

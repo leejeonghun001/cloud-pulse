@@ -7,7 +7,8 @@ import { languageSelector } from "../../ui/language-select.js";
 import { t } from "../../core/i18n.js";
 import { formatRelativeTimeFromUnixSeconds } from "../../core/format.js";
 import { hubInfoUpdateFields } from "../../core/updates.js";
-import { getSettings, getVersion } from "../../core/api.js";
+import { getSettings, getVersion, getNotifyLanguage, setNotifyLanguage, localizeApiError } from "../../core/api.js";
+import { showToast } from "../../ui/toast.js";
 import { getStoredTheme, setStoredTheme, applyTheme } from "../../core/theme.js";
 import { copyToClipboard } from "./index.js";
 
@@ -43,6 +44,7 @@ export function mountGeneralSection(container, { announce }) {
     container.append(hubInfoCard(view));
     container.append(appearanceCard({ announce }));
     container.append(languageCard({ announce, onLanguageChange: refresh }));
+    container.append(notifyLanguageCard({ announce, signal: controller.signal }));
   }
 
   function teardown() {
@@ -173,5 +175,64 @@ function languageCard({ announce, onLanguageChange }) {
     },
   });
   card.append(node);
+  return card;
+}
+
+
+/** NOTIFY_LANGUAGES lists the hub notification languages (internal/i18n
+ * Lang values), labelled like the dashboard language selector. */
+export const NOTIFY_LANGUAGES = [
+  { value: "en", get label() { return t("common.language_en"); } },
+  { value: "ko", get label() { return t("common.language_ko"); } },
+];
+
+/**
+ * notifyLanguageCard renders the hub-wide notification language
+ * (notify_language, SPEC-v0.8 §3-3). Unlike the dashboard language, it
+ * is stored on the hub and applies to every Discord/Telegram/WhatsApp/
+ * webhook message; chart image text stays English.
+ * @param {Object} opts
+ * @param {(text: string) => void} opts.announce
+ * @param {AbortSignal} opts.signal
+ * @returns {HTMLElement}
+ */
+function notifyLanguageCard({ announce, signal }) {
+  const card = el("div", { class: "cp-card" });
+  card.append(el("h2", { class: "cp-card-title", text: t("settings.notify_language_title") }));
+  card.append(el("p", { class: "cp-muted-small", text: t("settings.notify_language_description") }));
+
+  const { node, select } = selectField({
+    id: "cp-notify-language-select",
+    label: t("settings.notify_language_label"),
+    options: NOTIFY_LANGUAGES,
+    value: "en",
+  });
+  select.disabled = true;
+  card.append(node);
+
+  getNotifyLanguage(signal)
+    .then((res) => {
+      select.value = res?.language === "ko" ? "ko" : "en";
+      select.disabled = false;
+    })
+    .catch((err) => {
+      if (err?.name === "AbortError") return;
+      showToast({ message: localizeApiError(err), variant: "error" });
+    });
+
+  select.addEventListener("change", async () => {
+    const language = select.value;
+    select.disabled = true;
+    try {
+      await setNotifyLanguage(language, signal);
+      announce(t("settings.notify_language_saved"));
+      showToast({ message: t("settings.notify_language_saved"), variant: "success" });
+    } catch (err) {
+      if (err?.name === "AbortError") return;
+      showToast({ message: localizeApiError(err), variant: "error" });
+    } finally {
+      select.disabled = false;
+    }
+  });
   return card;
 }
