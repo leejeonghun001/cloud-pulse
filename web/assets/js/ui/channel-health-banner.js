@@ -38,7 +38,7 @@ export function channelHealthBanner(channelNames, onDismiss) {
       : t("health.banner_message", { count: channelNames.length });
   node.append(el("span", { class: "cp-update-banner-text", text }));
 
-  const viewLink = el("a", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { href: "#/settings/notifications" }, text: t("health.banner_view") });
+  const viewLink = el("a", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { href: "#/settings/notifications?tab=health" }, text: t("health.banner_view") });
   node.append(viewLink);
 
   if (onDismiss) {

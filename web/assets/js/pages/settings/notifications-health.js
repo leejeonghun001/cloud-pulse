@@ -229,6 +229,8 @@ function syntheticStrip(results) {
     );
   }
   wrap.append(strip);
+  const failed = chronological.filter((r) => r.outcome === "failed").length;
+  wrap.append(el("p", { class: "cp-muted-small", attrs: { "aria-hidden": "true" }, text: t("health.synthetic_strip_counts", { passed: chronological.length - failed, failed }) }));
 
   const summary = chronological
     .map((r) => `${t(OUTCOME_LABEL_KEY[r.outcome] || "health.synthetic_result_none")} (${formatWhen(r.started_at)})`)

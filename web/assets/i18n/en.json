@@ -638,7 +638,8 @@
       "other": "{count} notification channels are failing and no healthy channel is available to alert about them."
     },
     "banner_dismiss": "Dismiss",
-    "banner_view": "View channel health"
+    "banner_view": "View channel health",
+    "synthetic_strip_counts": "{passed} passed · {failed} failed"
   },
   "errors": {
     "generic": "Something went wrong. Please try again.",

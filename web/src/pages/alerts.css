@@ -383,6 +383,21 @@
     @apply inline-block w-4 h-4 rounded;
   }
 
+  /* Solid fills (not the chips' 15% tint) so each week reads at a glance
+     in both themes; the counts line below carries the same information
+     as text. */
+  .cp-channel-health-strip-cell.cp-chip-ok {
+    @apply bg-cp-ok;
+  }
+
+  .cp-channel-health-strip-cell.cp-chip-critical {
+    @apply bg-cp-critical;
+  }
+
+  .cp-channel-health-strip-cell.cp-chip-other {
+    @apply bg-[rgb(var(--border))];
+  }
+
   .cp-channel-health-schedule {
     @apply flex flex-col gap-2 rounded-lg border border-[rgb(var(--border))] p-3;
   }
