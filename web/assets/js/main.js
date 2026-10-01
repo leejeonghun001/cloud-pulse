@@ -360,6 +360,22 @@ async function checkInitialAuth() {
   }
 }
 
+/**
+ * wireSkipLink localizes index.html's static "Skip to main content" link
+ * and makes it move focus to <main> without touching location.hash (the
+ * hash is the router's; "#cp-main" would otherwise navigate away).
+ */
+function wireSkipLink() {
+  const link = document.querySelector(".cp-skip-link");
+  if (!link) return;
+  link.textContent = t("nav.skip_to_main");
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    const main = document.getElementById("cp-main");
+    if (main) main.focus();
+  });
+}
+
 async function bootstrap() {
   // A deep link such as /login is served index.html by the hub; move it
   // into the hash route this app actually uses before anything renders.
@@ -368,6 +384,7 @@ async function bootstrap() {
 
   await loadCatalogs();
   document.documentElement.lang = htmlLang();
+  wireSkipLink();
 
   removeLegacyToken();
   initThemeWatcher();

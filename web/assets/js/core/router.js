@@ -120,7 +120,12 @@ export class Router {
 
   /** start wires the hashchange listener and performs the initial dispatch. */
   start() {
-    globalThis.addEventListener("hashchange", () => this.dispatch());
+    globalThis.addEventListener("hashchange", () => {
+      // An in-page anchor such as "#cp-main" is not a route; leave the
+      // current page alone instead of falling through to notFound.
+      if (!isRouteHash(globalThis.location.hash)) return;
+      this.dispatch();
+    });
     this.dispatch();
   }
 }
@@ -141,5 +146,15 @@ export function pathToHashRoute(pathname, search, hash) {
   if (hash && hash !== "#") return `/${hash}`;
   const trimmed = pathname.replace(/\/+$/, "") || "/";
   return `/#${trimmed}${search || ""}`;
+}
+
+/**
+ * isRouteHash reports whether hash is an app route ("", "#", or
+ * starting with "#/") rather than an in-page anchor ("#cp-main").
+ * @param {string} hash
+ * @returns {boolean}
+ */
+export function isRouteHash(hash) {
+  return !hash || hash === "#" || hash.startsWith("#/");
 }
 

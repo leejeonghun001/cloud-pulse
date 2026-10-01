@@ -20,3 +20,11 @@ test("pathToHashRoute: an existing hash wins over the path", () => {
   assert.equal(pathToHashRoute("/login", "", "#/alerts"), "/#/alerts");
   assert.equal(pathToHashRoute("/login", "", "#"), "/#/login");
 });
+
+test("isRouteHash: in-page anchors are not routes", async () => {
+  const { isRouteHash } = await import("../assets/js/core/router.js");
+  assert.equal(isRouteHash(""), true);
+  assert.equal(isRouteHash("#"), true);
+  assert.equal(isRouteHash("#/settings/network"), true);
+  assert.equal(isRouteHash("#cp-main"), false);
+});
