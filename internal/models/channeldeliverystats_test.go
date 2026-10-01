@@ -89,3 +89,88 @@ func TestDeliveriesForChannel_NoMatchesReturnsEmptyNotNil(t *testing.T) {
 		t.Errorf("got %+v, want non-nil empty slice", got)
 	}
 }
+
+func TestHasConsecutiveDeliveryFailures(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		deliveries []Delivery
+		n          int
+		want       bool
+	}{
+		{
+			name:       "empty history",
+			deliveries: nil,
+			n:          ConsecutiveFailureThreshold,
+			want:       false,
+		},
+		{
+			name: "fewer than n failures",
+			deliveries: []Delivery{
+				{OK: false, At: 10},
+				{OK: false, At: 20},
+			},
+			n:    ConsecutiveFailureThreshold,
+			want: false,
+		},
+		{
+			name: "exactly n failures",
+			deliveries: []Delivery{
+				{OK: false, At: 10},
+				{OK: false, At: 20},
+				{OK: false, At: 30},
+			},
+			n:    ConsecutiveFailureThreshold,
+			want: true,
+		},
+		{
+			name: "older success before n failures",
+			deliveries: []Delivery{
+				{OK: true, At: 10},
+				{OK: false, At: 20},
+				{OK: false, At: 30},
+				{OK: false, At: 40},
+			},
+			n:    ConsecutiveFailureThreshold,
+			want: true,
+		},
+		{
+			name: "newest success breaks the streak",
+			deliveries: []Delivery{
+				{OK: false, At: 10},
+				{OK: false, At: 20},
+				{OK: false, At: 30},
+				{OK: true, At: 40},
+			},
+			n:    ConsecutiveFailureThreshold,
+			want: false,
+		},
+		{
+			name: "newest-first input order is normalized",
+			deliveries: []Delivery{
+				{OK: false, At: 30},
+				{OK: false, At: 10},
+				{OK: false, At: 20},
+			},
+			n:    ConsecutiveFailureThreshold,
+			want: true,
+		},
+		{
+			name: "n <= 0 is never a failure signal",
+			deliveries: []Delivery{
+				{OK: false, At: 10},
+			},
+			n:    0,
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := HasConsecutiveDeliveryFailures(tt.deliveries, tt.n); got != tt.want {
+				t.Errorf("HasConsecutiveDeliveryFailures(%d deliveries, n=%d) = %v, want %v", len(tt.deliveries), tt.n, got, tt.want)
+			}
+		})
+	}
+}

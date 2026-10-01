@@ -23,6 +23,15 @@ import (
 // load, while avoiding a per-second busy loop.
 const channelHealthTickInterval = 1 * time.Minute
 
+// recentAlertEventsScanLimit bounds how many recent AlertEvents the
+// per-tick delivery-failure evaluation loads. Each event carries the
+// deliveries made for it, so a few hundred events cover far more than
+// ConsecutiveFailureThreshold (3) recent deliveries per channel even
+// with many rules firing; the events are returned newest-first and
+// models.HasConsecutiveDeliveryFailures only needs the most recent few
+// per channel.
+const recentAlertEventsScanLimit = 200
+
 // ChannelHealthRuntime wires SPEC-v0.8 §3-2's channel health report
 // into the hub: the weekly synthetic-test scheduler and the channel-
 // failure fallback notifier. Constructed by cmd/hub and passed as
@@ -90,6 +99,16 @@ func (s *Server) runDueChannelHealthChecks(ctx context.Context) {
 		}
 		s.runOneChannelSyntheticTest(ctx, cs.ChannelID, now)
 	}
+
+	// Every tick also re-evaluates every channel's failure state from
+	// both signals — the most recent synthetic result and the
+	// consecutive-delivery-failure streak (SPEC-v0.8 §3-2's "연속 N회(기본
+	// 3) 전송이 실패하면" trigger) — so a channel that starts failing via
+	// deliveries alone (no synthetic test configured, or its schedule
+	// is days away) opens its incident and dispatches the fallback
+	// notification within one tick, and one whose deliveries recovered
+	// has its incident closed promptly too.
+	s.evaluateChannelFailureStatesForAllChannels(ctx, rt.now())
 }
 
 // runOneChannelSyntheticTest runs and persists one channel's synthetic
@@ -126,26 +145,82 @@ func (s *Server) runOneChannelSyntheticTest(ctx context.Context, channelID int64
 }
 
 // evaluateChannelFailureDispatch opens/dispatches or recovers a
-// channel-failure incident based on the channel's freshly computed
-// health state (SPEC-v0.8 §3-2): a synthetic-test failure or N (default
-// models.ConsecutiveFailureThreshold) consecutive delivery failures
-// opens/keeps-open an incident, sending the fallback notification once
-// per incident through a different healthy enabled channel (deterministic
-// selection, self/disabled/failing excluded — see
-// channelhealth.SelectFallbackChannel); a healthy/degraded state closes
-// any open incident. isFailingNow is the synthetic-test outcome for the
-// channel just tested; consecutive delivery failures are checked
-// independently via the channel's stats (both paths can independently
-// classify a channel as ChannelFailing per models.ComputeChannelHealthState,
-// but this function only receives the synthetic signal directly —
-// callers evaluating a plain delivery failure use
-// evaluateChannelFailureDispatchFromDeliveryFailures instead).
+// channel-failure incident for ch based on the two failure signals of
+// SPEC-v0.8 §3-2: the channel's freshly computed synthetic-test
+// outcome (isFailingNow, known only to the caller that just ran the
+// test) and its consecutive-delivery-failure streak (derived from
+// persisted deliveries here, so a passing synthetic test does not
+// close an incident whose delivery failures are still ongoing).
+// Either signal failing opens/keeps-open an incident; only both clear
+// closes one. Callers evaluating every channel without a fresh
+// synthetic outcome (the background tick) use
+// evaluateChannelFailureStatesForAllChannels instead.
 func (s *Server) evaluateChannelFailureDispatch(ctx context.Context, ch models.NotifyChannel, isFailingNow bool, now time.Time) {
-	if !isFailingNow {
-		s.recoverChannelFailureIncidentIfOpen(ctx, ch, now)
+	if isFailingNow {
+		s.openOrContinueChannelFailureIncident(ctx, ch, now)
 		return
 	}
-	s.openOrContinueChannelFailureIncident(ctx, ch, now)
+	if s.channelDeliveryStreakFailing(ctx, ch.ID) {
+		s.openOrContinueChannelFailureIncident(ctx, ch, now)
+		return
+	}
+	s.recoverChannelFailureIncidentIfOpen(ctx, ch, now)
+}
+
+// evaluateChannelFailureStatesForAllChannels re-derives every enabled
+// channel's failure state from its persisted signals — the most recent
+// stored synthetic result and its consecutive-delivery-failure streak —
+// opening/continuing or recovering each channel's incident
+// accordingly. Runs once per scheduler tick; no fresh synthetic
+// outcome is available here, so the last stored result stands in.
+func (s *Server) evaluateChannelFailureStatesForAllChannels(ctx context.Context, now time.Time) {
+	channels, err := s.store.ListNotifyChannels(ctx)
+	if err != nil {
+		s.logger.Error("channel health: list channels for failure evaluation failed", "error", err)
+		return
+	}
+	events, err := s.store.ListAlertEvents(ctx, "", "", 0, recentAlertEventsScanLimit)
+	if err != nil {
+		s.logger.Error("channel health: list alert events for failure evaluation failed", "error", err)
+		return
+	}
+	for _, ch := range channels {
+		if !ch.Enabled {
+			continue
+		}
+		results, err := s.store.ListSyntheticResults(ctx, ch.ID, 1)
+		if err != nil {
+			s.logger.Error("channel health: list synthetic results failed", "channel_id", ch.ID, "error", err)
+			continue
+		}
+		syntheticFailed := len(results) > 0 && results[0].Outcome == models.SyntheticFailed
+		streakFailing := models.HasConsecutiveDeliveryFailures(
+			models.DeliveriesForChannel(events, ch.ID), models.ConsecutiveFailureThreshold,
+		)
+		if syntheticFailed || streakFailing {
+			s.openOrContinueChannelFailureIncident(ctx, ch, now)
+			continue
+		}
+		s.recoverChannelFailureIncidentIfOpen(ctx, ch, now)
+	}
+}
+
+// channelDeliveryStreakFailing reports whether channelID's most recent
+// models.ConsecutiveFailureThreshold deliveries (derived from the
+// persisted AlertEvent deliveries) all failed — one of the two
+// channel-failure fallback triggers (SPEC-v0.8 §3-2). A store error is
+// logged and reported as not-failing: the background tick re-evaluates
+// within a minute, so a transient read failure must not spuriously
+// open an incident.
+func (s *Server) channelDeliveryStreakFailing(ctx context.Context, channelID int64) bool {
+	events, err := s.store.ListAlertEvents(ctx, "", "", 0, recentAlertEventsScanLimit)
+	if err != nil {
+		s.logger.Error("channel health: list alert events for delivery streak failed", "error", err)
+		return false
+	}
+	return models.HasConsecutiveDeliveryFailures(
+		models.DeliveriesForChannel(events, channelID), models.ConsecutiveFailureThreshold,
+	)
 }
 
 // recoverChannelFailureIncidentIfOpen closes ch's open incident (if

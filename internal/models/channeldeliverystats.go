@@ -1,5 +1,7 @@
 package models
 
+import "sort"
+
 // AggregateChannelDeliveryStats computes a ChannelDeliveryStats for
 // one channel from a list of AlertEvent deliveries observed within a
 // lookback window, pure and side-effect free (SPEC-v0.8 §3-2's "7일·
@@ -63,4 +65,34 @@ func DeliveriesForChannel(events []AlertEvent, channelID int64) []Delivery {
 		}
 	}
 	return out
+}
+
+// HasConsecutiveDeliveryFailures reports whether the n most recent
+// deliveries (chronologically by At) all failed (OK == false). This is
+// the delivery-side trigger of the channel-failure fallback
+// notification (SPEC-v0.8 §3-2: "연속 N회(기본 3) 전송이 실패하면"), with n
+// = ConsecutiveFailureThreshold.
+//
+// deliveries must all belong to one channel (DeliveriesForChannel's
+// output); input order does not matter — ListAlertEvents returns
+// events newest-first, and a single event can carry several deliveries
+// for the same channel, so the helper sorts by At itself.
+// Returns false when fewer than n deliveries exist: an insufficient
+// history is never a failure signal.
+func HasConsecutiveDeliveryFailures(deliveries []Delivery, n int) bool {
+	if n <= 0 {
+		return false
+	}
+	sorted := make([]Delivery, len(deliveries))
+	copy(sorted, deliveries)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].At < sorted[j].At })
+	if len(sorted) < n {
+		return false
+	}
+	for _, d := range sorted[len(sorted)-n:] {
+		if d.OK {
+			return false
+		}
+	}
+	return true
 }
