@@ -8,4 +8,4 @@ Do not include credentials, live hub URLs, database contents, or customer data i
 
 ## Supported versions
 
-Security fixes are made for the latest released minor version of cloud-pulse. The currently supported line is `v0.7.x`; users of older releases should upgrade before requesting a security fix where possible.
+Security fixes are made for the latest released minor version of cloud-pulse. The currently supported line is `v0.8.x`; users of older releases should upgrade before requesting a security fix where possible.
