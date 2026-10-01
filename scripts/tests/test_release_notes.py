@@ -12,8 +12,19 @@ import textwrap
 import unittest
 from pathlib import Path
 
+from _git_isolation import RepoConfigGuard, clean_git_env
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "release-notes.sh"
+_CONFIG_GUARD = RepoConfigGuard(ROOT)
+
+
+def setUpModule() -> None:
+    _CONFIG_GUARD.start()
+
+
+def tearDownModule() -> None:
+    _CONFIG_GUARD.stop()
 
 
 def run_git(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
@@ -37,9 +48,9 @@ def run_git(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
 
 
 def _base_os_env() -> dict[str, str]:
-    import os
-
-    return dict(os.environ)
+    # Never inherit GIT_DIR/GIT_INDEX_FILE/...: inside a git hook they
+    # point at this repository and would override `git -C <fixture>`.
+    return clean_git_env()
 
 
 def commit(repo: Path, message: str, *, date: str, filename: str = "file.txt") -> str:
@@ -63,6 +74,7 @@ def run_release_notes(repo: Path, *args: str) -> subprocess.CompletedProcess[str
         ["bash", str(SCRIPT), *args, "--repo-dir", str(repo), "--repo-url", "https://example.invalid/owner/repo"],
         capture_output=True,
         text=True,
+        env=_base_os_env(),
         check=False,
     )
 

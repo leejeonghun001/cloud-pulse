@@ -1595,3 +1595,35 @@ never rewrite history here, only add to it.
   not checked against the catalog (can't be, statically) and is not
   flagged as hard-coded either, a known gap accepted rather than
   chasing false negatives with more regex complexity.
+
+### D-089 — Fixture git commands never inherit `GIT_*`; a guard restores this repository's config if one does (2026-10-01)
+
+- **Context**: git sets `GIT_DIR`, `GIT_INDEX_FILE` and `GIT_WORK_TREE`
+  for every hook. `.githooks/pre-commit` runs `scripts/tests`, whose
+  release-notes and pre-publish fixtures selected their throwaway
+  repository only with `cwd=`/`git -C`. An inherited `GIT_DIR` wins over
+  both, so from inside a commit hook (most visibly in linked worktrees)
+  fixture `git init`/`git config`/`git commit` ran against the real
+  repository: it set `core.bare = true`, a `core.worktree` pointing at a
+  deleted temp dir and a fixture `[user]`, and moved branch refs to
+  fixture commits. No data was lost (files on disk and tags were intact),
+  but every git command failed until the config was repaired by hand.
+- **Decision**: three independent layers.
+  1. Every fixture git subprocess and every git call in
+     `scripts/prepublish-check.py` runs with all `GIT_*` variables
+     removed (`clean_git_env()` in `scripts/tests/_git_isolation.py`,
+     `_git_env()` in the scanner), so the explicit path is the only
+     thing selecting a repository.
+  2. `RepoConfigGuard` snapshots this repository's config file(s),
+     located by reading `.git` on disk rather than by running git, before
+     each fixture module and restores the original bytes afterwards if
+     they changed — then fails the run so the leaking call is found.
+  3. The hook runs the Python suite under `env -u GIT_DIR -u
+     GIT_INDEX_FILE -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_PREFIX`.
+  `scripts/tests/test_git_isolation.py` reproduces the hook environment
+  against a sentinel repository and asserts its config, refs and HEAD are
+  unchanged; it fails on the old code.
+- **Rejected**: restoring refs automatically (parallel worktrees commit to
+  their own branches during a test run, so a ref snapshot cannot tell a
+  leak from a legitimate commit; prevention plus the sentinel test covers
+  refs instead).

@@ -651,6 +651,16 @@ binary.
   single-purpose test-fixture script, not a pattern to reach for in
   general-purpose code.
 
+### Git subprocesses in scripts and tests
+
+- Any git call that targets a repository by path (`cwd=`, `git -C`)
+  must pass an environment with every `GIT_*` variable removed
+  (`clean_git_env()` from `scripts/tests/_git_isolation.py` in tests).
+  Inside a hook, an inherited `GIT_DIR` overrides the path (D-089).
+- A test module that creates fixture repositories starts a
+  `RepoConfigGuard` in `setUpModule()` and stops it in
+  `tearDownModule()`.
+
 ## JavaScript syntax checking
 
 - **`node --check <file>` on every staged `.js` file** under

@@ -23,7 +23,18 @@ import unittest
 from pathlib import Path
 from types import ModuleType
 
+from _git_isolation import RepoConfigGuard, clean_git_env
+
 ROOT = Path(__file__).resolve().parents[2]
+_CONFIG_GUARD = RepoConfigGuard(ROOT)
+
+
+def setUpModule() -> None:
+    _CONFIG_GUARD.start()
+
+
+def tearDownModule() -> None:
+    _CONFIG_GUARD.stop()
 
 
 def load_script(filename: str, module_name: str) -> ModuleType:
@@ -43,6 +54,7 @@ def _run_git(repo: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args],
         cwd=repo,
+        env=clean_git_env(),
         capture_output=True,
         text=True,
         check=True,

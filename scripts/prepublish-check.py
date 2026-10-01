@@ -589,10 +589,25 @@ _TEXT_LIKELY_SUFFIXES = {
 }
 
 
+def _git_env() -> dict[str, str]:
+    """Returns os.environ without any GIT_* variable.
+
+    Git sets GIT_DIR/GIT_INDEX_FILE/... for every hook it runs, and an
+    inherited GIT_DIR wins over ``cwd=``. Every git call here selects its
+    repository by ``cwd=repo_root`` only, so it must not inherit them
+    (otherwise scanning a second checkout, such as a test fixture, from
+    inside a hook would scan or modify the hook's repository instead).
+    """
+    import os
+
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
 def _git(repo_root: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args],
         cwd=repo_root,
+        env=_git_env(),
         capture_output=True,
         text=True,
         check=True,
@@ -688,6 +703,7 @@ def iter_history_added_lines(repo_root: Path) -> Iterator[tuple[str, str, int, s
     proc = subprocess.Popen(
         ["git", "log", "-p", "--all", "--no-color", "--unified=0"],
         cwd=repo_root,
+        env=_git_env(),
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         text=True,
@@ -745,6 +761,7 @@ def scan_history_large_and_binary_blobs(repo_root: Path) -> list[Finding]:
     rev_list = subprocess.run(
         ["git", "rev-list", "--all", "--objects"],
         cwd=repo_root,
+        env=_git_env(),
         capture_output=True,
         text=True,
         check=True,
@@ -752,6 +769,7 @@ def scan_history_large_and_binary_blobs(repo_root: Path) -> list[Finding]:
     batch_check = subprocess.run(
         ["git", "cat-file", "--batch-check=%(objecttype) %(objectname) %(objectsize) %(rest)"],
         cwd=repo_root,
+        env=_git_env(),
         input=rev_list.stdout,
         capture_output=True,
         text=True,
@@ -1132,6 +1150,7 @@ def find_repo_root(start: Path) -> Path:
     out = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         cwd=start,
+        env=_git_env(),
         capture_output=True,
         text=True,
         check=True,
