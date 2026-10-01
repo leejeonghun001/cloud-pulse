@@ -59,7 +59,7 @@ const SUB_TABS = [
  */
 export function mountNotificationsSection(container, { announce }) {
   const controller = new AbortController();
-  let activeTab = "channels";
+  let activeTab = tabFromHash(globalThis.location?.hash || "");
   let activeHandle = null;
 
   async function refresh() {
@@ -75,13 +75,16 @@ export function mountNotificationsSection(container, { announce }) {
       btn.addEventListener("click", () => {
         if (tab.id === activeTab) return;
         activeTab = tab.id;
+        // Keep the tab in the URL (bookmarkable, and lets ui-audit open
+        // it) without re-dispatching the router.
+        globalThis.history?.replaceState(null, "", hashForTab(globalThis.location?.hash || "", tab.id));
         refresh();
       });
       tabRow.append(btn);
     }
     container.append(tabRow);
 
-    const tabContent = el("div", { class: "cp-tab-content" });
+    const tabContent = el("div", { class: "cp-tab-content", attrs: { role: "tabpanel" } });
     container.append(tabContent);
 
     if (activeTab === "health") {
@@ -649,3 +652,34 @@ function describeError(err) {
   if (err instanceof ApiError) return err.message;
   return String(err?.message || err);
 }
+
+/**
+ * tabFromHash returns the Notifications sub-tab named by the hash's
+ * `tab` query parameter ("#/settings/notifications?tab=health"),
+ * defaulting to "channels".
+ * @param {string} hash
+ * @returns {"channels"|"health"}
+ */
+export function tabFromHash(hash) {
+  const q = hash.indexOf("?");
+  const tab = q === -1 ? "" : new URLSearchParams(hash.slice(q + 1)).get("tab");
+  return SUB_TABS.some((entry) => entry.id === tab) ? /** @type {"channels"|"health"} */ (tab) : "channels";
+}
+
+/**
+ * hashForTab returns hash with its `tab` query parameter set to tabID
+ * ("channels" removes it), keeping the route path and other params.
+ * @param {string} hash
+ * @param {string} tabID
+ * @returns {string}
+ */
+export function hashForTab(hash, tabID) {
+  const q = hash.indexOf("?");
+  const route = (q === -1 ? hash : hash.slice(0, q)) || "#/settings/notifications";
+  const params = new URLSearchParams(q === -1 ? "" : hash.slice(q + 1));
+  if (tabID === "channels") params.delete("tab");
+  else params.set("tab", tabID);
+  const qs = params.toString();
+  return qs ? `${route}?${qs}` : route;
+}
+

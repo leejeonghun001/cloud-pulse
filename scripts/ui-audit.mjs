@@ -66,6 +66,7 @@ const SETTINGS_SECTIONS = [
   "agents",
   "traffic",
   "notifications",
+  "notifications?tab=health",
   "alert-rules",
   "billing",
   "storage",
