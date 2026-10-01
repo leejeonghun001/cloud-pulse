@@ -15,6 +15,7 @@ import (
 
 	"github.com/leejeonghun001/cloud-pulse/internal/alerting"
 	"github.com/leejeonghun001/cloud-pulse/internal/hub"
+	"github.com/leejeonghun001/cloud-pulse/internal/i18n"
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
 	"github.com/leejeonghun001/cloud-pulse/internal/notify"
 )
@@ -133,6 +134,31 @@ func buildAlerting(store alerting.Store, logger *slog.Logger) (*alerting.Engine,
 		SenderFactory: senderFactory,
 		Logger:        logger,
 		Diagnose:      diagnoseDelivery,
+		Language:      notifyLanguageFrom(store),
 	})
 	return engine, hub.WrapAlertEngine(engine), hub.WrapNotifySenderFactory(senderFactory)
+}
+
+// settingGetter is the part of *storage.DB notifyLanguageFrom needs.
+type settingGetter interface {
+	GetSetting(ctx context.Context, key string) (string, bool, error)
+}
+
+// notifyLanguageFrom returns an alerting.Options.Language provider that
+// reads the hub's notify_language setting on every call (so a change in
+// Settings applies to the next notification), or nil — English — when
+// store cannot read settings. An unset or invalid value means English.
+func notifyLanguageFrom(store alerting.Store) func(context.Context) i18n.Lang {
+	getter, ok := store.(settingGetter)
+	if !ok {
+		return nil
+	}
+	return func(ctx context.Context) i18n.Lang {
+		raw, found, err := getter.GetSetting(ctx, hub.SettingNotifyLanguage)
+		if err != nil || !found {
+			return i18n.DefaultLang
+		}
+		lang, _ := i18n.Parse(raw)
+		return lang
+	}
 }

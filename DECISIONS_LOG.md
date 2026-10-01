@@ -1828,3 +1828,21 @@ never rewrite history here, only add to it.
   a second, harder-to-test dimension to the selection rule for little
   practical benefit (any enabled, non-failing channel is an acceptable
   fallback recipient by definition).
+
+### D-095 — Notification text is localized per message from `notify_language`; machine values are not (2026-10-01)
+
+- **Context**: SPEC-v0.8 §3-3 adds a hub-wide `notify_language`. Until
+  now only channel-health messages used it; alert and rollout messages
+  were English Go string literals, and there was no UI to change it.
+- **Decision**: `alerting.Options.Language` is a provider called for
+  every notification (wired in `cmd/hub` to the settings table), so a
+  change applies to the next message without a restart. Titles, body
+  sentences and field labels come from `internal/i18n` (`alert.*`,
+  `rollout.*`). Field *values* that machines match on (metric id, event
+  state, batch id) and every JSON key stay as they are. `agent_outdated`
+  gets its own sentence because its numeric value is a synthetic 0/1
+  flag. Chart image text stays English (D-087). Settings → General has a
+  Notification language selector separate from the dashboard language.
+- **Rejected**: reading the setting once at startup (stale after a
+  change); localizing the webhook JSON keys (breaks existing receivers).
+

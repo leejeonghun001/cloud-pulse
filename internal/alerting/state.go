@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/leejeonghun001/cloud-pulse/internal/i18n"
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
 )
 
@@ -179,7 +180,7 @@ func severityFor(rule models.AlertRule) Severity {
 // to load — each such skip is logged but never fails the overall
 // evaluation.
 func (e *Engine) notifyEvent(ctx context.Context, now time.Time, rule models.AlertRule, host models.HostSnapshot, ev models.AlertEvent, severity Severity) {
-	msg := buildMessage(rule, ev, severity)
+	msg := buildMessage(e.notifyLanguage(ctx), rule, ev, severity)
 	if img := e.buildChartImage(ctx, now, rule, host, ev); img != nil {
 		msg.Image = img
 		msg.ImageName = chartImageName
@@ -199,25 +200,39 @@ func (e *Engine) notifyEvent(ctx context.Context, now time.Time, rule models.Ale
 	}
 }
 
-// buildMessage renders ev/rule into a notification Message.
-func buildMessage(rule models.AlertRule, ev models.AlertEvent, severity Severity) Message {
-	title := fmt.Sprintf("%s: %s", ev.Hostname, rule.Name)
+// buildMessage renders ev/rule into a notification Message in lang.
+func buildMessage(lang i18n.Lang, rule models.AlertRule, ev models.AlertEvent, severity Severity) Message {
 	unit := metricUnit(rule.Metric)
-	text := fmt.Sprintf("%s is %s%s (threshold %s%s)", rule.Name, formatValue(ev.Value), unit, formatValue(ev.Threshold), unit)
+	params := map[string]string{
+		"host":      ev.Hostname,
+		"rule":      rule.Name,
+		"value":     formatValue(ev.Value),
+		"threshold": formatValue(ev.Threshold),
+		"unit":      unit,
+	}
+	textKey := "alert.firing"
 	if ev.State == models.AlertEventResolved {
-		text = fmt.Sprintf("%s has recovered: now %s%s (threshold was %s%s)", rule.Name, formatValue(ev.Value), unit, formatValue(ev.Threshold), unit)
+		textKey = "alert.resolved"
+	}
+	if rule.Metric == models.AlertMetricAgentOutdated {
+		// The value is a synthetic 0/1 "satisfied" flag, meaningless
+		// to a reader, so this metric gets its own sentence.
+		textKey = "alert.agent_outdated_firing"
+		if ev.State == models.AlertEventResolved {
+			textKey = "alert.agent_outdated_resolved"
+		}
 	}
 
 	return Message{
-		Title:    title,
-		Text:     text,
+		Title:    i18n.T(lang, "alert.title", params),
+		Text:     i18n.T(lang, textKey, params),
 		Severity: severity,
 		Fields: []Field{
-			{Name: "Host", Value: ev.Hostname},
-			{Name: "Metric", Value: string(ev.Metric)},
-			{Name: "Value", Value: formatValue(ev.Value) + unit},
-			{Name: "Threshold", Value: formatValue(ev.Threshold) + unit},
-			{Name: "State", Value: string(ev.State)},
+			{Name: i18n.T(lang, "alert.field_host", nil), Value: ev.Hostname},
+			{Name: i18n.T(lang, "alert.field_metric", nil), Value: string(ev.Metric)},
+			{Name: i18n.T(lang, "alert.field_value", nil), Value: formatValue(ev.Value) + unit},
+			{Name: i18n.T(lang, "alert.field_threshold", nil), Value: formatValue(ev.Threshold) + unit},
+			{Name: i18n.T(lang, "alert.field_state", nil), Value: string(ev.State)},
 		},
 	}
 }

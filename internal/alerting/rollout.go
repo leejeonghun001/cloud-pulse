@@ -17,9 +17,11 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/leejeonghun001/cloud-pulse/internal/alerting/chart"
+	"github.com/leejeonghun001/cloud-pulse/internal/i18n"
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
 )
 
@@ -267,7 +269,7 @@ func (e *Engine) notifyUpdateBatchOnce(ctx context.Context, now time.Time, rule 
 		return fmt.Errorf("update alert event (notified_at): %w", err)
 	}
 
-	msg := buildUpdateBatchMessage(rule, outcome)
+	msg := buildUpdateBatchMessage(e.notifyLanguage(ctx), rule, outcome)
 	if img := renderUpdateBatchChart(outcome); img != nil {
 		msg.Image = img
 		msg.ImageName = chartImageName
@@ -291,15 +293,21 @@ func (e *Engine) notifyUpdateBatchOnce(ctx context.Context, now time.Time, rule 
 // buildUpdateBatchMessage renders outcome into a notification Message
 // listing every failed host and its reason, per SPEC-v0.8 §3-1 ("실패
 // 호스트 목록과 사유를 포함").
-func buildUpdateBatchMessage(rule models.AlertRule, outcome UpdateBatchOutcome) Message {
-	title := fmt.Sprintf("Update batch %s: %d failed", outcome.BatchID, outcome.Failed)
-	text := fmt.Sprintf("Batch %s (target %s) finished: %d succeeded, %d failed.", outcome.BatchID, outcome.Target, outcome.Succeeded, outcome.Failed)
+func buildUpdateBatchMessage(lang i18n.Lang, rule models.AlertRule, outcome UpdateBatchOutcome) Message {
+	params := map[string]string{
+		"batch":     outcome.BatchID,
+		"target":    outcome.Target,
+		"succeeded": strconv.Itoa(outcome.Succeeded),
+		"failed":    strconv.Itoa(outcome.Failed),
+	}
+	title := i18n.T(lang, "rollout.batch_title", params)
+	text := i18n.T(lang, "rollout.batch_text", params)
 
 	fields := []Field{
-		{Name: "Batch", Value: outcome.BatchID},
-		{Name: "Target", Value: outcome.Target},
-		{Name: "Succeeded", Value: fmt.Sprintf("%d", outcome.Succeeded)},
-		{Name: "Failed", Value: fmt.Sprintf("%d", outcome.Failed)},
+		{Name: i18n.T(lang, "rollout.field_batch", nil), Value: outcome.BatchID},
+		{Name: i18n.T(lang, "rollout.field_target", nil), Value: outcome.Target},
+		{Name: i18n.T(lang, "rollout.field_succeeded", nil), Value: strconv.Itoa(outcome.Succeeded)},
+		{Name: i18n.T(lang, "rollout.field_failed", nil), Value: strconv.Itoa(outcome.Failed)},
 	}
 	for _, h := range outcome.FailedHosts {
 		name := h.Hostname

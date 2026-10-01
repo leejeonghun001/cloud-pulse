@@ -14,9 +14,11 @@
 package alerting
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
+	"github.com/leejeonghun001/cloud-pulse/internal/i18n"
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
 )
 
@@ -43,6 +45,8 @@ type Engine struct {
 	logger *slog.Logger
 
 	delivery *deliveryWorker
+
+	language func(context.Context) i18n.Lang
 }
 
 // Options configures a new Engine.
@@ -80,6 +84,11 @@ type Options struct {
 	// simply leaves Delivery.Diagnosis unset; delivery/error recording
 	// otherwise behaves identically.
 	Diagnose func(error) *models.DiagnosisCode
+	// Language returns the language notification text is written in
+	// (the hub's notify_language setting, SPEC-v0.8 §3-3). It is read
+	// for every notification so a settings change applies immediately.
+	// nil means English. Chart images always stay English.
+	Language func(context.Context) i18n.Lang
 }
 
 // New constructs an Engine and starts its background delivery worker.
@@ -96,10 +105,11 @@ func New(opts Options) *Engine {
 	}
 
 	e := &Engine{
-		store:  opts.Store,
-		sender: opts.SenderFactory,
-		clock:  clock,
-		logger: logger,
+		store:    opts.Store,
+		sender:   opts.SenderFactory,
+		clock:    clock,
+		logger:   logger,
+		language: opts.Language,
 	}
 	e.delivery = newDeliveryWorker(deliveryWorkerOptions{
 		Store:     opts.Store,
@@ -127,4 +137,13 @@ func (e *Engine) Close() {
 // callers use Close during shutdown instead.
 func (e *Engine) Wait() {
 	e.delivery.drain()
+}
+
+// notifyLanguage returns the language for notification text, English
+// when no Language option was configured.
+func (e *Engine) notifyLanguage(ctx context.Context) i18n.Lang {
+	if e.language == nil {
+		return i18n.DefaultLang
+	}
+	return e.language(ctx)
 }

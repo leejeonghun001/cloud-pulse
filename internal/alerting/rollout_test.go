@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/leejeonghun001/cloud-pulse/internal/i18n"
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
 )
 
@@ -351,7 +352,7 @@ func TestBuildUpdateBatchMessage_ListsFailedHostsAndReasons(t *testing.T) {
 		},
 	}
 	rule := models.AlertRule{Name: "batch failed"}
-	msg := buildUpdateBatchMessage(rule, outcome)
+	msg := buildUpdateBatchMessage(i18n.LangEn, rule, outcome)
 
 	foundHostOne, foundH2 := false, false
 	for _, f := range msg.Fields {

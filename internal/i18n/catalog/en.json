@@ -7,5 +7,25 @@
     "test_failed": "Synthetic test to {channel_name} failed: {detail}",
     "channel_down": "Notification channel \"{channel_name}\" appears to be down.",
     "channel_recovered": "Notification channel \"{channel_name}\" has recovered."
+  },
+  "alert": {
+    "title": "{host}: {rule}",
+    "firing": "{rule} is {value}{unit} (threshold {threshold}{unit})",
+    "resolved": "{rule} has recovered: now {value}{unit} (threshold was {threshold}{unit})",
+    "agent_outdated_firing": "{rule}: this host's agent is behind the latest release",
+    "agent_outdated_resolved": "{rule}: this host's agent is up to date again",
+    "field_host": "Host",
+    "field_metric": "Metric",
+    "field_value": "Value",
+    "field_threshold": "Threshold",
+    "field_state": "State"
+  },
+  "rollout": {
+    "batch_title": "Update batch {batch}: {failed} failed",
+    "batch_text": "Batch {batch} (target {target}) finished: {succeeded} succeeded, {failed} failed.",
+    "field_batch": "Batch",
+    "field_target": "Target",
+    "field_succeeded": "Succeeded",
+    "field_failed": "Failed"
   }
 }

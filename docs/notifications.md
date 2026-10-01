@@ -10,9 +10,13 @@ Notifications page.
 Notification message bodies (and chart titles, though not the chart
 image's own text — see [alerting.md](alerting.md#chart-images)) are
 rendered in the language set by the hub-wide `notify_language` setting
-(`en`/`ko`, default `en` — `GET/PUT /api/v1/settings/notify-language`,
-SPEC-v0.8 §3-3), independent of any signed-in admin's own dashboard
-language preference.
+(`en`/`ko`, default `en` — Settings → General → Notification language,
+or `GET/PUT /api/v1/settings/notify-language`, SPEC-v0.8 §3-3),
+independent of any signed-in admin's own dashboard language preference.
+A change applies to the next message. With `ko`, webhook payloads carry
+Korean `title`/`text` and Korean `fields[].name` labels; the JSON keys
+and machine values (`fields[].value` for metric and state, `severity`)
+never change.
 
 ## Discord
 

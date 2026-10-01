@@ -7,5 +7,25 @@
     "test_failed": "{channel_name} 채널 연결 확인이 실패했습니다: {detail}",
     "channel_down": "알림 채널 \"{channel_name}\"에 문제가 있는 것으로 보입니다.",
     "channel_recovered": "알림 채널 \"{channel_name}\"이 복구되었습니다."
+  },
+  "alert": {
+    "title": "{host}: {rule}",
+    "firing": "{rule}: 현재 {value}{unit} (임계값 {threshold}{unit})",
+    "resolved": "{rule} 복구됨: 현재 {value}{unit} (임계값 {threshold}{unit})",
+    "agent_outdated_firing": "{rule}: 이 호스트의 에이전트가 최신 릴리스보다 뒤처져 있습니다",
+    "agent_outdated_resolved": "{rule}: 이 호스트의 에이전트가 최신 버전으로 업데이트되었습니다",
+    "field_host": "호스트",
+    "field_metric": "지표",
+    "field_value": "값",
+    "field_threshold": "임계값",
+    "field_state": "상태"
+  },
+  "rollout": {
+    "batch_title": "업데이트 배치 {batch}: {failed}건 실패",
+    "batch_text": "배치 {batch}(대상 {target}) 완료: 성공 {succeeded}건, 실패 {failed}건",
+    "field_batch": "배치",
+    "field_target": "대상",
+    "field_succeeded": "성공",
+    "field_failed": "실패"
   }
 }
