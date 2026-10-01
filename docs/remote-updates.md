@@ -122,6 +122,8 @@ job in a batch; jobs already `in_progress` run to completion.
 
 ## Rollout dashboard (SPEC-v0.8 §3-1)
 
+![Rollout dashboard with version distribution by OS](screenshots/rollout.png)
+
 Fleet → Rollout (`#/rollout`) is the fleet-wide view of agent version
 health and remote-update history, replacing the old dedicated Updates
 page (`#/updates` now redirects here; its agent-table/batch-creation/

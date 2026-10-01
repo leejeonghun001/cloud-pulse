@@ -72,6 +72,8 @@ full code table (DNS/network/TLS failures, and per-platform codes like
 
 ## Health report
 
+![Notification channel health report](screenshots/notifications-health.png)
+
 Settings → Notifications → **Health** tab (SPEC-v0.8 §3-2) shows each
 channel's current health state — `healthy`, `degraded`, `failing`, or
 `unknown` (not enough data yet) — computed by

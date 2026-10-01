@@ -73,8 +73,24 @@
     }
   },
   {
-    "name": "updates",
-    "route": "#/updates",
+    "name": "rollout",
+    "route": "#/rollout",
+    "theme": "dark",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "actions": [
+      {
+        "type": "eval",
+        "expression": "(() => { const b = document.querySelector('.cp-channel-health-banner button'); b && b.click(); return true; })()",
+        "waitAfterMs": 400
+      }
+    ]
+  },
+  {
+    "name": "notifications-health",
+    "route": "#/settings/notifications?tab=health",
     "theme": "dark",
     "viewport": {
       "width": 1440,
