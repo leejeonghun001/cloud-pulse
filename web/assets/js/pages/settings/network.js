@@ -19,6 +19,7 @@ import {
   revertNetworkChange,
   deleteNetworkConfig,
   ApiError,
+  localizeApiError,
 } from "../../core/api.js";
 import {
   validateCustomAddress,
@@ -32,6 +33,7 @@ import {
   formatCountdown,
   describeNetworkError,
 } from "./network-helpers.js";
+import { t } from "../../core/i18n.js";
 
 const COUNTDOWN_TICK_MS = 1000;
 
@@ -62,7 +64,7 @@ export function mountNetworkSection(container, { announce }) {
       state = await getNetworkState(controller.signal);
     } catch (err) {
       if (err?.name === "AbortError") return;
-      container.append(el("p", { class: "cp-error-text", text: `Failed to load network settings: ${err.message}` }));
+      container.append(el("p", { class: "cp-error-text", text: t("network.failed_to_load_settings", { reason: localizeApiError(err) }) }));
       return;
     }
 
@@ -93,7 +95,7 @@ export function mountNetworkSection(container, { announce }) {
 
     if (state.interfaces_error) {
       container.append(
-        el("p", { class: "cp-hint", text: `Could not enumerate network adapters: ${state.interfaces_error}` }),
+        el("p", { class: "cp-hint", text: t("network.interfaces_error", { error: state.interfaces_error }) }),
       );
     }
   }
@@ -118,7 +120,7 @@ function pendingBanner({ state, signal, announce, onSettled, registerTicker }) {
   body.append(
     el("p", {
       class: "cp-network-pending-title",
-      text: "A network change is pending confirmation.",
+      text: t("network.pending_title"),
     }),
   );
 
@@ -129,8 +131,8 @@ function pendingBanner({ state, signal, announce, onSettled, registerTicker }) {
     const remaining = formatCountdown(state.pending.deadline);
     countdownEl.textContent =
       remaining === "expired"
-        ? "Reverting now…"
-        : `Auto-reverts in ${remaining} unless confirmed.`;
+        ? t("network.reverting_now")
+        : t("network.auto_reverts_in", { remaining });
   }
   renderCountdown();
   registerTicker(renderCountdown);
@@ -142,13 +144,13 @@ function pendingBanner({ state, signal, announce, onSettled, registerTicker }) {
       li.append(el("a", { class: "cp-link", attrs: { href: u, target: "_blank", rel: "noopener noreferrer" }, text: u }));
       urlsList.append(li);
     }
-    body.append(el("p", { class: "cp-muted-small", text: "Open the change from one of these addresses, then confirm it there:" }));
+    body.append(el("p", { class: "cp-muted-small", text: t("network.open_from_one_of_these") }));
     body.append(urlsList);
   }
 
   const actions = el("div", { class: "cp-network-pending-actions" });
-  const keepBtn = el("button", { class: "cp-btn cp-btn-primary cp-btn-sm", attrs: { type: "button" }, text: "Keep changes" });
-  const revertBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button" }, text: "Revert" });
+  const keepBtn = el("button", { class: "cp-btn cp-btn-primary cp-btn-sm", attrs: { type: "button" }, text: t("network.keep_changes") });
+  const revertBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button" }, text: t("network.revert") });
   const status = el("span", { class: "cp-muted-small", attrs: { role: "status", "aria-live": "polite" } });
 
   keepBtn.addEventListener("click", async () => {
@@ -156,8 +158,8 @@ function pendingBanner({ state, signal, announce, onSettled, registerTicker }) {
     revertBtn.disabled = true;
     try {
       await confirmNetworkChange(signal);
-      showToast({ message: "Network configuration confirmed.", variant: "success" });
-      announce("Network configuration confirmed.");
+      showToast({ message: t("network.config_confirmed"), variant: "success" });
+      announce(t("network.config_confirmed"));
       onSettled();
     } catch (err) {
       if (err?.name === "AbortError") return;
@@ -172,8 +174,8 @@ function pendingBanner({ state, signal, announce, onSettled, registerTicker }) {
     revertBtn.disabled = true;
     try {
       await revertNetworkChange(signal);
-      showToast({ message: "Network configuration reverted.", variant: "info" });
-      announce("Network configuration reverted.");
+      showToast({ message: t("network.config_reverted"), variant: "info" });
+      announce(t("network.config_reverted"));
       onSettled();
     } catch (err) {
       if (err?.name === "AbortError") return;
@@ -195,13 +197,13 @@ function pendingBanner({ state, signal, announce, onSettled, registerTicker }) {
 
 function contextCard(state) {
   const card = el("div", { class: "cp-card" });
-  card.append(el("h2", { class: "cp-card-title", text: "Connection context" }));
+  card.append(el("h2", { class: "cp-card-title", text: t("network.connection_context_title") }));
 
   const dl = el("dl", { class: "cp-host-detail-meta" });
   const pair = el("div", { class: "cp-host-detail-meta-pair" });
   pair.append(
-    el("dt", { text: "You are connected via" }),
-    el("dd", { text: `${state.client.local_addr || "unknown"} (from ${state.client.ip})` }),
+    el("dt", { text: t("network.connected_via") }),
+    el("dd", { text: t("network.connected_via_value", { addr: state.client.local_addr || t("overview.unknown"), ip: state.client.ip }) }),
   );
   dl.append(pair);
   card.append(dl);
@@ -210,9 +212,10 @@ function contextCard(state) {
     card.append(
       el("p", {
         class: "cp-muted-small",
-        text: `${state.agents.length} agent${state.agents.length === 1 ? "" : "s"} last connected via: ${state.agents
-          .map((a) => `${a.hostname} (${a.local_addr})`)
-          .join(", ")}.`,
+        text: t("network.agents_last_connected", {
+          count: state.agents.length,
+          list: state.agents.map((a) => `${a.hostname} (${a.local_addr})`).join(", "),
+        }),
       }),
     );
   }
@@ -232,7 +235,7 @@ function contextCard(state) {
       card.append(
         el("p", {
           class: "cp-hint cp-network-warning",
-          text: `LAN clients on ${lanUncovered.map((a) => a.ifaceName).join(", ")} are blocked by the current allowlist.`,
+          text: t("network.lan_clients_blocked", { adapters: lanUncovered.map((a) => a.ifaceName).join(", ") }),
         }),
       );
     }
@@ -247,11 +250,11 @@ function contextCard(state) {
 
 function configCard({ state, signal, announce, onApplied }) {
   const card = el("div", { class: "cp-card cp-network-config-card" });
-  card.append(el("h2", { class: "cp-card-title", text: "Listen addresses & access" }));
+  card.append(el("h2", { class: "cp-card-title", text: t("network.listen_addresses_title") }));
   card.append(
     el("p", {
       class: "cp-muted-small",
-      text: `Source: ${state.source === "hub" ? "hub-managed (overrides CP_LISTEN/CP_ALLOWED_CIDRS)" : "environment (CP_LISTEN/CP_ALLOWED_CIDRS)"}.`,
+      text: t("network.source_line", { source: state.source === "hub" ? t("network.source_hub_managed") : t("network.source_environment") }),
     }),
   );
 
@@ -260,13 +263,13 @@ function configCard({ state, signal, announce, onApplied }) {
 
   // -- Adapters -------------------------------------------------------
   const adaptersSection = el("div", { class: "cp-network-adapters" });
-  adaptersSection.append(el("h3", { class: "cp-network-subheading", text: "Listen on" }));
+  adaptersSection.append(el("h3", { class: "cp-network-subheading", text: t("network.listen_on") }));
 
   const allRow = el("label", { class: "cp-checkbox-row cp-network-all-row" });
   const allCheckbox = /** @type {HTMLInputElement} */ (
     el("input", { attrs: { type: "checkbox", ...(allInterfaces ? { checked: "" } : {}) } })
   );
-  allRow.append(allCheckbox, el("span", { text: "All interfaces (0.0.0.0 / ::)" }));
+  allRow.append(allCheckbox, el("span", { text: t("network.all_interfaces_option") }));
   adaptersSection.append(allRow);
 
   const adapterList = el("div", { class: "cp-network-adapter-list" });
@@ -278,7 +281,7 @@ function configCard({ state, signal, announce, onApplied }) {
     header.append(
       el("span", { class: "cp-network-adapter-name", text: iface.name }),
       el("span", { class: `cp-chip cp-network-kind-${iface.kind}`, text: iface.kind }),
-      el("span", { class: `cp-chip ${iface.up ? "cp-chip-ok" : "cp-chip-critical"}`, text: iface.up ? "up" : "down" }),
+      el("span", { class: `cp-chip ${iface.up ? "cp-chip-ok" : "cp-chip-critical"}`, text: iface.up ? t("network.up") : t("network.down") }),
     );
     ifaceCard.append(header);
 
@@ -315,7 +318,7 @@ function configCard({ state, signal, announce, onApplied }) {
 
   // -- Port -------------------------------------------------------------
   const portField = el("div", { class: "cp-field cp-network-port-field" });
-  portField.append(el("label", { class: "cp-label", attrs: { for: "cp-network-port" }, text: "Port" }));
+  portField.append(el("label", { class: "cp-label", attrs: { for: "cp-network-port" }, text: t("network.port") }));
   const portInput = /** @type {HTMLInputElement} */ (
     el("input", {
       class: "cp-input cp-input-sm",
@@ -327,9 +330,9 @@ function configCard({ state, signal, announce, onApplied }) {
 
   // -- Allowlist --------------------------------------------------------
   const allowSection = el("div", { class: "cp-network-allowlist" });
-  allowSection.append(el("h3", { class: "cp-network-subheading", text: "Access allowlist" }));
+  allowSection.append(el("h3", { class: "cp-network-subheading", text: t("network.access_allowlist") }));
   allowSection.append(
-    el("p", { class: "cp-muted-small", text: "Reflects the currently effective allowlist. \"*\" alone allows any client." }),
+    el("p", { class: "cp-muted-small", text: t("network.allowlist_description") }),
   );
 
   const chipsList = el("div", { class: "cp-network-chip-list" });
@@ -339,7 +342,7 @@ function configCard({ state, signal, announce, onApplied }) {
     clearChildren(chipsList);
     for (const entry of allowed) {
       const chip = el("span", { class: "cp-chip cp-network-allow-chip", text: entry });
-      const removeBtn = el("button", { class: "cp-network-chip-remove", attrs: { type: "button", "aria-label": `Remove ${entry}` } });
+      const removeBtn = el("button", { class: "cp-network-chip-remove", attrs: { type: "button", "aria-label": t("network.remove_entry", { entry }) } });
       removeBtn.append(icon("x"));
       removeBtn.addEventListener("click", () => {
         const idx = allowed.indexOf(entry);
@@ -351,7 +354,7 @@ function configCard({ state, signal, announce, onApplied }) {
       chipsList.append(chip);
     }
     if (allowed.length === 0) {
-      chipsList.append(el("span", { class: "cp-muted-small", text: "No entries — a save will be rejected." }));
+      chipsList.append(el("span", { class: "cp-muted-small", text: t("network.no_entries_warning") }));
     }
   }
   renderChips();
@@ -359,9 +362,9 @@ function configCard({ state, signal, announce, onApplied }) {
 
   const addRow = el("div", { class: "cp-settings-row" });
   const addInput = /** @type {HTMLInputElement} */ (
-    el("input", { class: "cp-input cp-input-sm", attrs: { type: "text", placeholder: "e.g. 192.168.1.0/24 or *", "aria-label": "Add allowlist entry" } })
+    el("input", { class: "cp-input cp-input-sm", attrs: { type: "text", placeholder: t("network.add_entry_placeholder"), "aria-label": t("network.add_entry_aria_label") } })
   );
-  const addBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button" }, text: "Add" });
+  const addBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button" }, text: t("network.add") });
   const addError = el("p", { class: "cp-error-text" });
   addBtn.addEventListener("click", () => {
     const v = addInput.value.trim();
@@ -409,8 +412,8 @@ function configCard({ state, signal, announce, onApplied }) {
 
   // -- Save / Reset -------------------------------------------------------
   const actionsRow = el("div", { class: "cp-network-actions" });
-  const saveBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" }, text: "Save changes" });
-  const resetBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: "Reset to hub.env defaults" });
+  const saveBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" }, text: t("network.save_changes") });
+  const resetBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: t("network.reset_to_defaults") });
   const saveStatus = el("span", { class: "cp-muted-small", attrs: { role: "status", "aria-live": "polite" } });
   actionsRow.append(saveBtn, resetBtn, saveStatus);
   card.append(actionsRow);
@@ -423,13 +426,13 @@ function configCard({ state, signal, announce, onApplied }) {
 
     if (!allCheckbox.checked) {
       if (selectedAddresses.length === 0) {
-        saveStatus.textContent = "Select at least one address, or choose \"All interfaces\".";
+        saveStatus.textContent = t("network.select_at_least_one_address");
         return;
       }
       for (const ip of selectedAddresses) {
         const err = validateCustomAddress(ip);
         if (err) {
-          saveStatus.textContent = `${ip}: ${err}`;
+          saveStatus.textContent = t("network.address_error", { ip, error: err });
           return;
         }
       }
@@ -456,7 +459,7 @@ function configCard({ state, signal, announce, onApplied }) {
 
     const diff = diffNetworkConfig(state.config, nextConfig);
     if (diff.length === 0) {
-      saveStatus.textContent = "No changes to save.";
+      saveStatus.textContent = t("network.no_changes_to_save");
       return;
     }
 
@@ -472,11 +475,11 @@ function configCard({ state, signal, announce, onApplied }) {
 
   resetBtn.addEventListener("click", async () => {
     resetBtn.disabled = true;
-    saveStatus.textContent = "Resetting…";
+    saveStatus.textContent = t("network.resetting");
     try {
       await deleteNetworkConfig(signal);
-      showToast({ message: "Reverted to hub.env defaults.", variant: "success" });
-      announce("Network settings reverted to environment defaults.");
+      showToast({ message: t("network.reverted_to_defaults_toast"), variant: "success" });
+      announce(t("network.reverted_to_defaults_announce"));
       onApplied();
     } catch (err) {
       if (err?.name === "AbortError") return;
@@ -496,15 +499,15 @@ function configCard({ state, signal, announce, onApplied }) {
 function openConfirmDialog({ previous, next, diff, signal, announce, onApplied }) {
   const { dialog, body, open, close } = createDialog({
     titleId: "cp-network-confirm-title",
-    title: "Confirm network configuration change",
-    description: "Review the changes before applying them.",
+    title: t("network.confirm_dialog_title"),
+    description: t("network.confirm_dialog_description"),
     wide: true,
   });
 
   const diffList = el("dl", { class: "cp-host-detail-meta" });
   diffList.append(
-    el("div", { class: "cp-host-detail-meta-pair", children: [el("dt", { text: "Current" }), el("dd", { text: describeNetworkConfig(previous) })] }),
-    el("div", { class: "cp-host-detail-meta-pair", children: [el("dt", { text: "New" }), el("dd", { text: describeNetworkConfig(next) })] }),
+    el("div", { class: "cp-host-detail-meta-pair", children: [el("dt", { text: t("network.current") }), el("dd", { text: describeNetworkConfig(previous) })] }),
+    el("div", { class: "cp-host-detail-meta-pair", children: [el("dt", { text: t("network.new") }), el("dd", { text: describeNetworkConfig(next) })] }),
   );
   for (const d of diff) {
     const pair = el("div", { class: "cp-host-detail-meta-pair" });
@@ -515,16 +518,15 @@ function openConfirmDialog({ previous, next, diff, signal, announce, onApplied }
   body.append(
     el("p", {
       class: "cp-hint",
-      text:
-        "If this would stop serving your current connection, the change stays pending: the hub keeps the old address(es) reachable too until you confirm from one of the new ones, or it auto-reverts after 2 minutes.",
+      text: t("network.confirm_dialog_hint"),
     }),
   );
 
   const errorEl = el("p", { class: "cp-error-text", attrs: { role: "alert" } });
   body.append(errorEl);
 
-  const applyBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" }, text: "Apply" });
-  const cancelBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: "Cancel" });
+  const applyBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" }, text: t("network.apply") });
+  const cancelBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: t("common.cancel") });
   cancelBtn.addEventListener("click", () => close());
   body.append(buildDialogActions([cancelBtn, applyBtn]));
 
@@ -535,11 +537,11 @@ function openConfirmDialog({ previous, next, diff, signal, announce, onApplied }
       const state = await putNetworkConfig(next, signal);
       close();
       if (state.pending) {
-        showToast({ message: "Change applied; confirm from the new address to keep it.", variant: "info" });
-        announce("Network change is pending confirmation.");
+        showToast({ message: t("network.change_applied_pending"), variant: "info" });
+        announce(t("network.change_pending_confirmation"));
       } else {
-        showToast({ message: "Network configuration saved.", variant: "success" });
-        announce("Network configuration saved.");
+        showToast({ message: t("network.config_saved"), variant: "success" });
+        announce(t("network.config_saved"));
       }
       onApplied();
     } catch (err) {
@@ -559,17 +561,17 @@ function openConfirmDialog({ previous, next, diff, signal, announce, onApplied }
 
 function listenerStatusCard(state) {
   const card = el("div", { class: "cp-card" });
-  card.append(el("h2", { class: "cp-card-title", text: "Listener status" }));
+  card.append(el("h2", { class: "cp-card-title", text: t("network.listener_status_title") }));
 
   if (!state.listeners || state.listeners.length === 0) {
-    card.append(el("p", { class: "cp-muted", text: "No listener status reported." }));
+    card.append(el("p", { class: "cp-muted", text: t("network.no_listener_status") }));
     return card;
   }
 
   const tableWrap = el("div", { class: "cp-table-wrap" });
   const table = el("table", { class: "cp-table" });
   const thead = el("thead");
-  thead.append(el("tr", { children: ["Address", "Status", "Detail"].map((t) => el("th", { text: t })) }));
+  thead.append(el("tr", { children: [t("network.col_address"), t("network.col_status"), t("network.col_detail")].map((tx) => el("th", { text: tx })) }));
   table.append(thead);
   const tbody = el("tbody");
   for (const st of state.listeners) {

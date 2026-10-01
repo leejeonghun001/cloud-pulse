@@ -3,19 +3,20 @@
 // of every alert_events row, each showing metric, value vs threshold,
 // duration, and per-channel delivery results (✓/✗ with an error
 // tooltip).
-import { getActiveAlerts, getAlertEvents, ApiError } from "../core/api.js";
+import { getActiveAlerts, getAlertEvents, ApiError, localizeApiError } from "../core/api.js";
 import { el, clearChildren, emptyState, errorBanner, statusDot } from "../ui/components.js";
 import { selectField } from "../ui/select.js";
 import { icon } from "../ui/icons.js";
 import { formatRelativeTimeFromUnixSeconds, formatDuration } from "../core/format.js";
 import { metricLabel, formatThreshold } from "../core/alerts.js";
+import { t } from "../core/i18n.js";
 
 const PAGE_SIZE = 50;
 
 const STATE_OPTIONS = [
-  { value: "", label: "All states" },
-  { value: "firing", label: "Firing" },
-  { value: "resolved", label: "Resolved" },
+  { value: "", get label() { return t("alerts_page.all_states"); } },
+  { value: "firing", get label() { return t("alerts_page.firing"); } },
+  { value: "resolved", get label() { return t("alerts_page.resolved"); } },
 ];
 
 /**
@@ -37,8 +38,8 @@ export function mountAlertsPage(container, { announce }) {
 
   clearChildren(container);
   const root = el("div", { class: "cp-alerts-page" });
-  root.append(el("h1", { class: "cp-page-title", text: "Alerts" }));
-  root.append(el("p", { class: "cp-page-subtitle", text: "Currently firing alerts and delivery history." }));
+  root.append(el("h1", { class: "cp-page-title", text: t("alerts_page.title") }));
+  root.append(el("p", { class: "cp-page-subtitle", text: t("alerts_page.subtitle") }));
 
   const bannerHost = el("div");
   const activeHost = el("div");
@@ -98,7 +99,7 @@ export function mountAlertsPage(container, { announce }) {
 
   async function refresh() {
     await Promise.all([loadActive(), loadHistory(state.events.length === 0)]);
-    announce?.("Alerts updated.");
+    announce?.(t("alerts_page.alerts_updated"));
   }
 
   function teardown() {
@@ -112,14 +113,14 @@ function renderActiveCard(host, events) {
   clearChildren(host);
   const card = el("div", { class: "cp-card cp-alerts-active-card" });
   const head = el("div", { class: "cp-metric-head" });
-  head.append(el("h2", { text: "Active alerts" }));
+  head.append(el("h2", { text: t("alerts_page.active_alerts") }));
   if (events.length > 0) {
-    head.append(el("span", { class: "cp-chip cp-chip-critical", text: `${events.length} firing` }));
+    head.append(el("span", { class: "cp-chip cp-chip-critical", text: t("nav.alerts_firing_count", { count: events.length }) }));
   }
   card.append(head);
 
   if (events.length === 0) {
-    card.append(emptyState({ title: "All clear", message: "No alerts are currently firing.", iconName: "circleCheck" }));
+    card.append(emptyState({ title: t("alerts_page.all_clear"), message: t("alerts_page.no_alerts_firing"), iconName: "circleCheck" }));
     host.append(card);
     return;
   }
@@ -137,13 +138,13 @@ function renderActiveCard(host, events) {
     item.append(
       el("span", {
         class: "cp-muted-small",
-        text: `${metricLabel(ev.metric)}: ${ev.value.toFixed(1)} vs ${formatThreshold(ev.metric, ev.threshold) || ev.threshold}`,
+        text: t("alerts_page.value_vs_threshold", { metric: metricLabel(ev.metric), value: ev.value.toFixed(1), threshold: formatThreshold(ev.metric, ev.threshold) || ev.threshold }),
       }),
     );
     item.append(
       el("span", {
         class: "cp-muted-small",
-        text: `Firing for ${formatDuration(Math.max(0, Math.floor(Date.now() / 1000) - ev.started_at))}`,
+        text: t("alerts_page.firing_for", { duration: formatDuration(Math.max(0, Math.floor(Date.now() / 1000) - ev.started_at)) }),
       }),
     );
     list.append(item);
@@ -155,12 +156,12 @@ function renderActiveCard(host, events) {
 function renderHistoryCard(host, state, { onFilterChange, onLoadMore }) {
   clearChildren(host);
   const card = el("div", { class: "cp-card" });
-  card.append(el("h2", { text: "History" }));
+  card.append(el("h2", { text: t("alerts_page.history") }));
 
   const filterRow = el("div", { class: "cp-settings-row cp-alerts-filter-row" });
   const { node: stateNode, select: stateSelect } = selectField({
     id: "cp-alerts-state-filter",
-    ariaLabel: "Filter by state",
+    ariaLabel: t("alerts_page.filter_by_state"),
     options: STATE_OPTIONS,
     value: state.stateFilter,
   });
@@ -169,7 +170,7 @@ function renderHistoryCard(host, state, { onFilterChange, onLoadMore }) {
   card.append(filterRow);
 
   if (state.events.length === 0) {
-    card.append(emptyState({ title: "No events yet", message: "Alert history will appear here once a rule fires." }));
+    card.append(emptyState({ title: t("alerts_page.no_events_yet"), message: t("alerts_page.history_appears_here") }));
     host.append(card);
     return;
   }
@@ -179,7 +180,7 @@ function renderHistoryCard(host, state, { onFilterChange, onLoadMore }) {
   const thead = el("thead");
   thead.append(
     el("tr", {
-      children: ["State", "Rule", "Host", "Metric", "Value", "Started", "Duration", "Delivery"].map((t) => el("th", { text: t })),
+      children: [t("alerts_page.col_state"), t("alerts_page.col_rule"), t("alerts_page.col_host"), t("alerts_page.col_metric"), t("alerts_page.col_value"), t("alerts_page.col_started"), t("alerts_page.col_duration"), t("alerts_page.col_delivery")].map((tx) => el("th", { text: tx })),
     }),
   );
   table.append(thead);
@@ -193,7 +194,7 @@ function renderHistoryCard(host, state, { onFilterChange, onLoadMore }) {
   card.append(tableWrap);
 
   if (state.hasMore) {
-    const moreBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: "Load more" });
+    const moreBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: t("alerts_page.load_more") });
     moreBtn.addEventListener("click", onLoadMore);
     card.append(moreBtn);
   }
@@ -212,7 +213,7 @@ function historyRow(ev) {
         children: [
           el("span", {
             class: `cp-chip ${isFiring ? "cp-chip-critical" : "cp-chip-ok"}`,
-            text: isFiring ? "Firing" : "Resolved",
+            text: isFiring ? t("alerts_page.firing") : t("alerts_page.resolved"),
           }),
         ],
       }),
@@ -238,7 +239,7 @@ function deliveryChips(deliveries) {
   for (const d of deliveries) {
     const chip = el("span", {
       class: `cp-alerts-delivery-chip ${d.ok ? "cp-alerts-delivery-ok" : "cp-alerts-delivery-fail"}`,
-      attrs: { title: d.ok ? `${d.channel_name}: delivered` : `${d.channel_name}: ${d.error || "delivery failed"}` },
+      attrs: { title: d.ok ? t("alerts_page.delivered", { channel: d.channel_name }) : t("alerts_page.delivery_failed", { channel: d.channel_name, error: d.error || t("alerts_page.delivery_failed_generic") }) },
     });
     chip.append(icon(d.ok ? "check" : "x"), el("span", { text: d.channel_name }));
     wrap.append(chip);
@@ -247,6 +248,6 @@ function deliveryChips(deliveries) {
 }
 
 function describeError(err) {
-  if (err instanceof ApiError) return `API error: ${err.message}`;
-  return "Unable to reach the hub API.";
+  if (err instanceof ApiError) return t("overview.api_error_prefix", { message: localizeApiError(err) });
+  return t("alerts_page.hub_unreachable");
 }

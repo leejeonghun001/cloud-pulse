@@ -6,6 +6,9 @@
 // CI runner's TZ.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { setCatalogs, setLang } from "../assets/js/core/i18n.js";
 import {
   elapsedLabel,
   formatAbsoluteLocal,
@@ -14,6 +17,33 @@ import {
   lastKnownCostViewModel,
   hostCostDisplayAmounts,
 } from "../assets/js/core/billing-view.js";
+
+// Real en/ko catalogs are loaded once (not the network-based
+// loadCatalogs(), which needs fetch) so freshnessViewModel/
+// lastKnownCostViewModel's t()-based strings resolve deterministically
+// regardless of which language a prior test file left active; every
+// text assertion below forces lang "en" explicitly per this stage's
+// convention for asserting on localized strings.
+function withFakeLocalStorage(fn) {
+  const store = new Map();
+  const original = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  };
+  try {
+    return fn();
+  } finally {
+    globalThis.localStorage = original;
+  }
+}
+
+const assetsDir = fileURLToPath(new URL("../assets/i18n/", import.meta.url));
+setCatalogs({
+  en: JSON.parse(readFileSync(`${assetsDir}en.json`, "utf-8")),
+  ko: JSON.parse(readFileSync(`${assetsDir}ko.json`, "utf-8")),
+});
 
 // 2026-09-29T07:00:00Z (a fixed reference instant used throughout),
 // computed via Date.UTC rather than a hand-typed literal to avoid a
@@ -104,63 +134,91 @@ test("isStale: zero/negative interval never flags stale", () => {
 });
 
 test("freshnessViewModel: never successful", () => {
-  const vm = freshnessViewModel({
-    status: "not_configured",
-    lastSuccessAt: 0,
-    nowUnixSeconds: 100000,
-    intervalSeconds: 3600,
-    utcOffsetMinutes: 0,
+  withFakeLocalStorage(() => {
+    setLang("en");
+    const vm = freshnessViewModel({
+      status: "not_configured",
+      lastSuccessAt: 0,
+      nowUnixSeconds: 100000,
+      intervalSeconds: 3600,
+      utcOffsetMinutes: 0,
+    });
+    assert.equal(vm.hasSuccess, false);
+    assert.equal(vm.stale, false);
+    assert.equal(vm.text, "No successful fetch yet.");
   });
-  assert.equal(vm.hasSuccess, false);
-  assert.equal(vm.stale, false);
-  assert.equal(vm.text, "No successful fetch yet.");
 });
 
 test("freshnessViewModel: ok status shows 'Collected' prefix, not stale", () => {
-  const lastSuccessAt = T_2026_09_29_07_00_UTC;
-  const now = lastSuccessAt + 3600; // 1h later, well within a 24h interval.
-  const vm = freshnessViewModel({
-    status: "ok",
-    lastSuccessAt,
-    nowUnixSeconds: now,
-    intervalSeconds: 24 * 3600,
-    utcOffsetMinutes: 0,
+  withFakeLocalStorage(() => {
+    setLang("en");
+    const lastSuccessAt = T_2026_09_29_07_00_UTC;
+    const now = lastSuccessAt + 3600; // 1h later, well within a 24h interval.
+    const vm = freshnessViewModel({
+      status: "ok",
+      lastSuccessAt,
+      nowUnixSeconds: now,
+      intervalSeconds: 24 * 3600,
+      utcOffsetMinutes: 0,
+    });
+    assert.equal(vm.hasSuccess, true);
+    assert.equal(vm.stale, false);
+    assert.equal(vm.absolute, "2026-09-29 07:00");
+    assert.equal(vm.elapsed, "1h");
+    assert.equal(vm.text, "Collected 2026-09-29 07:00 (1h ago).");
   });
-  assert.equal(vm.hasSuccess, true);
-  assert.equal(vm.stale, false);
-  assert.equal(vm.absolute, "2026-09-29 07:00");
-  assert.equal(vm.elapsed, "1h");
-  assert.equal(vm.text, "Collected 2026-09-29 07:00 (1h ago).");
 });
 
 test("freshnessViewModel: SPEC-v0.6 exact example text (not-ok, prior success, 1d3h, not stale)", () => {
-  const lastSuccessAt = T_2026_09_29_07_00_UTC;
-  const now = lastSuccessAt + 1 * 86400 + 3 * 3600; // 1d 3h later.
-  const vm = freshnessViewModel({
-    status: "auth_failed",
-    lastSuccessAt,
-    nowUnixSeconds: now,
-    intervalSeconds: 24 * 3600, // 2x = 48h; 27h elapsed < 48h, not stale.
-    utcOffsetMinutes: 0,
+  withFakeLocalStorage(() => {
+    setLang("en");
+    const lastSuccessAt = T_2026_09_29_07_00_UTC;
+    const now = lastSuccessAt + 1 * 86400 + 3 * 3600; // 1d 3h later.
+    const vm = freshnessViewModel({
+      status: "auth_failed",
+      lastSuccessAt,
+      nowUnixSeconds: now,
+      intervalSeconds: 24 * 3600, // 2x = 48h; 27h elapsed < 48h, not stale.
+      utcOffsetMinutes: 0,
+    });
+    assert.equal(vm.hasSuccess, true);
+    assert.equal(vm.stale, false);
+    assert.equal(vm.text, "Not connected · last success 2026-09-29 07:00 (1d 3h ago).");
   });
-  assert.equal(vm.hasSuccess, true);
-  assert.equal(vm.stale, false);
-  assert.equal(vm.text, "Not connected · last success 2026-09-29 07:00 (1d 3h ago).");
 });
 
 test("freshnessViewModel: stale badge appended once elapsed exceeds 2x interval", () => {
-  const lastSuccessAt = 1000;
-  const intervalSeconds = 3600;
-  const now = lastSuccessAt + 2 * intervalSeconds + 60; // just over 2x.
-  const vm = freshnessViewModel({
-    status: "error",
-    lastSuccessAt,
-    nowUnixSeconds: now,
-    intervalSeconds,
-    utcOffsetMinutes: 0,
+  withFakeLocalStorage(() => {
+    setLang("en");
+    const lastSuccessAt = 1000;
+    const intervalSeconds = 3600;
+    const now = lastSuccessAt + 2 * intervalSeconds + 60; // just over 2x.
+    const vm = freshnessViewModel({
+      status: "error",
+      lastSuccessAt,
+      nowUnixSeconds: now,
+      intervalSeconds,
+      utcOffsetMinutes: 0,
+    });
+    assert.equal(vm.stale, true);
+    assert.match(vm.text, /\(stale\)\.$/);
   });
-  assert.equal(vm.stale, true);
-  assert.match(vm.text, /\(stale\)\.$/);
+});
+
+test("freshnessViewModel: Korean rendering of the ok-status case", () => {
+  withFakeLocalStorage(() => {
+    setLang("ko");
+    const lastSuccessAt = T_2026_09_29_07_00_UTC;
+    const now = lastSuccessAt + 3600;
+    const vm = freshnessViewModel({
+      status: "ok",
+      lastSuccessAt,
+      nowUnixSeconds: now,
+      intervalSeconds: 24 * 3600,
+      utcOffsetMinutes: 0,
+    });
+    assert.equal(vm.text, "수집 완료 2026-09-29 07:00 (1h 전).");
+  });
 });
 
 test("lastKnownCostViewModel: null when status is ok (no 'last known' needed)", () => {
@@ -177,15 +235,18 @@ test("lastKnownCostViewModel: null for a missing/undefined snapshot", () => {
 });
 
 test("lastKnownCostViewModel: renders muted 'last known' MTD/forecast labels", () => {
-  const vm = lastKnownCostViewModel({
-    status: "auth_failed",
-    last_success_at: 1000,
-    mtd_cost: 12.3,
-    forecast_cost: 45.6,
-    currency: "USD",
+  withFakeLocalStorage(() => {
+    setLang("en");
+    const vm = lastKnownCostViewModel({
+      status: "auth_failed",
+      last_success_at: 1000,
+      mtd_cost: 12.3,
+      forecast_cost: 45.6,
+      currency: "USD",
+    });
+    assert.equal(vm.mtdLabel, "Last known MTD: 12.30 USD");
+    assert.equal(vm.forecastLabel, "Last known forecast: 45.60 USD");
   });
-  assert.equal(vm.mtdLabel, "Last known MTD: 12.30 USD");
-  assert.equal(vm.forecastLabel, "Last known forecast: 45.60 USD");
 });
 
 test("lastKnownCostViewModel: non-USD CLI currency shown as-is, unconverted", () => {

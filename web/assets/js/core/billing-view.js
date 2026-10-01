@@ -14,6 +14,7 @@
 // timezone-independent regardless of which TZ the CI runner uses.
 
 import { formatDisplayAmount } from "./currency.js";
+import { t } from "./i18n.js";
 
 /** SECONDS_PER_MINUTE / HOUR / DAY are used by elapsedLabel's compact
  * breakdown (mirrors core/format.js's formatDuration but capped to the
@@ -104,15 +105,15 @@ export function isStale(lastSuccessAt, nowUnixSeconds, intervalSeconds) {
  */
 export function freshnessViewModel({ status, lastSuccessAt, nowUnixSeconds, intervalSeconds, utcOffsetMinutes }) {
   if (!lastSuccessAt || lastSuccessAt <= 0) {
-    return { hasSuccess: false, stale: false, absolute: "", elapsed: "", text: "No successful fetch yet." };
+    return { hasSuccess: false, stale: false, absolute: "", elapsed: "", text: t("costs.no_successful_fetch_yet") };
   }
 
   const absolute = formatAbsoluteLocal(lastSuccessAt, utcOffsetMinutes);
   const elapsed = elapsedLabel(lastSuccessAt, nowUnixSeconds);
   const stale = isStale(lastSuccessAt, nowUnixSeconds, intervalSeconds);
-  const prefix = status === "ok" ? "Collected" : "Not connected · last success";
-  const staleSuffix = stale ? " (stale)" : "";
-  const text = `${prefix} ${absolute} (${elapsed} ago)${staleSuffix}.`;
+  const prefix = status === "ok" ? t("costs.freshness_collected") : t("costs.freshness_not_connected");
+  const staleSuffix = stale ? ` ${t("costs.freshness_stale_suffix")}` : "";
+  const text = t("costs.freshness_line", { prefix, absolute, elapsed, staleSuffix });
 
   return { hasSuccess: true, stale, absolute, elapsed, text };
 }
@@ -132,8 +133,8 @@ export function lastKnownCostViewModel(snapshot) {
   if (!snapshot.last_success_at || snapshot.last_success_at <= 0) return null;
   const currency = snapshot.currency || "USD";
   return {
-    mtdLabel: `Last known MTD: ${formatMoney(snapshot.mtd_cost, currency)}`,
-    forecastLabel: `Last known forecast: ${formatMoney(snapshot.forecast_cost, currency)}`,
+    mtdLabel: t("costs.last_known_mtd", { amount: formatMoney(snapshot.mtd_cost, currency) }),
+    forecastLabel: t("costs.last_known_forecast", { amount: formatMoney(snapshot.forecast_cost, currency) }),
   };
 }
 

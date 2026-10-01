@@ -52,7 +52,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	view, err := s.buildSettingsView(ctx)
 	if err != nil {
 		s.logger.Error("get settings failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
@@ -221,27 +221,27 @@ func (s *Server) handleSetHostLimits(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := s.store.GetHost(ctx, id); err != nil {
 		if isNotFound(err) {
-			writeJSON(w, http.StatusNotFound, models.APIError{Error: "host not found"})
+			writeJSON(w, http.StatusNotFound, models.APIError{Error: "host not found", Code: "host_not_found"})
 			return
 		}
 		s.logger.Error("get host failed", "host_id", id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxAdminBodyBytes)
 	var req hostLimitsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
 		return
 	}
 
 	if req.EgressLimitBytes != nil && *req.EgressLimitBytes > maxLimitBytes {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "egress_limit_bytes exceeds maximum storable value"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "egress_limit_bytes exceeds maximum storable value", Code: "egress_limit_out_of_range"})
 		return
 	}
 	if req.IngressLimitBytes != nil && *req.IngressLimitBytes > maxLimitBytes {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "ingress_limit_bytes exceeds maximum storable value"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "ingress_limit_bytes exceeds maximum storable value", Code: "ingress_limit_out_of_range"})
 		return
 	}
 
@@ -252,14 +252,14 @@ func (s *Server) handleSetHostLimits(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.store.SetHostLimits(ctx, limits); err != nil {
 		s.logger.Error("set host limits failed", "host_id", id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
 	stored, err := s.store.GetHostLimits(ctx, id)
 	if err != nil {
 		s.logger.Error("get host limits failed", "host_id", id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, stored)
@@ -279,7 +279,7 @@ func (s *Server) handleSetAlertWebhook(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxAdminBodyBytes)
 	var req alertWebhookRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
 		return
 	}
 
@@ -292,7 +292,7 @@ func (s *Server) handleSetAlertWebhook(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.store.SetSetting(ctx, SettingWebhookURL, req.WebhookURL); err != nil {
 		s.logger.Error("set alert webhook failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	if err := s.syncDefaultWebhookChannel(ctx, req.WebhookURL); err != nil {
@@ -307,7 +307,7 @@ func (s *Server) handleSetAlertWebhook(w http.ResponseWriter, r *http.Request) {
 	view, err := s.buildSettingsView(ctx)
 	if err != nil {
 		s.logger.Error("get settings failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
@@ -394,11 +394,11 @@ func (s *Server) handleTestAlertWebhook(w http.ResponseWriter, r *http.Request) 
 	url, _, err := s.effectiveWebhookURL(ctx)
 	if err != nil {
 		s.logger.Error("resolve webhook url failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	if url == "" {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "no webhook url configured"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "no webhook url configured", Code: "webhook_not_configured"})
 		return
 	}
 

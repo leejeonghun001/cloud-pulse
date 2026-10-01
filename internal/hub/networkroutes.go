@@ -208,7 +208,7 @@ func (s *Server) handleGetNetwork(w http.ResponseWriter, r *http.Request) {
 	state, err := s.buildNetworkState(r.Context(), r)
 	if err != nil {
 		s.logger.Error("get network settings failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, state)
@@ -239,7 +239,7 @@ func (s *Server) handlePutNetwork(w http.ResponseWriter, r *http.Request) { //no
 	r.Body = http.MaxBytesReader(w, r.Body, maxNetworkBodyBytes)
 	var req putNetworkRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
 		return
 	}
 
@@ -267,7 +267,7 @@ func (s *Server) handlePutNetwork(w http.ResponseWriter, r *http.Request) { //no
 	previous, previousSource, err := s.effectiveNetworkConfig(ctx)
 	if err != nil {
 		s.logger.Error("get current network config failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -280,13 +280,13 @@ func (s *Server) handlePutNetwork(w http.ResponseWriter, r *http.Request) { //no
 		s.applyNetworkConfigLocked(newCfg, allowedPrefixes)
 		if err := s.persistNetworkConfig(ctx, newCfg); err != nil {
 			s.logger.Error("persist network config failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 			return
 		}
 		state, err := s.buildNetworkState(ctx, r)
 		if err != nil {
 			s.logger.Error("build network state failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 			return
 		}
 		writeJSON(w, http.StatusOK, state)
@@ -301,7 +301,7 @@ func (s *Server) handlePutNetwork(w http.ResponseWriter, r *http.Request) { //no
 	statuses, err := s.opts.Listener.Apply(ctx, unionListenAddrs(desiredAddrs, previousAddrs))
 	if err != nil {
 		s.logger.Error("apply listener config failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	desiredStatuses := listenerStatusesForAddrs(statuses, desiredAddrs)
@@ -328,13 +328,13 @@ func (s *Server) handlePutNetwork(w http.ResponseWriter, r *http.Request) { //no
 			if _, rollbackErr := s.opts.Listener.Apply(ctx, previousAddrs); rollbackErr != nil {
 				s.logger.Error("rollback listener config failed", "error", rollbackErr)
 			}
-			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 			return
 		}
 		s.applyNetworkConfigLocked(newCfg, allowedPrefixes)
 		if err := s.persistNetworkConfig(ctx, newCfg); err != nil {
 			s.logger.Error("persist network config failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 			return
 		}
 	} else {
@@ -347,7 +347,7 @@ func (s *Server) handlePutNetwork(w http.ResponseWriter, r *http.Request) { //no
 	state, err := s.buildNetworkState(ctx, r)
 	if err != nil {
 		s.logger.Error("build network state failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, state)
@@ -469,7 +469,7 @@ func (s *Server) handleConfirmNetwork(w http.ResponseWriter, r *http.Request) {
 			s.revertToLocked(ctx, pending.previous, pending.previousSource)
 			if err != nil {
 				s.logger.Error("finalize pending listener config failed", "error", err)
-				writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+				writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 			} else {
 				writeJSON(w, http.StatusConflict, models.APIError{
 					Error: "no listener could be kept for the requested configuration: " + bindErrorSummary(statuses),
@@ -483,14 +483,14 @@ func (s *Server) handleConfirmNetwork(w http.ResponseWriter, r *http.Request) {
 	if err := s.persistNetworkConfig(ctx, pending.next); err != nil {
 		s.logger.Error("persist confirmed network config failed", "error", err)
 		s.revertToLocked(ctx, pending.previous, pending.previousSource)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
 	state, err := s.buildNetworkState(ctx, r)
 	if err != nil {
 		s.logger.Error("build network state failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, state)
@@ -527,7 +527,7 @@ func (s *Server) handleRevertNetwork(w http.ResponseWriter, r *http.Request) {
 	state, err := s.buildNetworkState(ctx, r)
 	if err != nil {
 		s.logger.Error("build network state failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, state)
@@ -551,14 +551,14 @@ func (s *Server) handleDeleteNetwork(w http.ResponseWriter, r *http.Request) {
 	envCfg, err := s.envNetworkConfig()
 	if err != nil {
 		s.logger.Error("derive env network config failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
 	allowedPrefixes, err := config.ParseAllowedCIDRsList(envCfg.AllowedCIDRs)
 	if err != nil {
 		s.logger.Error("parse env allowed_cidrs failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -576,7 +576,7 @@ func (s *Server) handleDeleteNetwork(w http.ResponseWriter, r *http.Request) {
 		statuses, err := s.opts.Listener.Apply(ctx, desiredAddrs)
 		if err != nil {
 			s.logger.Error("apply env listener config failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 			return
 		}
 		if !anyBindable(statuses) {
@@ -592,14 +592,14 @@ func (s *Server) handleDeleteNetwork(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.store.SetSetting(ctx, SettingNetworkConfig, ""); err != nil {
 		s.logger.Error("clear network config setting failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
 	state, err := s.buildNetworkState(ctx, r)
 	if err != nil {
 		s.logger.Error("build network state failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, state)

@@ -54,19 +54,19 @@ export function mountGeneralSection(container, { announce }) {
 
 function versionCard(view, versionInfo) {
   const card = el("div", { class: "cp-card" });
-  card.append(el("h2", { class: "cp-card-title", text: "Version" }));
+  card.append(el("h2", { class: "cp-card-title", text: t("settings.version_title") }));
 
   const update = hubInfoUpdateFields(versionInfo || {});
   const dl = el("dl", { class: "cp-host-detail-meta" });
   const entries = [
-    ["Running version", view.version || "unknown"],
-    ["Latest known version", update.latest],
-    ["Update checks", update.checkEnabled ? "enabled" : "disabled"],
+    [t("settings.running_version"), view.version || t("overview.unknown")],
+    [t("settings.latest_known_version"), update.latest],
+    [t("settings.update_checks"), update.checkEnabled ? t("settings.enabled") : t("settings.disabled")],
     [
-      "Last checked",
+      t("settings.last_checked"),
       update.checkEnabled && update.checkedAtUnixSeconds
         ? formatRelativeTimeFromUnixSeconds(update.checkedAtUnixSeconds)
-        : "never",
+        : t("settings.never"),
     ],
   ];
   for (const [label, value] of entries) {
@@ -77,17 +77,17 @@ function versionCard(view, versionInfo) {
   card.append(dl);
 
   if (update.checkError) {
-    card.append(el("p", { class: "cp-hint", text: `Last update check failed: ${update.checkError}` }));
+    card.append(el("p", { class: "cp-hint", text: t("settings.last_update_check_failed", { error: update.checkError }) }));
   }
 
   if (versionInfo?.update_available && versionInfo?.update_command) {
     const row = el("div", { class: "cp-settings-row" });
     const code = el("code", { class: "cp-code-inline", text: versionInfo.update_command });
-    const copyBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button" }, text: "Copy" });
+    const copyBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button" }, text: t("common.copy") });
     const status = el("span", { class: "cp-muted-small", attrs: { role: "status", "aria-live": "polite" } });
     copyBtn.addEventListener("click", async () => {
       const result = await copyToClipboard(versionInfo.update_command);
-      status.textContent = result === "copied" ? "Copied." : "Select the text and press Ctrl+C.";
+      status.textContent = result === "copied" ? t("settings.copied") : t("settings.select_and_copy");
     });
     row.append(code, copyBtn, status);
     card.append(row);
@@ -95,7 +95,7 @@ function versionCard(view, versionInfo) {
       const link = el("a", {
         class: "cp-link",
         attrs: { href: versionInfo.release_url, target: "_blank", rel: "noopener noreferrer" },
-        text: "Release notes",
+        text: t("host.release_notes"),
       });
       card.append(link);
     }
@@ -106,14 +106,14 @@ function versionCard(view, versionInfo) {
 
 function hubInfoCard(view) {
   const card = el("div", { class: "cp-card" });
-  card.append(el("h2", { class: "cp-card-title", text: "Hub info" }));
+  card.append(el("h2", { class: "cp-card-title", text: t("settings.hub_info_title") }));
 
   const dl = el("dl", { class: "cp-host-detail-meta" });
   const entries = [
-    ["Offline after", `${view.offline_after_seconds}s`],
-    ["Cloud interval", `${view.cloud_interval_seconds}s`],
-    ["Agent token", view.agent_token_hint],
-    ["API token (CP_UI_TOKEN)", view.ui_auth_enabled ? "configured" : "not configured"],
+    [t("settings.offline_after"), `${view.offline_after_seconds}s`],
+    [t("settings.cloud_interval"), `${view.cloud_interval_seconds}s`],
+    [t("settings.agent_token"), view.agent_token_hint],
+    [t("settings.api_token"), view.ui_auth_enabled ? t("settings.configured") : t("settings.not_configured_lower")],
   ];
   for (const [label, value] of entries) {
     const pair = el("div", { class: "cp-host-detail-meta-pair" });
@@ -126,16 +126,16 @@ function hubInfoCard(view) {
 
 function appearanceCard({ announce }) {
   const card = el("div", { class: "cp-card" });
-  card.append(el("h2", { class: "cp-card-title", text: "Appearance" }));
-  card.append(el("p", { class: "cp-muted-small", text: "Choose how the dashboard follows your device's light/dark setting." }));
+  card.append(el("h2", { class: "cp-card-title", text: t("settings.appearance_title") }));
+  card.append(el("p", { class: "cp-muted-small", text: t("settings.appearance_description") }));
 
   const { node, select } = selectField({
     id: "cp-theme-select",
-    label: "Theme",
+    label: t("settings.theme"),
     options: [
-      { value: "system", label: "System" },
-      { value: "light", label: "Light" },
-      { value: "dark", label: "Dark" },
+      { value: "system", get label() { return t("settings.theme_system"); } },
+      { value: "light", get label() { return t("settings.theme_light"); } },
+      { value: "dark", get label() { return t("settings.theme_dark"); } },
     ],
     value: getStoredTheme(),
   });
@@ -143,7 +143,7 @@ function appearanceCard({ announce }) {
   select.addEventListener("change", () => {
     setStoredTheme(select.value);
     applyTheme(select.value);
-    announce(`Theme set to ${select.value}.`);
+    announce(t("settings.theme_set_to", { theme: select.value }));
   });
 
   card.append(node);

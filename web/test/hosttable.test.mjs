@@ -3,6 +3,9 @@
 // persistence normalization).
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { setCatalogs, setLang } from "../assets/js/core/i18n.js";
 import {
   COLUMNS,
   defaultVisibleColumns,
@@ -14,6 +17,22 @@ import {
   agentDotLevel,
   normalizeVisibleColumns,
 } from "../assets/js/pages/hosttable.js";
+
+globalThis.localStorage = (() => {
+  const store = new Map();
+  return {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  };
+})();
+
+const assetsDir = fileURLToPath(new URL("../assets/i18n/", import.meta.url));
+setCatalogs({
+  en: JSON.parse(readFileSync(`${assetsDir}en.json`, "utf-8")),
+  ko: JSON.parse(readFileSync(`${assetsDir}ko.json`, "utf-8")),
+});
+setLang("en");
 
 test("thresholdLevel classifies per spec boundaries", () => {
   assert.equal(thresholdLevel(0), "ok");
@@ -121,4 +140,14 @@ test("normalizeVisibleColumns preserves a valid persisted subset", () => {
   assert.ok(result.includes("memory"));
   assert.ok(result.includes("system"));
   assert.ok(!result.includes("disk"));
+});
+
+test("COLUMNS labels render Korean text when lang is ko", () => {
+  setLang("ko");
+  try {
+    assert.equal(COLUMNS.find((c) => c.key === "system").label, "시스템");
+    assert.equal(COLUMNS.find((c) => c.key === "cost").label, "예상 비용");
+  } finally {
+    setLang("en");
+  }
 });

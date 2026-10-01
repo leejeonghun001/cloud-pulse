@@ -6,9 +6,10 @@ import { el, clearChildren } from "../../ui/components.js";
 import { passwordField, passwordChecklist, passwordStrengthMeter } from "../../ui/password-field.js";
 import { isPasswordValid } from "../../core/password-policy.js";
 import { formatRelativeTimeFromUnixSeconds } from "../../core/format.js";
-import { getSessions, revokeOtherSessions, changePassword, getSettings, ApiError } from "../../core/api.js";
+import { getSessions, revokeOtherSessions, changePassword, getSettings, ApiError, localizeApiError } from "../../core/api.js";
 import { setSessionToken } from "../../core/auth.js";
 import { showToast } from "../../ui/toast.js";
+import { t } from "../../core/i18n.js";
 
 /**
  * mountSecuritySection renders the Security section into container.
@@ -51,25 +52,25 @@ export function mountSecuritySection(container, { announce }) {
 
 function changePasswordCard({ signal, announce }) {
   const card = el("div", { class: "cp-card" });
-  card.append(el("h2", { class: "cp-card-title", text: "Change password" }));
-  card.append(el("p", { class: "cp-muted-small", text: "Signs you out of every other session on success." }));
+  card.append(el("h2", { class: "cp-card-title", text: t("security.change_password_title") }));
+  card.append(el("p", { class: "cp-muted-small", text: t("security.change_password_description") }));
 
   const form = el("form", { class: "cp-settings-form" });
   form.addEventListener("submit", (ev) => ev.preventDefault());
 
   const { node: curNode, input: curInput } = passwordField({
     id: "cp-security-current",
-    label: "Current password",
+    label: t("login.current_password_label"),
     autocomplete: "current-password",
   });
   const { node: newNode, input: newInput } = passwordField({
     id: "cp-security-new",
-    label: "New password",
+    label: t("login.new_password_label"),
     autocomplete: "new-password",
   });
   const { node: confirmNode, input: confirmInput } = passwordField({
     id: "cp-security-confirm",
-    label: "Confirm new password",
+    label: t("login.confirm_password_label"),
     autocomplete: "new-password",
   });
   form.append(curNode, newNode, confirmNode);
@@ -82,7 +83,7 @@ function changePasswordCard({ signal, announce }) {
   form.append(errorEl);
 
   const submitBtn = /** @type {HTMLButtonElement} */ (
-    el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "submit" }, text: "Update password" })
+    el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "submit" }, text: t("security.update_password") })
   );
   form.append(submitBtn);
 
@@ -97,11 +98,11 @@ function changePasswordCard({ signal, announce }) {
   form.addEventListener("submit", async () => {
     errorEl.textContent = "";
     if (!isPasswordValid(newInput.value, curInput.value)) {
-      errorEl.textContent = "Please satisfy every password requirement.";
+      errorEl.textContent = t("login.password_requirements_unmet");
       return;
     }
     if (newInput.value !== confirmInput.value) {
-      errorEl.textContent = "Passwords do not match.";
+      errorEl.textContent = t("login.passwords_do_not_match");
       return;
     }
     submitBtn.disabled = true;
@@ -112,14 +113,14 @@ function changePasswordCard({ signal, announce }) {
       newInput.value = "";
       confirmInput.value = "";
       refreshLive();
-      showToast({ message: "Password updated. Other sessions were signed out.", variant: "success" });
-      announce("Password updated.");
+      showToast({ message: t("security.password_updated_toast"), variant: "success" });
+      announce(t("login.password_updated"));
     } catch (err) {
       if (err?.name === "AbortError") return;
       if (err instanceof ApiError) {
-        errorEl.textContent = err.code === "invalid_credentials" ? "Current password is incorrect." : err.message;
+        errorEl.textContent = err.code === "invalid_credentials" ? t("login.current_password_incorrect") : localizeApiError(err);
       } else {
-        errorEl.textContent = "Unable to reach the hub. Try again.";
+        errorEl.textContent = t("login.unreachable_retry");
       }
     } finally {
       submitBtn.disabled = false;
@@ -136,18 +137,18 @@ function changePasswordCard({ signal, announce }) {
 
 async function renderSessionsCard(card, { signal, announce }) {
   clearChildren(card);
-  card.append(el("h2", { class: "cp-card-title", text: "Active sessions" }));
+  card.append(el("h2", { class: "cp-card-title", text: t("security.active_sessions_title") }));
 
   let sessions;
   try {
     sessions = await getSessions(signal);
   } catch (err) {
     if (err?.name === "AbortError") return;
-    card.append(el("p", { class: "cp-error-text", text: `Failed to load sessions: ${err.message}` }));
+    card.append(el("p", { class: "cp-error-text", text: t("security.failed_to_load_sessions", { reason: localizeApiError(err) }) }));
     return;
   }
 
-  const revokeBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button" }, text: "Sign out other sessions" });
+  const revokeBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button" }, text: t("security.sign_out_other_sessions") });
   const status = el("span", { class: "cp-muted-small", attrs: { role: "status", "aria-live": "polite" } });
   const headerRow = el("div", { class: "cp-settings-row" });
   headerRow.append(revokeBtn, status);
@@ -157,19 +158,19 @@ async function renderSessionsCard(card, { signal, announce }) {
     revokeBtn.disabled = true;
     try {
       const result = await revokeOtherSessions(signal);
-      status.textContent = `Signed out ${result.revoked} other session${result.revoked === 1 ? "" : "s"}.`;
+      status.textContent = t("security.signed_out_sessions", { count: result.revoked });
       announce(status.textContent);
       await renderSessionsCard(card, { signal, announce });
     } catch (err) {
       if (err?.name === "AbortError") return;
-      status.textContent = `Failed: ${err.message}`;
+      status.textContent = t("security.revoke_failed", { reason: localizeApiError(err) });
     } finally {
       revokeBtn.disabled = false;
     }
   });
 
   if (sessions.length === 0) {
-    card.append(el("p", { class: "cp-muted", text: "No active sessions." }));
+    card.append(el("p", { class: "cp-muted", text: t("security.no_active_sessions") }));
     return;
   }
 
@@ -177,14 +178,14 @@ async function renderSessionsCard(card, { signal, announce }) {
   const table = el("table", { class: "cp-table" });
   const thead = el("thead");
   thead.append(
-    el("tr", { children: ["Session", "Created", "Last seen", "Expires", "Remote", ""].map((t) => el("th", { text: t })) }),
+    el("tr", { children: [t("security.col_session"), t("security.col_created"), t("security.col_last_seen"), t("security.col_expires"), t("security.col_remote"), ""].map((tx) => el("th", { text: tx })) }),
   );
   table.append(thead);
   const tbody = el("tbody");
   for (const s of sessions) {
     const tr = el("tr");
     if (s.current) tr.classList.add("cp-row-highlighted");
-    tr.append(el("td", { text: s.current ? `${s.id} (this session)` : s.id }));
+    tr.append(el("td", { text: s.current ? t("security.this_session", { id: s.id }) : s.id }));
     tr.append(el("td", { text: formatRelativeTimeFromUnixSeconds(s.created_at) }));
     tr.append(el("td", { text: formatRelativeTimeFromUnixSeconds(s.last_seen) }));
     tr.append(el("td", { text: formatRelativeTimeFromUnixSeconds(s.expires_at) }));
@@ -207,16 +208,16 @@ function truncate(s, max) {
 
 function apiTokenCard(view) {
   const card = el("div", { class: "cp-card" });
-  card.append(el("h2", { class: "cp-card-title", text: "API token" }));
+  card.append(el("h2", { class: "cp-card-title", text: t("security.api_token_title") }));
   const badge = el("span", {
     class: `cp-chip ${view.ui_auth_enabled ? "cp-chip-ok" : "cp-chip-warning"}`,
-    text: view.ui_auth_enabled ? "Configured" : "Not configured",
+    text: view.ui_auth_enabled ? t("settings.configured") : t("settings.not_configured_lower"),
   });
   card.append(badge);
   card.append(
     el("p", {
       class: "cp-muted-small",
-      text: "CP_UI_TOKEN is an optional static bearer token for scripts and CI (curl, agents don't use it) — full read/admin access, never subject to the must-change-password gate. It never bypasses this dashboard's own sign-in. Set or rotate it in hub.env and restart the service.",
+      text: t("security.api_token_description"),
     }),
   );
   return card;

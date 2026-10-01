@@ -58,14 +58,14 @@ func (s *Server) handleListStorageAccounts(w http.ResponseWriter, r *http.Reques
 	accounts, err := s.store.ListStorageAccounts(ctx)
 	if err != nil {
 		s.logger.Error("storage: list accounts failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
 	snapshots, err := s.store.ListStorageAccountSnapshots(ctx)
 	if err != nil {
 		s.logger.Error("storage: list snapshots failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	snapByAccount := make(map[int64]models.StorageAccountSnapshot, len(snapshots))
@@ -109,7 +109,7 @@ func (s *Server) handleCreateStorageAccount(w http.ResponseWriter, r *http.Reque
 	r.Body = http.MaxBytesReader(w, r.Body, maxStorageBodyBytes)
 	var req models.StorageAccountCreate
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
 		return
 	}
 
@@ -139,7 +139,7 @@ func (s *Server) handleCreateStorageAccount(w http.ResponseWriter, r *http.Reque
 	})
 	if err != nil {
 		s.logger.Error("storage: create account failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -180,18 +180,18 @@ func (s *Server) handleDeleteStorageAccount(w http.ResponseWriter, r *http.Reque
 	ctx := r.Context()
 	id, err := parseStorageAccountID(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id", Code: "invalid_id"})
 		return
 	}
 
 	existing, err := s.store.GetStorageAccount(ctx, id)
 	if err != nil {
 		if err == models.ErrNotFound {
-			writeJSON(w, http.StatusNotFound, models.APIError{Error: "storage account not found"})
+			writeJSON(w, http.StatusNotFound, models.APIError{Error: "storage account not found", Code: "storage_account_not_found"})
 			return
 		}
 		s.logger.Error("storage: get account for delete failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -207,7 +207,7 @@ func (s *Server) handleDeleteStorageAccount(w http.ResponseWriter, r *http.Reque
 
 	if err := s.store.DeleteStorageAccount(ctx, id); err != nil {
 		s.logger.Error("storage: delete account failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -227,23 +227,23 @@ func (s *Server) handleDeleteStorageAccount(w http.ResponseWriter, r *http.Reque
 // oauth/complete.
 func (s *Server) handleStorageOAuthStart(w http.ResponseWriter, r *http.Request) {
 	if s.opts.Storage == nil {
-		writeJSON(w, http.StatusNotImplemented, models.APIError{Error: "storage accounts are not enabled on this hub"})
+		writeJSON(w, http.StatusNotImplemented, models.APIError{Error: "storage accounts are not enabled on this hub", Code: "storage_not_enabled"})
 		return
 	}
 	ctx := r.Context()
 	id, err := parseStorageAccountID(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id", Code: "invalid_id"})
 		return
 	}
 	acct, err := s.store.GetStorageAccount(ctx, id)
 	if err != nil {
 		if err == models.ErrNotFound {
-			writeJSON(w, http.StatusNotFound, models.APIError{Error: "storage account not found"})
+			writeJSON(w, http.StatusNotFound, models.APIError{Error: "storage account not found", Code: "storage_account_not_found"})
 			return
 		}
 		s.logger.Error("storage: get account for oauth start failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -253,7 +253,7 @@ func (s *Server) handleStorageOAuthStart(w http.ResponseWriter, r *http.Request)
 	case models.StorageAccountDropbox:
 		s.startDropboxPKCEFlow(w, acct)
 	default:
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "unsupported provider"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "unsupported provider", Code: "unsupported_provider"})
 	}
 }
 
@@ -275,7 +275,7 @@ func (s *Server) startGoogleDeviceFlow(w http.ResponseWriter, r *http.Request, a
 	clientID := acct.Config["client_id"]
 	clientSecret := acct.Secret["client_secret"]
 	if clientID == "" || clientSecret == "" {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "account is missing config.client_id/secret.client_secret"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "account is missing config.client_id/secret.client_secret", Code: "storage_config_incomplete"})
 		return
 	}
 
@@ -283,7 +283,7 @@ func (s *Server) startGoogleDeviceFlow(w http.ResponseWriter, r *http.Request, a
 	resp, err := client.RequestDeviceCode(r.Context(), clientID)
 	if err != nil {
 		s.logger.Error("storage: request google device code failed", "account_id", acct.ID, "error", err)
-		writeJSON(w, http.StatusBadGateway, models.APIError{Error: "failed to start google device flow"})
+		writeJSON(w, http.StatusBadGateway, models.APIError{Error: "failed to start google device flow", Code: "google_device_flow_failed"})
 		return
 	}
 
@@ -399,14 +399,14 @@ func (s *Server) googleSSRFChecker(rawURL string) (*url.URL, error) {
 func (s *Server) startDropboxPKCEFlow(w http.ResponseWriter, acct models.StorageAccount) {
 	appKey := acct.Config["app_key"]
 	if appKey == "" {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "account is missing config.app_key"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "account is missing config.app_key", Code: "storage_config_incomplete"})
 		return
 	}
 
 	state, err := dropbox.NewPKCEState()
 	if err != nil {
 		s.logger.Error("storage: generate dropbox pkce state failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -430,23 +430,23 @@ func (s *Server) startDropboxPKCEFlow(w http.ResponseWriter, acct models.Storage
 // (started by oauth/start) has concluded so far.
 func (s *Server) handleStorageOAuthComplete(w http.ResponseWriter, r *http.Request) {
 	if s.opts.Storage == nil {
-		writeJSON(w, http.StatusNotImplemented, models.APIError{Error: "storage accounts are not enabled on this hub"})
+		writeJSON(w, http.StatusNotImplemented, models.APIError{Error: "storage accounts are not enabled on this hub", Code: "storage_not_enabled"})
 		return
 	}
 	ctx := r.Context()
 	id, err := parseStorageAccountID(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id", Code: "invalid_id"})
 		return
 	}
 	acct, err := s.store.GetStorageAccount(ctx, id)
 	if err != nil {
 		if err == models.ErrNotFound {
-			writeJSON(w, http.StatusNotFound, models.APIError{Error: "storage account not found"})
+			writeJSON(w, http.StatusNotFound, models.APIError{Error: "storage account not found", Code: "storage_account_not_found"})
 			return
 		}
 		s.logger.Error("storage: get account for oauth complete failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -460,7 +460,7 @@ func (s *Server) handleStorageOAuthComplete(w http.ResponseWriter, r *http.Reque
 	case models.StorageAccountGoogleDrive:
 		s.reportGoogleDeviceFlowStatus(w, acct)
 	default:
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "unsupported provider"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "unsupported provider", Code: "unsupported_provider"})
 	}
 }
 
@@ -469,7 +469,7 @@ func (s *Server) handleStorageOAuthComplete(w http.ResponseWriter, r *http.Reque
 // triggers an immediate quota collection.
 func (s *Server) completeDropboxPKCEFlow(w http.ResponseWriter, r *http.Request, acct models.StorageAccount, code string) {
 	if code == "" {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "code is required"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "code is required", Code: "code_required"})
 		return
 	}
 
@@ -478,7 +478,7 @@ func (s *Server) completeDropboxPKCEFlow(w http.ResponseWriter, r *http.Request,
 	verifier := flow.pkceVerifier
 	flow.pollMu.Unlock()
 	if verifier == "" {
-		writeJSON(w, http.StatusConflict, models.APIError{Error: "no in-progress dropbox oauth flow for this account; call oauth/start first"})
+		writeJSON(w, http.StatusConflict, models.APIError{Error: "no in-progress dropbox oauth flow for this account; call oauth/start first", Code: "oauth_flow_not_started"})
 		return
 	}
 
@@ -486,7 +486,7 @@ func (s *Server) completeDropboxPKCEFlow(w http.ResponseWriter, r *http.Request,
 	res, err := client.ExchangeCode(r.Context(), acct.Config["app_key"], code, dropboxPKCEState(verifier))
 	if err != nil {
 		s.logger.Error("storage: dropbox code exchange failed", "account_id", acct.ID, "error", err)
-		writeJSON(w, http.StatusBadGateway, models.APIError{Error: "code exchange failed; the code may be invalid or expired"})
+		writeJSON(w, http.StatusBadGateway, models.APIError{Error: "code exchange failed; the code may be invalid or expired", Code: "oauth_code_exchange_failed"})
 		return
 	}
 
@@ -497,7 +497,7 @@ func (s *Server) completeDropboxPKCEFlow(w http.ResponseWriter, r *http.Request,
 	updated, err := s.store.UpdateStorageAccount(r.Context(), acct)
 	if err != nil {
 		s.logger.Error("storage: persist dropbox refresh token failed", "account_id", acct.ID, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	s.opts.Storage.clearFlow(acct.ID)
@@ -586,7 +586,7 @@ func dropboxPKCEState(verifier string) dropbox.PKCEState {
 // to once per minute (SPEC-v0.7 §3).
 func (s *Server) handleStorageRefresh(w http.ResponseWriter, r *http.Request) {
 	if s.opts.Storage == nil {
-		writeJSON(w, http.StatusNotImplemented, models.APIError{Error: "storage accounts are not enabled on this hub"})
+		writeJSON(w, http.StatusNotImplemented, models.APIError{Error: "storage accounts are not enabled on this hub", Code: "storage_not_enabled"})
 		return
 	}
 
@@ -610,7 +610,7 @@ type storageIntervalRequest struct {
 // interval override: PUT /api/v1/settings/storage/interval (admin).
 func (s *Server) handleSetStorageInterval(w http.ResponseWriter, r *http.Request) {
 	if s.opts.Storage == nil {
-		writeJSON(w, http.StatusNotImplemented, models.APIError{Error: "storage accounts are not enabled on this hub"})
+		writeJSON(w, http.StatusNotImplemented, models.APIError{Error: "storage accounts are not enabled on this hub", Code: "storage_not_enabled"})
 		return
 	}
 
@@ -619,18 +619,18 @@ func (s *Server) handleSetStorageInterval(w http.ResponseWriter, r *http.Request
 	r.Body = http.MaxBytesReader(w, r.Body, maxStorageBodyBytes)
 	var req storageIntervalRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
 		return
 	}
 	if !models.ValidStorageInterval(req.Interval) {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "interval must be one of 15m, 1h, 6h, 24h"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "interval must be one of 15m, 1h, 6h, 24h", Code: "invalid_interval"})
 		return
 	}
 
 	before := s.resolveStorageInterval(ctx)
 	if err := s.store.SetSetting(ctx, SettingStorageInterval, string(req.Interval)); err != nil {
 		s.logger.Error("set storage interval setting failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 

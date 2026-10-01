@@ -2,6 +2,7 @@
 // display metadata, rule presets, a human-readable rule summary
 // sentence, and rule-form validation. No DOM access here so this module
 // is fully covered by node --test without a browser.
+import { t } from "./i18n.js";
 
 /**
  * METRICS lists every models.AlertMetric value with display metadata:
@@ -10,19 +11,23 @@
  * (host_down and every metric here do — HostID == "" always means "all
  * hosts", this flag is purely about whether showing a per-host badge in
  * lists makes sense; kept simple: currently all metrics support scope).
+ *
+ * `label` is a getter so it re-resolves against the current language
+ * on every read, since this module's exports are static top-level data
+ * evaluated once at import time.
  * @type {{value: string, label: string, unit: string}[]}
  */
 export const METRICS = [
-  { value: "cpu", label: "CPU usage", unit: "%" },
-  { value: "memory", label: "Memory usage", unit: "%" },
-  { value: "disk", label: "Disk usage", unit: "%" },
-  { value: "load1", label: "Load average (1m)", unit: "" },
-  { value: "egress_out_pct", label: "Outbound traffic", unit: "% of limit" },
-  { value: "egress_in_pct", label: "Inbound traffic", unit: "% of limit" },
-  { value: "host_down", label: "Host offline", unit: "" },
-  { value: "storage_usage_pct", label: "Storage account usage", unit: "% of quota" },
-  { value: "agent_outdated", label: "Agent behind latest release", unit: "" },
-  { value: "update_batch_failed", label: "Remote update batch failed", unit: "" },
+  { value: "cpu", get label() { return t("alerts.metric_cpu"); }, unit: "%" },
+  { value: "memory", get label() { return t("alerts.metric_memory"); }, unit: "%" },
+  { value: "disk", get label() { return t("alerts.metric_disk"); }, unit: "%" },
+  { value: "load1", get label() { return t("alerts.metric_load1"); }, unit: "" },
+  { value: "egress_out_pct", get label() { return t("alerts.metric_egress_out_pct"); }, unit: "% of limit" },
+  { value: "egress_in_pct", get label() { return t("alerts.metric_egress_in_pct"); }, unit: "% of limit" },
+  { value: "host_down", get label() { return t("alerts.metric_host_down"); }, unit: "" },
+  { value: "storage_usage_pct", get label() { return t("alerts.metric_storage_usage_pct"); }, unit: "% of quota" },
+  { value: "agent_outdated", get label() { return t("alerts.metric_agent_outdated"); }, unit: "" },
+  { value: "update_batch_failed", get label() { return t("alerts.metric_update_batch_failed"); }, unit: "" },
 ];
 
 /**
@@ -54,10 +59,11 @@ export function isThresholdlessMetric(metric) {
   return metric === "host_down" || metric === "agent_outdated" || metric === "update_batch_failed";
 }
 
-/** OPERATORS lists every models.AlertOperator value with a display label. */
+/** OPERATORS lists every models.AlertOperator value with a display
+ * label; a getter for the same reason as METRICS' label above. */
 export const OPERATORS = [
-  { value: ">", label: "above" },
-  { value: ">=", label: "at or above" },
+  { value: ">", get label() { return t("alerts.operator_above"); } },
+  { value: ">=", get label() { return t("alerts.operator_at_or_above"); } },
 ];
 
 /**
@@ -105,9 +111,10 @@ export function formatThreshold(metric, threshold) {
   const unit = metricByValue(metric)?.unit ?? "";
   const num = Number.isFinite(threshold) ? threshold : 0;
   const numText = metric === "load1" ? num.toFixed(2).replace(/\.?0+$/, "") || "0" : String(num);
-  if (unit === "% of limit") return `${numText}% of limit`;
-  if (unit === "% of quota") return `${numText}% of quota`;
-  return `${numText}${unit}`;
+  if (unit === "% of limit") return t("alerts.threshold_pct_of_limit", { value: numText });
+  if (unit === "% of quota") return t("alerts.threshold_pct_of_quota", { value: numText });
+  if (unit === "%") return t("alerts.threshold_pct", { value: numText });
+  return numText;
 }
 
 /**
@@ -118,7 +125,9 @@ export function formatThreshold(metric, threshold) {
  * default would otherwise render as an unwieldy "336 hours"). Unlike
  * core/format.js's formatDuration this always spells out a single unit
  * with its full word (never abbreviated to "5m"), matching the
- * human-sentence style SPEC-v0.5 §D asks for.
+ * human-sentence style SPEC-v0.5 §D asks for. Korean has no
+ * grammatical plural distinction, so ko.json's "one"/"other" pair for
+ * each unit is identical text — see core/i18n.js's plural doc comment.
  * @param {number} seconds
  * @returns {string}
  */
@@ -129,14 +138,12 @@ export function formatDurationShort(seconds) {
     return `${d} day${d === 1 ? "" : "s"}`;
   }
   if (s % 3600 === 0 && s >= 3600) {
-    const h = s / 3600;
-    return `${h} hour${h === 1 ? "" : "s"}`;
+    return t("alerts.duration_hours", { count: s / 3600 });
   }
   if (s % 60 === 0 && s >= 60) {
-    const m = s / 60;
-    return `${m} minute${m === 1 ? "" : "s"}`;
+    return t("alerts.duration_minutes", { count: s / 60 });
   }
-  return `${s} second${s === 1 ? "" : "s"}`;
+  return t("alerts.duration_seconds", { count: s });
 }
 
 /**
@@ -148,7 +155,7 @@ export function formatDurationShort(seconds) {
  * @returns {string}
  */
 export function hostScopeLabel(hostID, hostnameByID) {
-  if (!hostID) return "any host";
+  if (!hostID) return t("alerts.scope_any_host");
   return hostnameByID?.(hostID) || hostID;
 }
 
@@ -167,7 +174,7 @@ export function hostScopeLabel(hostID, hostnameByID) {
  */
 export function scopeLabel(metric, scopeID, hostnameByID, storageAccountNameByID) {
   if (isStorageScopedMetric(metric)) {
-    if (!scopeID) return "any connected storage account";
+    if (!scopeID) return t("alerts.scope_any_storage_account");
     return storageAccountNameByID?.(scopeID) || scopeID;
   }
   return hostScopeLabel(scopeID, hostnameByID);
@@ -183,7 +190,7 @@ export function scopeLabel(metric, scopeID, hostnameByID, storageAccountNameByID
  */
 export function channelsLabel(channelIDs, channelNameByID) {
   const names = (channelIDs || []).map((id) => channelNameByID(id)).filter(Boolean);
-  return names.length > 0 ? names.join(", ") : "no channels";
+  return names.length > 0 ? names.join(", ") : t("alerts.no_channels");
 }
 
 /**
@@ -193,6 +200,12 @@ export function channelsLabel(channelIDs, channelNameByID) {
  * host goes offline for 2 minutes → Discord #ops". Pure function of the
  * rule's fields plus two name-lookup callbacks so it doesn't need to
  * fetch anything itself.
+ *
+ * The whole sentence (not fragments glued with string concatenation)
+ * is a single t() template per case, since Korean word order for "on X
+ * stays above Y for Z" differs substantially from English — see
+ * alerts.rule_sentence_* in the catalogs for the exact per-language
+ * phrasing.
  * @param {Object} rule a models.AlertRule-shaped object (metric,
  *   host_id, operator, threshold, duration_sec, channel_ids)
  * @param {Object} [lookups]
@@ -206,26 +219,27 @@ export function ruleSummarySentence(rule, { hostnameByID, channelNameByID = () =
   const duration = formatDurationShort(rule.duration_sec);
 
   if (rule.metric === "host_down") {
-    const subject = rule.host_id ? scope : "a host";
-    return `Alert when ${subject} goes offline for ${duration} → ${channels}`;
+    const subject = rule.host_id ? scope : t("alerts.a_host");
+    return t("alerts.rule_sentence_host_down", { subject, duration, channels });
   }
 
   if (rule.metric === "agent_outdated") {
-    const subject = rule.host_id ? scope : "a host's agent";
+    const subject = rule.host_id ? scope : t("alerts.a_host_agent");
     const behindDuration = formatDurationShort(rule.duration_sec || AGENT_OUTDATED_DEFAULT_DURATION_SEC);
-    return `Alert when ${subject} is behind the latest release for ${behindDuration} → ${channels}`;
+    return t("alerts.rule_sentence_agent_outdated", { subject, duration: behindDuration, channels });
   }
 
   if (rule.metric === "update_batch_failed") {
-    return `Alert when a remote-update batch finishes with at least one failure → ${channels}`;
+    return t("alerts.rule_sentence_update_batch_failed", { channels });
   }
 
   const label = lowerFirstWord(metricLabel(rule.metric));
   const op = operatorLabel(rule.operator);
   const threshold = formatThreshold(rule.metric, rule.threshold);
-  const durationClause = rule.duration_sec > 0 ? ` for ${duration}` : "";
-  const verb = rule.duration_sec > 0 ? "stays" : "is";
-  return `Alert when ${label} on ${scope} ${verb} ${op} ${threshold}${durationClause} → ${channels}`;
+  if (rule.duration_sec > 0) {
+    return t("alerts.rule_sentence_sustained", { label, scope, op, threshold, duration, channels });
+  }
+  return t("alerts.rule_sentence_immediate", { label, scope, op, threshold, channels });
 }
 
 /**
@@ -255,54 +269,61 @@ export const AGENT_OUTDATED_DEFAULT_DURATION_SEC = 14 * 24 * 60 * 60;
  * as one-click starting points. Each preset's `rule` is a partial
  * models.AlertRule (missing name/id/timestamps get filled by the
  * caller); `name` doubles as the preset's own label and the rule's
- * default Name.
+ * default Name — both localized, since a preset's rule name is stored
+ * as-is on save and there's no reason to force it to stay English on a
+ * Korean-language hub.
+ *
+ * `label` and `rule.name` are getters for the same reason as METRICS'
+ * label above. NOTE: two more presets (update-failure-related) are
+ * appended to this array by the rollout stage (SPEC-v0.8 §3-1) — this
+ * stage does not own those two entries.
  * @type {{id: string, label: string, rule: Object}[]}
  */
 export const PRESETS = [
   {
     id: "cpu-90-5m",
-    label: "CPU above 90% for 5 minutes",
-    rule: { name: "CPU above 90% for 5 minutes", metric: "cpu", host_id: "", operator: ">", threshold: 90, duration_sec: 300 },
+    get label() { return t("alerts.preset_cpu_90_5m"); },
+    get rule() { return { name: t("alerts.preset_cpu_90_5m"), metric: "cpu", host_id: "", operator: ">", threshold: 90, duration_sec: 300 }; },
   },
   {
     id: "memory-90-10m",
-    label: "Memory above 90% for 10 minutes",
-    rule: { name: "Memory above 90% for 10 minutes", metric: "memory", host_id: "", operator: ">", threshold: 90, duration_sec: 600 },
+    get label() { return t("alerts.preset_memory_90_10m"); },
+    get rule() { return { name: t("alerts.preset_memory_90_10m"), metric: "memory", host_id: "", operator: ">", threshold: 90, duration_sec: 600 }; },
   },
   {
     id: "disk-90",
-    label: "Disk above 90%",
-    rule: { name: "Disk above 90%", metric: "disk", host_id: "", operator: ">", threshold: 90, duration_sec: 0 },
+    get label() { return t("alerts.preset_disk_90"); },
+    get rule() { return { name: t("alerts.preset_disk_90"), metric: "disk", host_id: "", operator: ">", threshold: 90, duration_sec: 0 }; },
   },
   {
     id: "egress-out-80",
-    label: "Outbound traffic above 80% of limit",
-    rule: { name: "Outbound traffic above 80% of limit", metric: "egress_out_pct", host_id: "", operator: ">", threshold: 80, duration_sec: 0 },
+    get label() { return t("alerts.preset_egress_out_80"); },
+    get rule() { return { name: t("alerts.preset_egress_out_80"), metric: "egress_out_pct", host_id: "", operator: ">", threshold: 80, duration_sec: 0 }; },
   },
   {
     id: "egress-in-80",
-    label: "Inbound traffic above 80% of limit",
-    rule: { name: "Inbound traffic above 80% of limit", metric: "egress_in_pct", host_id: "", operator: ">", threshold: 80, duration_sec: 0 },
+    get label() { return t("alerts.preset_egress_in_80"); },
+    get rule() { return { name: t("alerts.preset_egress_in_80"), metric: "egress_in_pct", host_id: "", operator: ">", threshold: 80, duration_sec: 0 }; },
   },
   {
     id: "host-down-2m",
-    label: "Host offline for 2 minutes",
-    rule: { name: "Host offline for 2 minutes", metric: "host_down", host_id: "", operator: ">", threshold: 0, duration_sec: 120 },
+    get label() { return t("alerts.preset_host_down_2m"); },
+    get rule() { return { name: t("alerts.preset_host_down_2m"), metric: "host_down", host_id: "", operator: ">", threshold: 0, duration_sec: 120 }; },
   },
   {
     id: "storage-usage-90",
-    label: "Storage account above 90% of quota",
-    rule: { name: "Storage account above 90% of quota", metric: "storage_usage_pct", host_id: "", operator: ">", threshold: 90, duration_sec: 0 },
+    get label() { return t("alerts.preset_storage_usage_90"); },
+    get rule() { return { name: t("alerts.preset_storage_usage_90"), metric: "storage_usage_pct", host_id: "", operator: ">", threshold: 90, duration_sec: 0 }; },
   },
   {
     id: "agent-outdated-14d",
-    label: "Agent behind latest release for 14 days",
-    rule: { name: "Agent behind latest release for 14 days", metric: "agent_outdated", host_id: "", operator: ">", threshold: 0, duration_sec: AGENT_OUTDATED_DEFAULT_DURATION_SEC },
+    get label() { return t("alerts.preset_agent_outdated_14d"); },
+    get rule() { return { name: t("alerts.preset_agent_outdated_14d"), metric: "agent_outdated", host_id: "", operator: ">", threshold: 0, duration_sec: AGENT_OUTDATED_DEFAULT_DURATION_SEC }; },
   },
   {
     id: "update-batch-failed",
-    label: "Remote update batch has a failure",
-    rule: { name: "Remote update batch has a failure", metric: "update_batch_failed", host_id: "", operator: ">", threshold: 0, duration_sec: 0 },
+    get label() { return t("alerts.preset_update_batch_failed"); },
+    get rule() { return { name: t("alerts.preset_update_batch_failed"), metric: "update_batch_failed", host_id: "", operator: ">", threshold: 0, duration_sec: 0 }; },
   },
 ];
 
@@ -338,22 +359,22 @@ export const DEFAULT_COOLDOWN_SEC = 3600;
 export function validateRuleForm(form) {
   const errors = {};
   if (!form.name || form.name.trim() === "") {
-    errors.name = "Name is required.";
+    errors.name = t("alerts.error_name_required");
   }
   if (!METRICS.some((m) => m.value === form.metric)) {
-    errors.metric = "Choose a metric.";
+    errors.metric = t("alerts.error_choose_metric");
   }
   if (!OPERATORS.some((o) => o.value === form.operator)) {
-    errors.operator = "Choose an operator.";
+    errors.operator = t("alerts.error_choose_operator");
   }
   if (!isThresholdlessMetric(form.metric) && (!Number.isFinite(form.threshold) || form.threshold < 0)) {
-    errors.threshold = "Threshold must be a non-negative number.";
+    errors.threshold = t("alerts.error_threshold_non_negative");
   }
   if (!Number.isFinite(form.durationSec) || form.durationSec < 0) {
-    errors.durationSec = "Duration must be a non-negative number of seconds.";
+    errors.durationSec = t("alerts.error_duration_non_negative");
   }
   if (!Number.isFinite(form.cooldownSec) || form.cooldownSec < 0) {
-    errors.cooldownSec = "Cooldown must be a non-negative number of seconds.";
+    errors.cooldownSec = t("alerts.error_cooldown_non_negative");
   }
   return errors;
 }

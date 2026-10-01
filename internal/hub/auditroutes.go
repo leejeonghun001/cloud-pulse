@@ -53,7 +53,7 @@ func (s *Server) handleListAuditEntries(w http.ResponseWriter, r *http.Request) 
 	entries, err := s.store.ListAuditEntries(ctx, entityType, before, limit+1)
 	if err != nil {
 		s.logger.Error("list audit entries failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 

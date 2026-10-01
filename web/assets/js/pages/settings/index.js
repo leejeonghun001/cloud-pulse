@@ -17,6 +17,7 @@ import { mountNotificationsSection } from "./notifications.js";
 import { mountAlertRulesSection } from "./alert-rules.js";
 import { mountBillingSection } from "./billing.js";
 import { mountStorageSection } from "./storage.js";
+import { t } from "../../core/i18n.js";
 
 /**
  * copyToClipboard copies text to the clipboard using the async
@@ -55,15 +56,15 @@ export async function copyToClipboard(text, selectEl) {
  * palette in main.js can list settings sections without importing
  * every section's mount function. */
 export const SECTIONS = [
-  { id: "general", label: "General", iconName: "settings", mount: mountGeneralSection },
-  { id: "network", label: "Network", iconName: "network", mount: mountNetworkSection },
-  { id: "security", label: "Security", iconName: "shield", mount: mountSecuritySection },
-  { id: "agents", label: "Agents", iconName: "server", mount: mountAgentsSection },
-  { id: "traffic", label: "Traffic limits", iconName: "gauge", mount: mountTrafficSection },
-  { id: "notifications", label: "Notifications", iconName: "bell", mount: mountNotificationsSection },
-  { id: "alert-rules", label: "Alert rules", iconName: "triangleAlert", mount: mountAlertRulesSection },
-  { id: "billing", label: "Billing", iconName: "cloud", mount: mountBillingSection },
-  { id: "storage", label: "Storage", iconName: "hardDrive", mount: mountStorageSection },
+  { id: "general", get label() { return t("settings.section_general"); }, iconName: "settings", mount: mountGeneralSection },
+  { id: "network", get label() { return t("settings.section_network"); }, iconName: "network", mount: mountNetworkSection },
+  { id: "security", get label() { return t("settings.section_security"); }, iconName: "shield", mount: mountSecuritySection },
+  { id: "agents", get label() { return t("settings.section_agents"); }, iconName: "server", mount: mountAgentsSection },
+  { id: "traffic", get label() { return t("settings.section_traffic"); }, iconName: "gauge", mount: mountTrafficSection },
+  { id: "notifications", get label() { return t("settings.section_notifications"); }, iconName: "bell", mount: mountNotificationsSection },
+  { id: "alert-rules", get label() { return t("settings.section_alert_rules"); }, iconName: "triangleAlert", mount: mountAlertRulesSection },
+  { id: "billing", get label() { return t("settings.section_billing"); }, iconName: "cloud", mount: mountBillingSection },
+  { id: "storage", get label() { return t("settings.section_storage"); }, iconName: "hardDrive", mount: mountStorageSection },
 ];
 
 /** DEFAULT_SECTION is used when "#/settings" is visited with no
@@ -100,11 +101,11 @@ export function mountSettingsPage(container, { announce, section, focusHostID, o
 
   clearChildren(container);
   const root = el("div", { class: "cp-settings-page" });
-  root.append(el("h1", { class: "cp-page-title", text: "Settings" }));
-  root.append(el("p", { class: "cp-page-subtitle", text: "Manage the hub, its network access, and your account." }));
+  root.append(el("h1", { class: "cp-page-title", text: t("settings.title") }));
+  root.append(el("p", { class: "cp-page-subtitle", text: t("settings.subtitle") }));
 
   const layout = el("div", { class: "cp-settings-layout" });
-  const nav = el("nav", { class: "cp-settings-nav", attrs: { "aria-label": "Settings sections" } });
+  const nav = el("nav", { class: "cp-settings-nav", attrs: { "aria-label": t("settings.sections_aria_label") } });
   const list = el("ul", { class: "cp-settings-nav-list", attrs: { role: "list" } });
 
   for (const s of SECTIONS) {

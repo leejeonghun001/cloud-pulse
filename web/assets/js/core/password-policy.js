@@ -4,6 +4,7 @@
 // access here so it's covered by node --test without a browser.
 // Mirrors the hub's policy (SPEC-v0.4 §1): 8..256 chars (bytes <= 1024),
 // not all whitespace, != "changeme", != current password.
+import { t } from "./i18n.js";
 
 /** MIN_LENGTH / MAX_LENGTH mirror the hub's byte-length policy bounds
  * (the hub checks bytes, not chars; ASCII passwords make these
@@ -33,12 +34,16 @@ export function evaluateRequirements(password, currentPassword = "") {
   const p = String(password ?? "");
   const trimmedNonEmpty = p.trim().length > 0;
   return [
-    { id: "length", label: `At least ${MIN_LENGTH} characters`, met: p.length >= MIN_LENGTH && p.length <= MAX_LENGTH },
-    { id: "not-blank", label: "Not just whitespace", met: trimmedNonEmpty },
-    { id: "not-default", label: 'Not the default password ("changeme")', met: p !== "changeme" },
+    {
+      id: "length",
+      label: t("password.requirement_length", { min: MIN_LENGTH }),
+      met: p.length >= MIN_LENGTH && p.length <= MAX_LENGTH,
+    },
+    { id: "not-blank", label: t("password.requirement_not_blank"), met: trimmedNonEmpty },
+    { id: "not-default", label: t("password.requirement_not_default"), met: p !== "changeme" },
     {
       id: "not-current",
-      label: "Different from your current password",
+      label: t("password.requirement_not_current"),
       met: !currentPassword || p !== currentPassword,
     },
   ];
@@ -107,13 +112,13 @@ export function strengthLevel(score) {
 export function strengthLabel(level) {
   switch (level) {
     case "weak":
-      return "Weak";
+      return t("password.strength_weak");
     case "fair":
-      return "Fair";
+      return t("password.strength_fair");
     case "good":
-      return "Good";
+      return t("password.strength_good");
     case "strong":
-      return "Strong";
+      return t("password.strength_strong");
     default:
       return "";
   }

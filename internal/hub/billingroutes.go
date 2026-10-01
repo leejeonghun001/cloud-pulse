@@ -33,7 +33,7 @@ func (s *Server) handleGetBilling(w http.ResponseWriter, r *http.Request) {
 		snapshots, err = s.store.ListCloudCostSnapshots(ctx)
 		if err != nil {
 			s.logger.Error("billing: list cloud cost snapshots failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 			return
 		}
 		interval := s.resolveBillingInterval(ctx)
@@ -44,14 +44,14 @@ func (s *Server) handleGetBilling(w http.ResponseWriter, r *http.Request) {
 	hosts, err := s.store.ListHosts(ctx)
 	if err != nil {
 		s.logger.Error("billing: list hosts failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
 	display, err := s.loadDisplayCurrencySettings(ctx)
 	if err != nil {
 		s.logger.Error("billing: load display currency settings failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -64,7 +64,7 @@ func (s *Server) handleGetBilling(w http.ResponseWriter, r *http.Request) {
 // throttle (SPEC-v0.6 §1).
 func (s *Server) handlePostBillingRefresh(w http.ResponseWriter, r *http.Request) {
 	if s.opts.Billing == nil {
-		writeJSON(w, http.StatusNotImplemented, models.APIError{Error: "billing is not enabled on this hub"})
+		writeJSON(w, http.StatusNotImplemented, models.APIError{Error: "billing is not enabled on this hub", Code: "billing_not_enabled"})
 		return
 	}
 
@@ -80,7 +80,7 @@ func (s *Server) handlePostBillingRefresh(w http.ResponseWriter, r *http.Request
 	s.opts.Billing.refreshGate().Record()
 	if err != nil {
 		s.logger.Error("billing: manual refresh failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"snapshots": snapshots})
@@ -104,7 +104,7 @@ type billingIntervalRequest struct {
 // interval before each wait) — no restart required.
 func (s *Server) handleSetBillingInterval(w http.ResponseWriter, r *http.Request) {
 	if s.opts.Billing == nil {
-		writeJSON(w, http.StatusNotImplemented, models.APIError{Error: "billing is not enabled on this hub"})
+		writeJSON(w, http.StatusNotImplemented, models.APIError{Error: "billing is not enabled on this hub", Code: "billing_not_enabled"})
 		return
 	}
 
@@ -113,18 +113,18 @@ func (s *Server) handleSetBillingInterval(w http.ResponseWriter, r *http.Request
 	r.Body = http.MaxBytesReader(w, r.Body, maxPricingBodyBytes)
 	var req billingIntervalRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
 		return
 	}
 	if !models.ValidBillingInterval(req.Interval) {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "interval must be one of 6h, 12h, 24h"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "interval must be one of 6h, 12h, 24h", Code: "invalid_interval"})
 		return
 	}
 
 	before := s.resolveBillingInterval(ctx)
 	if err := s.store.SetSetting(ctx, SettingBillingInterval, string(req.Interval)); err != nil {
 		s.logger.Error("set billing interval setting failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 

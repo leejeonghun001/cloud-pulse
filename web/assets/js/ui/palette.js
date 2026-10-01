@@ -3,6 +3,7 @@
 // sign out, add agent). Arrow keys + Enter to select, Esc to close.
 import { el } from "./components.js";
 import { icon } from "./icons.js";
+import { t } from "../core/i18n.js";
 
 /**
  * @typedef {Object} PaletteItem
@@ -75,14 +76,14 @@ export function filterItems(items, query) {
 export function createPalette(getItems) {
   const dialog = /** @type {HTMLDialogElement} */ (document.createElement("dialog"));
   dialog.className = "cp-palette";
-  dialog.setAttribute("aria-label", "Command palette");
+  dialog.setAttribute("aria-label", t("nav.open_command_palette"));
 
   const inputRow = el("div", { class: "cp-palette-input-row" });
   inputRow.append(icon("search"));
   const input = /** @type {HTMLInputElement} */ (
     el("input", {
       class: "cp-palette-input",
-      attrs: { type: "text", placeholder: "Search hosts, pages, settings, actions…", "aria-label": "Command palette search" },
+      attrs: { type: "text", placeholder: t("common.palette_search_placeholder"), "aria-label": t("common.palette_search_aria_label") },
     })
   );
   inputRow.append(input);
@@ -101,7 +102,7 @@ export function createPalette(getItems) {
     filtered = filterItems(items, input.value);
 
     if (filtered.length === 0) {
-      list.append(el("p", { class: "cp-palette-empty", text: "No matches." }));
+      list.append(el("p", { class: "cp-palette-empty", text: t("common.palette_no_matches") }));
       return;
     }
 

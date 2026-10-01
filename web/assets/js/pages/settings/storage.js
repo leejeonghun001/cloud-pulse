@@ -16,8 +16,10 @@ import {
   completeStorageAccountOAuth,
   setStorageInterval,
   withToastOnError,
+  localizeApiError,
 } from "../../core/api.js";
 import { copyToClipboard } from "./index.js";
+import { t } from "../../core/i18n.js";
 
 // GOOGLE_DEVICE_POLL_MAX_ATTEMPTS/INTERVAL_MS bound how long the
 // browser itself keeps polling oauth/complete after "Connect Google
@@ -69,43 +71,43 @@ export function mountStorageSection(container, { announce }) {
 
 function connectCard({ signal, announce, onChanged, setPollTimer, container }) {
   const card = el("div", { class: "cp-card" });
-  card.append(el("h2", { class: "cp-card-title", text: "Connect a storage account" }));
+  card.append(el("h2", { class: "cp-card-title", text: t("storage.connect_title") }));
   card.append(
     el("p", {
       class: "cp-muted-small",
-      text: "Monitor a Google Drive or Dropbox account's storage usage alongside your S3/R2 buckets. Requires an OAuth app you've registered with that provider — see the field hints below.",
+      text: t("storage.connect_description"),
     }),
   );
 
   const googleNameInput = /** @type {HTMLInputElement} */ (
-    el("input", { class: "cp-input", attrs: { type: "text", placeholder: "Label (e.g. \"Team Drive\")" } })
+    el("input", { class: "cp-input", attrs: { type: "text", placeholder: t("storage.google_label_placeholder") } })
   );
   const googleClientIDInput = /** @type {HTMLInputElement} */ (
-    el("input", { class: "cp-input", attrs: { type: "text", placeholder: "Google OAuth client ID" } })
+    el("input", { class: "cp-input", attrs: { type: "text", placeholder: t("storage.google_client_id_placeholder") } })
   );
   const googleClientSecretInput = /** @type {HTMLInputElement} */ (
-    el("input", { class: "cp-input", attrs: { type: "password", placeholder: "Google OAuth client secret" } })
+    el("input", { class: "cp-input", attrs: { type: "password", placeholder: t("storage.google_client_secret_placeholder") } })
   );
-  const googleConnectBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" }, text: "Connect Google Drive" });
+  const googleConnectBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" }, text: t("storage.connect_google_drive") });
   const googleFields = el("div", { class: "cp-settings-row" });
   googleFields.append(googleNameInput, googleClientIDInput, googleClientSecretInput, googleConnectBtn);
   const googleHint = el("p", {
     class: "cp-muted-small",
-    text: 'Google Cloud Console → APIs & Services → Credentials → create an OAuth client of type "TVs and Limited Input devices".',
+    text: t("storage.google_hint"),
   });
 
   const dropboxNameInput = /** @type {HTMLInputElement} */ (
-    el("input", { class: "cp-input", attrs: { type: "text", placeholder: "Label (e.g. \"Personal Dropbox\")" } })
+    el("input", { class: "cp-input", attrs: { type: "text", placeholder: t("storage.dropbox_label_placeholder") } })
   );
   const dropboxAppKeyInput = /** @type {HTMLInputElement} */ (
-    el("input", { class: "cp-input", attrs: { type: "text", placeholder: "Dropbox app key" } })
+    el("input", { class: "cp-input", attrs: { type: "text", placeholder: t("storage.dropbox_app_key_placeholder") } })
   );
-  const dropboxConnectBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" }, text: "Connect Dropbox" });
+  const dropboxConnectBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" }, text: t("storage.connect_dropbox") });
   const dropboxFields = el("div", { class: "cp-settings-row" });
   dropboxFields.append(dropboxNameInput, dropboxAppKeyInput, dropboxConnectBtn);
   const dropboxHint = el("p", {
     class: "cp-muted-small",
-    text: "Dropbox App Console → create an app with the account_info.read scope; only the App key is needed (PKCE requires no app secret).",
+    text: t("storage.dropbox_hint"),
   });
 
   const statusLine = el("p", { class: "cp-muted-small", attrs: { role: "status", "aria-live": "polite" } });
@@ -115,7 +117,7 @@ function connectCard({ signal, announce, onChanged, setPollTimer, container }) {
     const clientID = googleClientIDInput.value.trim();
     const clientSecret = googleClientSecretInput.value;
     if (!name || !clientID || !clientSecret) {
-      statusLine.textContent = "Label, client ID, and client secret are all required.";
+      statusLine.textContent = t("storage.google_fields_required");
       return;
     }
     googleConnectBtn.disabled = true;
@@ -132,7 +134,7 @@ function connectCard({ signal, announce, onChanged, setPollTimer, container }) {
       statusLine.textContent = "";
     } catch (err) {
       if (err?.name === "AbortError") return;
-      statusLine.textContent = `Failed to start Google Drive connection: ${err.message}`;
+      statusLine.textContent = t("storage.google_connect_failed", { reason: localizeApiError(err) });
     } finally {
       googleConnectBtn.disabled = false;
     }
@@ -142,7 +144,7 @@ function connectCard({ signal, announce, onChanged, setPollTimer, container }) {
     const name = dropboxNameInput.value.trim();
     const appKey = dropboxAppKeyInput.value.trim();
     if (!name || !appKey) {
-      statusLine.textContent = "Label and app key are both required.";
+      statusLine.textContent = t("storage.dropbox_fields_required");
       return;
     }
     dropboxConnectBtn.disabled = true;
@@ -155,7 +157,7 @@ function connectCard({ signal, announce, onChanged, setPollTimer, container }) {
       statusLine.textContent = "";
     } catch (err) {
       if (err?.name === "AbortError") return;
-      statusLine.textContent = `Failed to start Dropbox connection: ${err.message}`;
+      statusLine.textContent = t("storage.dropbox_connect_failed", { reason: localizeApiError(err) });
     } finally {
       dropboxConnectBtn.disabled = false;
     }
@@ -176,8 +178,8 @@ function connectCard({ signal, announce, onChanged, setPollTimer, container }) {
 
 function openGoogleDeviceFlowDialog({ accountID, start, signal, announce, onChanged, setPollTimer, container }) {
   const card = el("div", { class: "cp-card" });
-  card.append(el("h2", { class: "cp-card-title", text: "Connect Google Drive" }));
-  card.append(el("p", { class: "cp-muted-small", text: "1. Open the link below. 2. Enter the code. 3. Approve access." }));
+  card.append(el("h2", { class: "cp-card-title", text: t("storage.connect_google_drive") }));
+  card.append(el("p", { class: "cp-muted-small", text: t("storage.google_device_flow_steps") }));
 
   const linkRow = el("div", { class: "cp-settings-row" });
   linkRow.append(
@@ -190,7 +192,7 @@ function openGoogleDeviceFlowDialog({ accountID, start, signal, announce, onChan
 
   const codeRow = el("div", { class: "cp-settings-row" });
   const codeDisplay = el("code", { class: "cp-code-inline", text: start.user_code });
-  const copyCodeBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: "Copy code" });
+  const copyCodeBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: t("storage.copy_code") });
   copyCodeBtn.addEventListener("click", async () => {
     await copyToClipboard(start.user_code, codeDisplay);
   });
@@ -200,7 +202,7 @@ function openGoogleDeviceFlowDialog({ accountID, start, signal, announce, onChan
   const statusLine = el("p", {
     class: "cp-muted-small",
     attrs: { role: "status", "aria-live": "polite" },
-    text: "Waiting for you to approve access…",
+    text: t("storage.waiting_for_approval"),
   });
   card.append(statusLine);
 
@@ -213,25 +215,24 @@ function openGoogleDeviceFlowDialog({ accountID, start, signal, announce, onChan
     try {
       const resp = await completeStorageAccountOAuth(accountID, undefined, signal);
       if (resp.status === "connected") {
-        statusLine.textContent = "Connected.";
-        announce("Google Drive account connected.");
+        statusLine.textContent = t("storage.connected");
+        announce(t("storage.google_drive_connected_announce"));
         card.remove();
         await onChanged();
         return;
       }
       if (resp.status === "denied" || resp.status === "expired") {
-        statusLine.textContent = resp.status === "denied" ? "Access denied." : "Code expired — reconnect to try again.";
+        statusLine.textContent = resp.status === "denied" ? t("storage.access_denied") : t("storage.code_expired");
         return;
       }
       if (attempts >= GOOGLE_DEVICE_POLL_MAX_ATTEMPTS) {
-        statusLine.textContent =
-          "Timed out waiting in this browser tab — the account may still connect in the background; reload this page to check.";
+        statusLine.textContent = t("storage.poll_timed_out");
         return;
       }
       setPollTimer(setTimeout(poll, GOOGLE_DEVICE_POLL_INTERVAL_MS));
     } catch (err) {
       if (err?.name === "AbortError") return;
-      statusLine.textContent = `Error checking connection status: ${err.message}`;
+      statusLine.textContent = t("storage.error_checking_status", { reason: localizeApiError(err) });
     }
   }
   setPollTimer(setTimeout(poll, GOOGLE_DEVICE_POLL_INTERVAL_MS));
@@ -243,25 +244,25 @@ function openGoogleDeviceFlowDialog({ accountID, start, signal, announce, onChan
 
 function openDropboxPKCEDialog({ accountID, start, signal, announce, onChanged, container }) {
   const card = el("div", { class: "cp-card" });
-  card.append(el("h2", { class: "cp-card-title", text: "Connect Dropbox" }));
+  card.append(el("h2", { class: "cp-card-title", text: t("storage.connect_dropbox") }));
   card.append(
-    el("p", { class: "cp-muted-small", text: "1. Open the link below and approve access. 2. Paste the resulting code here." }),
+    el("p", { class: "cp-muted-small", text: t("storage.dropbox_pkce_steps") }),
   );
 
   const linkRow = el("div", { class: "cp-settings-row" });
   linkRow.append(
     el("a", {
       attrs: { href: start.authorize_url, target: "_blank", rel: "noopener noreferrer" },
-      text: "Open Dropbox authorization page",
+      text: t("storage.open_dropbox_auth_page"),
     }),
   );
   card.append(linkRow);
 
   const codeRow = el("div", { class: "cp-settings-row" });
   const codeInput = /** @type {HTMLInputElement} */ (
-    el("input", { class: "cp-input", attrs: { type: "text", placeholder: "Paste the code Dropbox shows you" } })
+    el("input", { class: "cp-input", attrs: { type: "text", placeholder: t("storage.paste_code_placeholder") } })
   );
-  const submitBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" }, text: "Submit code" });
+  const submitBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" }, text: t("storage.submit_code") });
   codeRow.append(codeInput, submitBtn);
   card.append(codeRow);
 
@@ -273,23 +274,23 @@ function openDropboxPKCEDialog({ accountID, start, signal, announce, onChanged, 
   submitBtn.addEventListener("click", async () => {
     const code = codeInput.value.trim();
     if (!code) {
-      statusLine.textContent = "Paste the code Dropbox showed you first.";
+      statusLine.textContent = t("storage.paste_code_first");
       return;
     }
     submitBtn.disabled = true;
     try {
       const resp = await completeStorageAccountOAuth(accountID, code, signal);
       if (resp.status === "connected") {
-        statusLine.textContent = "Connected.";
-        announce("Dropbox account connected.");
+        statusLine.textContent = t("storage.connected");
+        announce(t("storage.dropbox_connected_announce"));
         card.remove();
         await onChanged();
         return;
       }
-      statusLine.textContent = `Unexpected status: ${resp.status}`;
+      statusLine.textContent = t("storage.unexpected_status", { status: resp.status });
     } catch (err) {
       if (err?.name === "AbortError") return;
-      statusLine.textContent = `Failed to complete connection: ${err.message}`;
+      statusLine.textContent = t("storage.complete_connection_failed", { reason: localizeApiError(err) });
     } finally {
       submitBtn.disabled = false;
     }
@@ -302,7 +303,7 @@ function openDropboxPKCEDialog({ accountID, start, signal, announce, onChanged, 
 
 async function renderAccountListCard(card, { signal, onChanged }) {
   clearChildren(card);
-  card.append(el("h2", { class: "cp-card-title", text: "Connected accounts" }));
+  card.append(el("h2", { class: "cp-card-title", text: t("storage.connected_accounts_title") }));
 
   let accounts;
   try {
@@ -310,12 +311,12 @@ async function renderAccountListCard(card, { signal, onChanged }) {
     accounts = data.accounts || [];
   } catch (err) {
     if (err?.name === "AbortError") return;
-    card.append(el("p", { class: "cp-error-text", text: `Failed to load storage accounts: ${err.message}` }));
+    card.append(el("p", { class: "cp-error-text", text: t("storage.failed_to_load_accounts", { reason: localizeApiError(err) }) }));
     return;
   }
 
   if (accounts.length === 0) {
-    card.append(emptyState({ iconName: "cloud", title: "No storage accounts connected", message: "Connect one above." }));
+    card.append(emptyState({ iconName: "cloud", title: t("host.storage_empty_title"), message: t("storage.connect_one_above") }));
     return;
   }
 
@@ -339,21 +340,21 @@ function accountRow(view, { signal, onChanged }) {
   const chipClass = storageStatusChipClass(snap);
   header.append(el("span", { class: chipClass, text: statusText }));
   if (snap?.stale) {
-    header.append(el("span", { class: "cp-chip cp-chip-warning", text: "Stale" }));
+    header.append(el("span", { class: "cp-chip cp-chip-warning", text: t("host.stale") }));
   }
   row.append(header);
 
   if (snap?.status === "ok") {
     const quota = snap.quota;
     if (quota.unlimited) {
-      row.append(el("span", { class: "cp-muted-small", text: `${formatBytes(quota.used_bytes)} used (unlimited)` }));
+      row.append(el("span", { class: "cp-muted-small", text: t("host.storage_used_unlimited", { amount: formatBytes(quota.used_bytes) }) }));
     } else {
       const pct = storageUsedPercent(quota);
       row.append(
         progressBar({
           value: quota.used_bytes,
           max: quota.limit_bytes,
-          label: `${account.name} storage usage`,
+          label: t("host.storage_usage_label", { name: account.name }),
           levelClass: thresholdBarClass(pct),
           valueText: `${formatBytes(quota.used_bytes)} / ${formatBytes(quota.limit_bytes)} (${formatPercent(pct)})`,
         }),
@@ -364,7 +365,7 @@ function accountRow(view, { signal, onChanged }) {
     }
     if (snap.last_success_at) {
       row.append(
-        el("p", { class: "cp-muted-small", text: `Last checked ${formatRelativeTimeFromUnixSeconds(snap.last_success_at)}` }),
+        el("p", { class: "cp-muted-small", text: t("host.storage_last_checked", { relative: formatRelativeTimeFromUnixSeconds(snap.last_success_at) }) }),
       );
     }
   } else if (snap?.status_detail) {
@@ -372,14 +373,14 @@ function accountRow(view, { signal, onChanged }) {
   }
 
   const actions = el("div", { class: "cp-settings-row" });
-  const disconnectBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: "Disconnect" });
+  const disconnectBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: t("storage.disconnect") });
   disconnectBtn.addEventListener("click", async () => {
-    if (!globalThis.confirm(`Disconnect "${account.name}"? This revokes its stored access token.`)) return;
+    if (!globalThis.confirm(t("storage.confirm_disconnect", { name: account.name }))) return;
     disconnectBtn.disabled = true;
     await withToastOnError(async () => {
       await deleteStorageAccount(account.id, signal);
       await onChanged();
-    }, "Failed to disconnect account");
+    }, t("storage.disconnect_failed_prefix"));
     disconnectBtn.disabled = false;
   });
   actions.append(disconnectBtn);
@@ -396,5 +397,5 @@ function accountRow(view, { signal, onChanged }) {
  * @param {"15m"|"1h"|"6h"|"24h"} interval
  */
 export async function setStorageIntervalWithToast(interval, signal) {
-  return withToastOnError(() => setStorageInterval(interval, signal), "Failed to set storage polling interval");
+  return withToastOnError(() => setStorageInterval(interval, signal), t("storage.set_interval_failed_prefix"));
 }

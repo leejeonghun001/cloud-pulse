@@ -24,13 +24,15 @@ import {
   containerHealthLabel,
   containerComposeLabel,
 } from "../core/ports.js";
+import { t } from "../core/i18n.js";
+import { localizeApiError } from "../core/api.js";
 
 const RANGE_OPTIONS = [
-  { value: "1h", label: "1 hour" },
-  { value: "6h", label: "6 hours" },
-  { value: "24h", label: "24 hours" },
-  { value: "7d", label: "7 days" },
-  { value: "30d", label: "30 days" },
+  { value: "1h", get label() { return t("host.range_1h"); } },
+  { value: "6h", get label() { return t("host.range_6h"); } },
+  { value: "24h", get label() { return t("host.range_24h"); } },
+  { value: "7d", get label() { return t("host.range_7d"); } },
+  { value: "30d", get label() { return t("host.range_30d"); } },
 ];
 
 const LAYOUT_STORAGE_KEY = "cp_host_layout";
@@ -55,7 +57,7 @@ export function mountHostDetailPage(container, hostID, { announce, copyToClipboa
   };
 
   clearChildren(container);
-  const backLink = el("a", { class: "cp-back-link", attrs: { href: "#/" }, text: "← Back to overview" });
+  const backLink = el("a", { class: "cp-back-link", attrs: { href: "#/" }, text: t("host.back_to_overview") });
   container.append(backLink);
 
   const bannerHost = el("div");
@@ -107,9 +109,9 @@ export function mountHostDetailPage(container, hostID, { announce, copyToClipboa
         state.notFound = true;
         clearChildren(container);
         container.append(
-          emptyState({ title: "Host not found", message: `No host with id "${hostID}" is known to this hub.`, iconName: "circleX" }),
+          emptyState({ title: t("host.not_found_title"), message: t("host.not_found_message", { hostID }), iconName: "circleX" }),
         );
-        container.append(el("a", { class: "cp-back-link", attrs: { href: "#/" }, text: "← Back to overview" }));
+        container.append(el("a", { class: "cp-back-link", attrs: { href: "#/" }, text: t("host.back_to_overview") }));
         return false;
       }
       showBanner(describeError(err));
@@ -188,7 +190,7 @@ function renderHostDetailHeader(host, summary, nowMs, { onRangeChange, onLayoutC
   const rightControls = el("div", { class: "cp-host-detail-controls" });
   const { node: rangeNode, select: rangeSelect } = selectField({
     id: "cp-host-range",
-    ariaLabel: "Time range",
+    ariaLabel: t("host.time_range"),
     options: RANGE_OPTIONS,
     value: range,
   });
@@ -202,12 +204,12 @@ function renderHostDetailHeader(host, summary, nowMs, { onRangeChange, onLayoutC
   const badges = [
     statusBadge(isUp, summary.status),
     textBadge(h.hostname),
-    textBadge(`${h.platform || "unknown"} ${h.platform_version || ""}`.trim()),
-    textBadge(`Uptime ${summary.latest ? formatDuration(summary.latest.uptime_seconds) : "unknown"}`),
-    textBadge(`Kernel ${h.kernel_version || "unknown"}`),
-    textBadge(`${h.cpu_model || "unknown"} (${h.cpu_cores || 0} cores)`),
-    textBadge(`Agent ${h.agent_version || "unknown"}`),
-    textBadge(h.provider ? h.provider.toUpperCase() : "OTHER"),
+    textBadge(`${h.platform || t("overview.unknown")} ${h.platform_version || ""}`.trim()),
+    textBadge(t("host.badge_uptime", { value: summary.latest ? formatDuration(summary.latest.uptime_seconds) : t("overview.unknown") })),
+    textBadge(t("host.badge_kernel", { value: h.kernel_version || t("overview.unknown") })),
+    textBadge(t("host.badge_cpu", { model: h.cpu_model || t("overview.unknown"), cores: h.cpu_cores || 0 })),
+    textBadge(t("host.badge_agent", { value: h.agent_version || t("overview.unknown") })),
+    textBadge(h.provider ? h.provider.toUpperCase() : t("host.provider_other_upper")),
   ];
   badges.forEach((b, i) => {
     if (i > 0) badgeRow.append(el("span", { class: "cp-host-detail-badge-divider", attrs: { "aria-hidden": "true" } }));
@@ -219,7 +221,7 @@ function renderHostDetailHeader(host, summary, nowMs, { onRangeChange, onLayoutC
     host.append(
       el("p", {
         class: "cp-host-card-offline-note",
-        text: `Offline since ${formatRelativeTimeFromUnixSeconds(summary.last_seen, nowMs)}`,
+        text: t("overview.offline_since", { relative: formatRelativeTimeFromUnixSeconds(summary.last_seen, nowMs) }),
       }),
     );
   }
@@ -228,7 +230,7 @@ function renderHostDetailHeader(host, summary, nowMs, { onRangeChange, onLayoutC
 function statusBadge(isUp, status) {
   const wrap = el("span", { class: "cp-host-detail-badge cp-host-detail-badge-status" });
   wrap.append(statusDot(status));
-  wrap.append(el("span", { text: isUp ? "Up" : "Down" }));
+  wrap.append(el("span", { text: isUp ? t("host.status_up") : t("host.status_down") }));
   return wrap;
 }
 
@@ -237,15 +239,15 @@ function textBadge(text) {
 }
 
 function buildLayoutToggle(current, onChange) {
-  const group = el("div", { class: "cp-segmented cp-layout-toggle", attrs: { role: "group", "aria-label": "Chart layout" } });
+  const group = el("div", { class: "cp-segmented cp-layout-toggle", attrs: { role: "group", "aria-label": t("host.chart_layout") } });
   const oneBtn = el("button", {
     class: "cp-btn cp-segmented-btn cp-btn-icon",
-    attrs: { type: "button", "aria-pressed": current === "1" ? "true" : "false", "aria-label": "One column", title: "One column" },
+    attrs: { type: "button", "aria-pressed": current === "1" ? "true" : "false", "aria-label": t("host.one_column"), title: t("host.one_column") },
   });
   oneBtn.append(icon("rows3"));
   const twoBtn = el("button", {
     class: "cp-btn cp-segmented-btn cp-btn-icon",
-    attrs: { type: "button", "aria-pressed": current === "2" ? "true" : "false", "aria-label": "Two columns", title: "Two columns" },
+    attrs: { type: "button", "aria-pressed": current === "2" ? "true" : "false", "aria-label": t("host.two_columns"), title: t("host.two_columns") },
   });
   twoBtn.append(icon("columns3"));
   oneBtn.addEventListener("click", () => {
@@ -266,29 +268,29 @@ function renderHostEgressCard(host, hostID, egress) {
   clearChildren(host);
   const card = el("div", { class: "cp-card" });
   const headRow = el("div", { class: "cp-metric-head" });
-  headRow.append(el("h2", { text: "Monthly traffic" }));
+  headRow.append(el("h2", { text: t("host.monthly_traffic") }));
   card.append(headRow);
 
   card.append(
     egressDirectionRow({
-      label: "↑ Outbound",
+      label: t("host.egress_outbound_label"),
       bytes: egress.tx_bytes,
       limitBytes: egress.limit_bytes,
       level: egress.level,
       projectedBytes: egress.projected_tx_bytes,
       hubOverride: egress.limit_source === "hub",
-      barLabel: "Monthly outbound usage",
+      barLabel: t("host.egress_outbound_bar_label"),
     }),
   );
   card.append(
     egressDirectionRow({
-      label: "↓ Inbound",
+      label: t("host.egress_inbound_label"),
       bytes: egress.rx_bytes,
       limitBytes: egress.rx_limit_bytes,
       level: egress.rx_level,
       projectedBytes: egress.projected_rx_bytes,
       hubOverride: egress.rx_limit_source === "hub",
-      barLabel: "Monthly inbound usage",
+      barLabel: t("host.egress_inbound_bar_label"),
     }),
   );
 
@@ -296,7 +298,7 @@ function renderHostEgressCard(host, hostID, egress) {
     el("a", {
       class: "cp-back-link",
       attrs: { href: `#/settings/limits?host=${encodeURIComponent(hostID)}` },
-      text: "Edit limits →",
+      text: t("host.edit_limits"),
     }),
   );
 
@@ -310,7 +312,7 @@ function renderAgentUpdatePanel(host, update, announce, copyToClipboard) {
   if (built.copyBtn) {
     built.copyBtn.addEventListener("click", async () => {
       await copyToClipboard(built.command, undefined);
-      announce?.("Agent update command copied to clipboard.");
+      announce?.(t("host.agent_update_command_copied"));
     });
   }
   host.append(built.node);
@@ -331,25 +333,25 @@ function renderHostCostCard(host, cost, displayCurrency) {
   const money = (v) => formatDisplayAmount(Number(v || 0), displayCurrency, { taxNote: false });
 
   const card = el("div", { class: "cp-card cp-host-cost-card" });
-  card.append(el("h2", { text: "Cost" }));
+  card.append(el("h2", { text: t("host.cost_title") }));
 
   if (cost.provider) {
     if (cost.matched) {
-      card.append(el("p", { text: `Cloud billing (${cost.provider.toUpperCase()}): ${money(cost.cloud_mtd)} MTD · ${money(cost.cloud_forecast)} forecast` }));
+      card.append(el("p", { text: t("host.cloud_billing_matched", { provider: cost.provider.toUpperCase(), mtd: money(cost.cloud_mtd), forecast: money(cost.cloud_forecast) }) }));
     } else {
-      card.append(el("p", { class: "cp-muted-small", text: `Cloud billing (${cost.provider.toUpperCase()}): account total only, not matched to this host.` }));
+      card.append(el("p", { class: "cp-muted-small", text: t("host.cloud_billing_unmatched", { provider: cost.provider.toUpperCase() }) }));
     }
   } else {
-    card.append(el("p", { class: "cp-muted-small", text: "No cloud billing match for this host." }));
+    card.append(el("p", { class: "cp-muted-small", text: t("host.no_cloud_billing_match") }));
   }
 
   if (cost.network_estimate?.plan_id) {
-    card.append(el("p", { text: `Network estimate (${cost.network_estimate.plan_name}): ${money(cost.network_estimate.mtd)} MTD · ${money(cost.network_estimate.projected)} projected` }));
+    card.append(el("p", { text: t("host.network_estimate_line", { plan: cost.network_estimate.plan_name, mtd: money(cost.network_estimate.mtd), projected: money(cost.network_estimate.projected) }) }));
   } else {
-    card.append(el("p", { class: "cp-muted-small", text: "No pricing plan assigned for network cost estimation." }));
+    card.append(el("p", { class: "cp-muted-small", text: t("host.no_pricing_plan_assigned") }));
   }
 
-  card.append(el("p", { class: "cp-muted-small", text: `Total: ${money(cost.total_mtd)} MTD · ${money(cost.total_forecast)} forecast. All amounts excl. tax.` }));
+  card.append(el("p", { class: "cp-muted-small", text: t("host.cost_total_line", { mtd: money(cost.total_mtd), forecast: money(cost.total_forecast) }) }));
   host.append(card);
 }
 
@@ -364,7 +366,7 @@ function renderHostCostCard(host, cost, displayCurrency) {
 function renderServicesCard(host, inventory) {
   clearChildren(host);
   const card = el("div", { class: "cp-card cp-services-card" });
-  card.append(el("h2", { text: "Services & ports" }));
+  card.append(el("h2", { text: t("host.services_and_ports") }));
 
   card.append(renderDockerSection(inventory.docker));
   card.append(renderPortsSection(inventory.ports));
@@ -374,7 +376,7 @@ function renderServicesCard(host, inventory) {
 
 function renderDockerSection(docker) {
   const section = el("div", { class: "cp-services-section" });
-  section.append(el("h3", { class: "cp-services-section-title", text: "Docker containers" }));
+  section.append(el("h3", { class: "cp-services-section-title", text: t("host.docker_containers") }));
 
   if (docker.status !== "ok") {
     const info = dockerStatusInfo(docker.status);
@@ -394,7 +396,7 @@ function renderDockerSection(docker) {
   }
 
   if (!docker.containers || docker.containers.length === 0) {
-    section.append(el("p", { class: "cp-muted-small", text: "No containers reported." }));
+    section.append(el("p", { class: "cp-muted-small", text: t("host.no_containers_reported") }));
     return section;
   }
 
@@ -402,7 +404,7 @@ function renderDockerSection(docker) {
   const table = el("table", { class: "cp-table" });
   const thead = el("thead");
   thead.append(
-    el("tr", { children: ["Name", "Compose", "Image", "State", "Health", "Ports", "Status"].map((t) => el("th", { text: t })) }),
+    el("tr", { children: [t("host.col_name"), t("host.col_compose"), t("host.col_image"), t("host.col_state"), t("host.col_health"), t("host.col_ports"), t("host.col_status")].map((tx) => el("th", { text: tx })) }),
   );
   table.append(thead);
   const tbody = el("tbody");
@@ -443,17 +445,17 @@ function containerRow(c) {
 
 function renderPortsSection(ports) {
   const section = el("div", { class: "cp-services-section" });
-  section.append(el("h3", { class: "cp-services-section-title", text: "Listening ports" }));
+  section.append(el("h3", { class: "cp-services-section-title", text: t("host.listening_ports") }));
 
   if (!ports || ports.length === 0) {
-    section.append(el("p", { class: "cp-muted-small", text: "No listening ports reported." }));
+    section.append(el("p", { class: "cp-muted-small", text: t("host.no_listening_ports_reported") }));
     return section;
   }
 
   const tableWrap = el("div", { class: "cp-table-wrap" });
   const table = el("table", { class: "cp-table" });
   const thead = el("thead");
-  thead.append(el("tr", { children: ["Proto", "Address", "Process", "Container"].map((t) => el("th", { text: t })) }));
+  thead.append(el("tr", { children: [t("host.col_proto"), t("host.col_address"), t("host.col_process"), t("host.col_container")].map((tx) => el("th", { text: tx })) }));
   table.append(thead);
   const tbody = el("tbody");
   for (const p of sortPorts(ports)) {
@@ -478,13 +480,13 @@ function renderDisksTable(host, disks) {
   clearChildren(host);
   if (!disks || disks.length === 0) return;
   const card = el("div", { class: "cp-card" });
-  card.append(el("h2", { text: "Disks" }));
+  card.append(el("h2", { text: t("host.disks_title") }));
   const tableWrap = el("div", { class: "cp-table-wrap" });
   const table = el("table", { class: "cp-table" });
   const thead = el("thead");
   thead.append(
     el("tr", {
-      children: ["Mountpoint", "Device", "FS", "Used", "Total", "Used %"].map((t) => el("th", { text: t })),
+      children: [t("host.col_mountpoint"), t("host.col_device"), t("host.col_fs"), t("host.col_used"), t("host.col_total"), t("host.col_used_pct")].map((tx) => el("th", { text: tx })),
     }),
   );
   table.append(thead);
@@ -525,62 +527,62 @@ function renderHostCharts(host, series) {
   const loadFormatter = (v) => formatLoad(v);
   const specs = [
     {
-      title: "CPU Usage",
-      description: "Average system-wide CPU utilization",
-      series: [{ label: "CPU", color: SERIES_COLORS.cpu }],
+      title: t("host.chart_cpu_title"),
+      description: t("host.chart_cpu_description"),
+      series: [{ label: t("host.chart_series_cpu"), color: SERIES_COLORS.cpu }],
       values: [series.cpu],
-      summary: `CPU usage over time, latest ${lastOrZero(series.cpu).toFixed(1)}%`,
+      summary: t("host.chart_cpu_summary", { value: lastOrZero(series.cpu).toFixed(1) }),
       valueFormatter: percentFormatter,
       yAxisFormatter: percentFormatter,
     },
     {
-      title: "Memory Usage",
-      description: "True available memory usage (total minus available, not naive free)",
-      series: [{ label: "Memory", color: SERIES_COLORS.mem }],
+      title: t("host.chart_memory_title"),
+      description: t("host.chart_memory_description"),
+      series: [{ label: t("host.chart_series_memory"), color: SERIES_COLORS.mem }],
       values: [series.mem],
-      summary: `Memory usage over time, latest ${lastOrZero(series.mem).toFixed(1)}%`,
+      summary: t("host.chart_memory_summary", { value: lastOrZero(series.mem).toFixed(1) }),
       valueFormatter: percentFormatter,
       yAxisFormatter: percentFormatter,
     },
     {
-      title: "Disk Usage",
-      description: "Aggregate disk usage across all mounted filesystems",
-      series: [{ label: "Disk", color: SERIES_COLORS.disk }],
+      title: t("host.chart_disk_title"),
+      description: t("host.chart_disk_description"),
+      series: [{ label: t("host.chart_series_disk"), color: SERIES_COLORS.disk }],
       values: [series.disk],
-      summary: `Disk usage over time, latest ${lastOrZero(series.disk).toFixed(1)}%`,
+      summary: t("host.chart_disk_summary", { value: lastOrZero(series.disk).toFixed(1) }),
       valueFormatter: percentFormatter,
       yAxisFormatter: percentFormatter,
     },
     {
-      title: "Bandwidth",
-      description: "Network receive/transmit throughput",
+      title: t("host.chart_bandwidth_title"),
+      description: t("host.chart_bandwidth_description"),
       series: [
-        { label: "Rx", color: SERIES_COLORS.netRx },
-        { label: "Tx", color: SERIES_COLORS.netTx },
+        { label: t("host.chart_series_rx"), color: SERIES_COLORS.netRx },
+        { label: t("host.chart_series_tx"), color: SERIES_COLORS.netTx },
       ],
       values: [series.net_rx, series.net_tx],
-      summary: `Network throughput over time, latest rx ${formatBytes(lastOrZero(series.net_rx))}/s, tx ${formatBytes(lastOrZero(series.net_tx))}/s`,
+      summary: t("host.chart_bandwidth_summary", { rx: formatBytes(lastOrZero(series.net_rx)), tx: formatBytes(lastOrZero(series.net_tx)) }),
       valueFormatter: bitrateFormatter,
       yAxisFormatter: bitrateFormatter,
     },
     {
-      title: "Disk I/O",
-      description: "Disk read/write throughput",
+      title: t("host.chart_disk_io_title"),
+      description: t("host.chart_disk_io_description"),
       series: [
-        { label: "Read", color: SERIES_COLORS.diskRead },
-        { label: "Write", color: SERIES_COLORS.diskWrite },
+        { label: t("host.chart_series_read"), color: SERIES_COLORS.diskRead },
+        { label: t("host.chart_series_write"), color: SERIES_COLORS.diskWrite },
       ],
       values: [series.disk_read, series.disk_write],
-      summary: `Disk IO over time, latest read ${formatBytes(lastOrZero(series.disk_read))}/s, write ${formatBytes(lastOrZero(series.disk_write))}/s`,
+      summary: t("host.chart_disk_io_summary", { read: formatBytes(lastOrZero(series.disk_read)), write: formatBytes(lastOrZero(series.disk_write)) }),
       valueFormatter: bitrateFormatter,
       yAxisFormatter: bitrateFormatter,
     },
     {
-      title: "Load average",
-      description: "System load average (1 minute)",
-      series: [{ label: "Load1", color: SERIES_COLORS.load1 }],
+      title: t("host.chart_load_title"),
+      description: t("host.chart_load_description"),
+      series: [{ label: t("host.chart_series_load1"), color: SERIES_COLORS.load1 }],
       values: [series.load1],
-      summary: `Load average (1 minute) over time, latest ${formatLoad(lastOrZero(series.load1))}`,
+      summary: t("host.chart_load_summary", { value: formatLoad(lastOrZero(series.load1)) }),
       valueFormatter: loadFormatter,
       yAxisFormatter: loadFormatter,
     },
@@ -593,7 +595,7 @@ function renderHostCharts(host, series) {
     titleRow.append(el("p", { class: "cp-muted-small", text: spec.description }));
     card.append(titleRow);
     if (series.ts.length === 0) {
-      card.append(el("p", { class: "cp-muted-small", text: "No data for this range yet." }));
+      card.append(el("p", { class: "cp-muted-small", text: t("host.no_data_for_range") }));
       host.append(card);
       continue;
     }
@@ -625,6 +627,6 @@ function lastOrZero(arr) {
 }
 
 function describeError(err) {
-  if (err instanceof ApiError) return `API error: ${err.message}`;
-  return "Unable to reach the hub API. Showing last known data.";
+  if (err instanceof ApiError) return t("overview.api_error_prefix", { message: localizeApiError(err) });
+  return t("overview.hub_unreachable_showing_last_known");
 }

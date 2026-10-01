@@ -2,6 +2,9 @@
 // assets/js/pages/settings/network-helpers.js.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { setCatalogs, setLang } from "../assets/js/core/i18n.js";
 import {
   isUnspecifiedOrMulticast,
   looksLikeIP,
@@ -18,6 +21,22 @@ import {
   ERROR_MESSAGES,
   describeNetworkError,
 } from "../assets/js/pages/settings/network-helpers.js";
+
+globalThis.localStorage = (() => {
+  const store = new Map();
+  return {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  };
+})();
+
+const assetsDir = fileURLToPath(new URL("../assets/i18n/", import.meta.url));
+setCatalogs({
+  en: JSON.parse(readFileSync(`${assetsDir}en.json`, "utf-8")),
+  ko: JSON.parse(readFileSync(`${assetsDir}ko.json`, "utf-8")),
+});
+setLang("en");
 
 test("isUnspecifiedOrMulticast: detects unspecified addresses", () => {
   assert.equal(isUnspecifiedOrMulticast("0.0.0.0"), true);
@@ -192,4 +211,15 @@ test("describeNetworkError: maps known codes, falls back to message", () => {
   assert.equal(describeNetworkError({ code: "no_pending" }), ERROR_MESSAGES.no_pending);
   assert.equal(describeNetworkError({ code: "unknown_code", message: "raw message" }), "raw message");
   assert.equal(describeNetworkError({}), "Network settings change failed.");
+});
+
+test("network-helpers render Korean text when lang is ko", () => {
+  setLang("ko");
+  try {
+    assert.equal(validateCustomAddress(""), "주소를 입력하세요.");
+    assert.equal(formatCountdown(1000, 850), "2분 30초");
+    assert.equal(describeNetworkError({ code: "no_pending" }), "확인하거나 되돌릴 대기 중인 네트워크 변경이 없습니다.");
+  } finally {
+    setLang("en");
+  }
 });

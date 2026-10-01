@@ -267,8 +267,8 @@ func TestMe_NoToken401(t *testing.T) {
 		t.Fatalf("status = %d, want 401", rec.Code)
 	}
 	got := decodeJSON[models.APIError](t, rec.Body)
-	if got.Code != "" {
-		t.Errorf("code = %q, want empty (no bearer token at all)", got.Code)
+	if got.Code != "unauthorized" {
+		t.Errorf("code = %q, want %q (no bearer token at all)", got.Code, "unauthorized")
 	}
 }
 

@@ -59,7 +59,7 @@ func (s *Server) handleListPricingPlans(w http.ResponseWriter, r *http.Request) 
 	plans, err := s.store.ListPricingPlans(r.Context())
 	if err != nil {
 		s.logger.Error("list pricing plans failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, plans)
@@ -98,7 +98,7 @@ func (s *Server) handleCreatePricingPlan(w http.ResponseWriter, r *http.Request)
 	r.Body = http.MaxBytesReader(w, r.Body, maxPricingBodyBytes)
 	var req pricingPlanRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
 		return
 	}
 
@@ -111,7 +111,7 @@ func (s *Server) handleCreatePricingPlan(w http.ResponseWriter, r *http.Request)
 	created, err := s.store.CreatePricingPlan(ctx, plan)
 	if err != nil {
 		s.logger.Error("create pricing plan failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -127,18 +127,18 @@ func (s *Server) handleUpdatePricingPlan(w http.ResponseWriter, r *http.Request)
 	ctx := r.Context()
 	id, err := parsePricingID(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id", Code: "invalid_id"})
 		return
 	}
 
 	existing, err := s.store.GetPricingPlan(ctx, id)
 	if err != nil {
 		if isNotFound(err) {
-			writeJSON(w, http.StatusNotFound, models.APIError{Error: "pricing plan not found"})
+			writeJSON(w, http.StatusNotFound, models.APIError{Error: "pricing plan not found", Code: "pricing_plan_not_found"})
 			return
 		}
 		s.logger.Error("get pricing plan failed", "id", id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	if billing.IsBuiltinImmutable(existing) {
@@ -149,7 +149,7 @@ func (s *Server) handleUpdatePricingPlan(w http.ResponseWriter, r *http.Request)
 	r.Body = http.MaxBytesReader(w, r.Body, maxPricingBodyBytes)
 	var req pricingPlanRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
 		return
 	}
 
@@ -164,11 +164,11 @@ func (s *Server) handleUpdatePricingPlan(w http.ResponseWriter, r *http.Request)
 	updated, err := s.store.UpdatePricingPlan(ctx, plan)
 	if err != nil {
 		if isNotFound(err) {
-			writeJSON(w, http.StatusNotFound, models.APIError{Error: "pricing plan not found"})
+			writeJSON(w, http.StatusNotFound, models.APIError{Error: "pricing plan not found", Code: "pricing_plan_not_found"})
 			return
 		}
 		s.logger.Error("update pricing plan failed", "id", id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -182,18 +182,18 @@ func (s *Server) handleDeletePricingPlan(w http.ResponseWriter, r *http.Request)
 	ctx := r.Context()
 	id, err := parsePricingID(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id", Code: "invalid_id"})
 		return
 	}
 
 	existing, err := s.store.GetPricingPlan(ctx, id)
 	if err != nil {
 		if isNotFound(err) {
-			writeJSON(w, http.StatusNotFound, models.APIError{Error: "pricing plan not found"})
+			writeJSON(w, http.StatusNotFound, models.APIError{Error: "pricing plan not found", Code: "pricing_plan_not_found"})
 			return
 		}
 		s.logger.Error("get pricing plan failed", "id", id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	if billing.IsBuiltinImmutable(existing) {
@@ -203,7 +203,7 @@ func (s *Server) handleDeletePricingPlan(w http.ResponseWriter, r *http.Request)
 
 	if err := s.store.DeletePricingPlan(ctx, id); err != nil {
 		s.logger.Error("delete pricing plan failed", "id", id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -228,29 +228,29 @@ func (s *Server) handleSetHostPricing(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := s.store.GetHost(ctx, hostID); err != nil {
 		if isNotFound(err) {
-			writeJSON(w, http.StatusNotFound, models.APIError{Error: "host not found"})
+			writeJSON(w, http.StatusNotFound, models.APIError{Error: "host not found", Code: "host_not_found"})
 			return
 		}
 		s.logger.Error("get host failed", "host_id", hostID, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxPricingBodyBytes)
 	var req hostPricingRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
 		return
 	}
 
 	if req.PlanID != 0 {
 		if _, err := s.store.GetPricingPlan(ctx, req.PlanID); err != nil {
 			if isNotFound(err) {
-				writeJSON(w, http.StatusBadRequest, models.APIError{Error: "plan_id does not exist"})
+				writeJSON(w, http.StatusBadRequest, models.APIError{Error: "plan_id does not exist", Code: "plan_id_not_found"})
 				return
 			}
 			s.logger.Error("get pricing plan failed", "id", req.PlanID, "error", err)
-			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 			return
 		}
 	}
@@ -258,14 +258,14 @@ func (s *Server) handleSetHostPricing(w http.ResponseWriter, r *http.Request) {
 	before, err := s.store.GetHostPricing(ctx, hostID)
 	if err != nil {
 		s.logger.Error("get host pricing failed", "host_id", hostID, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
 	after := models.HostPricing{HostID: hostID, PlanID: req.PlanID}
 	if err := s.store.SetHostPricing(ctx, after); err != nil {
 		s.logger.Error("set host pricing failed", "host_id", hostID, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -318,14 +318,14 @@ func (s *Server) handleGetNetworkBilling(w http.ResponseWriter, r *http.Request)
 		month = models.MonthOf(now)
 	}
 	if _, _, err := models.MonthBounds(month); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid month"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid month", Code: "invalid_month"})
 		return
 	}
 
 	hosts, costByHost, hostPlan, err := s.computeNetworkCostByHost(ctx, month, now)
 	if err != nil {
 		s.logger.Error("compute network cost by host failed", "month", month, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -560,7 +560,7 @@ func (s *Server) handleGetDisplayCurrency(w http.ResponseWriter, r *http.Request
 	settings, err := s.loadDisplayCurrencySettings(r.Context())
 	if err != nil {
 		s.logger.Error("load display currency settings failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, settings)
@@ -587,7 +587,7 @@ func (s *Server) handleSetDisplayCurrency(w http.ResponseWriter, r *http.Request
 	r.Body = http.MaxBytesReader(w, r.Body, maxPricingBodyBytes)
 	var req displayCurrencyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
 		return
 	}
 
@@ -603,7 +603,7 @@ func (s *Server) handleSetDisplayCurrency(w http.ResponseWriter, r *http.Request
 	before, err := s.loadDisplayCurrencySettings(ctx)
 	if err != nil {
 		s.logger.Error("load display currency settings failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -619,18 +619,18 @@ func (s *Server) handleSetDisplayCurrency(w http.ResponseWriter, r *http.Request
 
 	if err := s.store.SetSetting(ctx, SettingDisplayCurrency, string(after.Currency)); err != nil {
 		s.logger.Error("set display currency setting failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	if after.KRWPerUSD != 0 {
 		if err := s.store.SetSetting(ctx, SettingKRWPerUSD, strconv.FormatFloat(after.KRWPerUSD, 'f', -1, 64)); err != nil {
 			s.logger.Error("set krw_per_usd setting failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 			return
 		}
 		if err := s.store.SetSetting(ctx, SettingRateUpdatedAt, strconv.FormatInt(after.RateUpdatedAt, 10)); err != nil {
 			s.logger.Error("set rate_updated_at setting failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 			return
 		}
 	}

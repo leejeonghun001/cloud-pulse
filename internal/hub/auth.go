@@ -94,7 +94,7 @@ func generateSessionToken() (string, error) {
 // header and code "unauthorized" (no bearer token presented at all).
 func unauthorized(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", "Bearer")
-	writeJSON(w, http.StatusUnauthorized, models.APIError{Error: "unauthorized"})
+	writeJSON(w, http.StatusUnauthorized, models.APIError{Error: "unauthorized", Code: "unauthorized"})
 }
 
 // sessionExpired writes a 401 JSON response with code "session_expired"

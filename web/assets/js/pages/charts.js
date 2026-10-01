@@ -4,6 +4,7 @@
 // (destroy on navigation). Depends only on the vendored uPlot ESM
 // build.
 import uPlot from "../../vendor/uplot/uPlot.esm.js";
+import { t } from "../core/i18n.js";
 
 /** Series colors, reused across charts for visual consistency. Chosen
  * to hold up against both the light and dark surface colors. */
@@ -99,7 +100,7 @@ function baseOpts(width, height, title, yAxisFormatter, syncKey) {
         size: yAxisFormatter ? 84 : undefined,
       },
     ],
-    series: [{ label: "Time" }],
+    series: [{ label: t("host.chart_series_time") }],
     _title: title,
   };
 }
@@ -167,7 +168,7 @@ export function createTimeSeriesChart(container, opts) {
   const { title, series, timestamps, values, valueFormatter, yAxisFormatter, syncKey } = opts;
 
   const uplotSeries = [
-    { label: "Time" },
+    { label: t("host.chart_series_time") },
     ...series.map((s) => ({
       label: s.label,
       stroke: s.color,
@@ -213,8 +214,8 @@ export function createSparkline(container, timestamps, values, color = SERIES_CO
       { show: false },
     ],
     series: [
-      { label: "Time" },
-      { label: "Requests", stroke: color, width: 1.5, points: { show: false }, fill: `${color}22` },
+      { label: t("host.chart_series_time") },
+      { label: t("host.chart_series_requests"), stroke: color, width: 1.5, points: { show: false }, fill: `${color}22` },
     ],
   };
   return new ChartHandle(container, options, [timestamps, values]);

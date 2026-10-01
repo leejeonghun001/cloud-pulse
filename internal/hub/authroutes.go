@@ -60,7 +60,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
 		return
 	}
 
@@ -75,7 +75,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	hash, ok, err := s.store.GetSetting(ctx, SettingPasswordHash)
 	if err != nil {
 		s.logger.Error("get password hash failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	if !ok {
@@ -100,7 +100,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	resp, err := s.createSession(ctx, r, mustChange)
 	if err != nil {
 		s.logger.Error("create session failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -145,7 +145,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if idHash != "" {
 		if err := s.store.DeleteSession(r.Context(), idHash); err != nil {
 			s.logger.Error("delete session failed", "error", err)
-			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 			return
 		}
 	}
@@ -188,7 +188,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
 	var req changePasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
 		return
 	}
 
@@ -203,7 +203,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	hash, ok, err := s.store.GetSetting(ctx, SettingPasswordHash)
 	if err != nil {
 		s.logger.Error("get password hash failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	if !ok {
@@ -225,24 +225,24 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	newHash, err := hashPassword(req.NewPassword)
 	if err != nil {
 		s.logger.Error("hash new password failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	if err := s.store.SetSetting(ctx, SettingPasswordHash, newHash); err != nil {
 		s.logger.Error("store new password hash failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	if err := s.store.SetSetting(ctx, SettingMustChangePassword, "0"); err != nil {
 		s.logger.Error("clear must-change-password flag failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
 	resp, err := s.createSession(ctx, r, false)
 	if err != nil {
 		s.logger.Error("create session failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 
@@ -262,7 +262,7 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	sessions, err := s.store.ListSessions(ctx)
 	if err != nil {
 		s.logger.Error("list sessions failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	current := sessionIDHashFromContext(ctx)
@@ -300,7 +300,7 @@ func (s *Server) handleRevokeOtherSessions(w http.ResponseWriter, r *http.Reques
 	revoked, err := s.store.DeleteSessionsExcept(ctx, current)
 	if err != nil {
 		s.logger.Error("revoke other sessions failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"revoked": revoked})

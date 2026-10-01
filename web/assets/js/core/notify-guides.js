@@ -6,6 +6,7 @@
 // No DOM access here so this module is fully covered by node --test
 // without a browser; the settings UI renders CHANNEL_TYPES' data with
 // its own DOM builders.
+import { t } from "./i18n.js";
 
 /**
  * CHANNEL_TYPES lists every models.NotifyChannelType in display order
@@ -13,6 +14,13 @@
  * "text"|"password"|"url", placeholder, secret flag — mirrors
  * models.NotifyChannelType.SecretFields()), and a numbered step-by-step
  * guide with exact UI paths per SPEC-v0.5 §D.
+ *
+ * `label` is the platform's product name (Discord/Telegram/WhatsApp)
+ * and is intentionally a plain string, never translated — every other
+ * user-visible string here (field labels/placeholders, guide steps) is
+ * a getter routed through t() so it re-resolves against the *current*
+ * language every time it's read, since this module's exports are
+ * static top-level data evaluated once at import time.
  * @type {{
  *   value: string,
  *   label: string,
@@ -24,71 +32,89 @@ export const CHANNEL_TYPES = [
   {
     value: "discord",
     label: "Discord",
-    fields: [
-      {
-        key: "webhook_url",
-        label: "Webhook URL",
-        type: "password",
-        placeholder: "https://discord.com/api/webhooks/…",
-        secret: true,
-        required: true,
-      },
-    ],
-    steps: [
-      "Open your Discord server, then go to Server Settings → Integrations → Webhooks.",
-      "Click New Webhook (or select an existing one), pick the channel it should post to.",
-      "Click Copy Webhook URL.",
-      "Paste it into the Webhook URL field below, then Send test.",
-    ],
+    get fields() {
+      return [
+        {
+          key: "webhook_url",
+          label: t("notify.discord_field_webhook_url"),
+          type: "password",
+          placeholder: "https://discord.com/api/webhooks/…",
+          secret: true,
+          required: true,
+        },
+      ];
+    },
+    get steps() {
+      return [
+        t("notify.discord_step_1"),
+        t("notify.discord_step_2"),
+        t("notify.discord_step_3"),
+        t("notify.discord_step_4"),
+      ];
+    },
   },
   {
     value: "telegram",
     label: "Telegram",
-    fields: [
-      { key: "bot_token", label: "Bot token", type: "password", placeholder: "123456:TEST-TOKEN", secret: true, required: true },
-      { key: "chat_id", label: "Chat ID", type: "text", placeholder: "-1001234567890", secret: false, required: true },
-      { key: "message_thread_id", label: "Message thread ID (optional)", type: "text", placeholder: "", secret: false, required: false },
-    ],
-    steps: [
-      "In Telegram, message @BotFather and send /newbot, then follow its prompts.",
-      "@BotFather replies with your bot token — copy it into the Bot token field below.",
-      "Add the bot to the chat/group/channel you want alerts posted to.",
-      "Send any message in that chat, then open https://api.telegram.org/bot<token>/getUpdates in a browser (with your token substituted) to find \"chat\":{\"id\": …} — copy that number into Chat ID.",
-      "Send test to confirm delivery.",
-    ],
+    get fields() {
+      return [
+        { key: "bot_token", label: t("notify.telegram_field_bot_token"), type: "password", placeholder: "123456:TEST-TOKEN", secret: true, required: true },
+        { key: "chat_id", label: t("notify.telegram_field_chat_id"), type: "text", placeholder: "-1001234567890", secret: false, required: true },
+        { key: "message_thread_id", label: t("notify.telegram_field_message_thread_id"), type: "text", placeholder: "", secret: false, required: false },
+      ];
+    },
+    get steps() {
+      return [
+        t("notify.telegram_step_1"),
+        t("notify.telegram_step_2"),
+        t("notify.telegram_step_3"),
+        t("notify.telegram_step_4"),
+        t("notify.telegram_step_5"),
+      ];
+    },
   },
   {
     value: "whatsapp",
     label: "WhatsApp",
-    fields: [
-      { key: "access_token", label: "Access token", type: "password", placeholder: "", secret: true, required: true },
-      { key: "phone_number_id", label: "Phone number ID", type: "text", placeholder: "", secret: false, required: true },
-      { key: "to", label: "Recipient (E.164 digits)", type: "text", placeholder: "15551234567", secret: false, required: true },
-      { key: "template_name", label: "Template name (recommended)", type: "text", placeholder: "", secret: false, required: false },
-      { key: "template_lang", label: "Template language", type: "text", placeholder: "en_US", secret: false, required: false },
-    ],
-    steps: [
-      "Go to Meta for Developers → My Apps → create (or open) an app, then add the WhatsApp product.",
-      "Under WhatsApp → API Setup, copy a temporary (or generate a permanent) access token into Access token below.",
-      "On the same page, copy the Phone number ID into the field below.",
-      "Add your own number as a recipient (API Setup → \"To\") and enter it, digits only with country code, in Recipient below.",
-      "Create and get approval for a message template with an image header (recommended) — enter its name in Template name. Without a template, alerts only deliver inside the 24-hour customer-service window after the recipient last messaged your business number.",
-      "Send test to confirm delivery.",
-    ],
+    get fields() {
+      return [
+        { key: "access_token", label: t("notify.whatsapp_field_access_token"), type: "password", placeholder: "", secret: true, required: true },
+        { key: "phone_number_id", label: t("notify.whatsapp_field_phone_number_id"), type: "text", placeholder: "", secret: false, required: true },
+        { key: "to", label: t("notify.whatsapp_field_to"), type: "text", placeholder: "15551234567", secret: false, required: true },
+        { key: "template_name", label: t("notify.whatsapp_field_template_name"), type: "text", placeholder: "", secret: false, required: false },
+        { key: "template_lang", label: t("notify.whatsapp_field_template_lang"), type: "text", placeholder: "en_US", secret: false, required: false },
+      ];
+    },
+    get steps() {
+      return [
+        t("notify.whatsapp_step_1"),
+        t("notify.whatsapp_step_2"),
+        t("notify.whatsapp_step_3"),
+        t("notify.whatsapp_step_4"),
+        t("notify.whatsapp_step_5"),
+        t("notify.whatsapp_step_6"),
+      ];
+    },
   },
   {
     value: "webhook",
-    label: "Webhook (generic)",
-    fields: [
-      { key: "url", label: "Webhook URL", type: "password", placeholder: "https://hooks.example.com/…", secret: false, required: true },
-      { key: "include_image", label: "Include chart image (base64)", type: "checkbox", placeholder: "", secret: false, required: false },
-    ],
-    steps: [
-      "Any endpoint that accepts a Slack- or Discord-compatible JSON POST body works here (custom scripts, Zapier, n8n, ...).",
-      "Paste its URL into Webhook URL below.",
-      "Enable \"Include chart image\" if your endpoint can handle a base64-encoded PNG field (image_png_base64); leave it off for plain-text-only receivers.",
-      "Send test to confirm delivery.",
-    ],
+    get label() {
+      return t("notify.webhook_label");
+    },
+    get fields() {
+      return [
+        { key: "url", label: t("notify.webhook_field_url"), type: "password", placeholder: "https://hooks.example.com/…", secret: false, required: true },
+        { key: "include_image", label: t("notify.webhook_field_include_image"), type: "checkbox", placeholder: "", secret: false, required: false },
+      ];
+    },
+    get steps() {
+      return [
+        t("notify.webhook_step_1"),
+        t("notify.webhook_step_2"),
+        t("notify.webhook_step_3"),
+        t("notify.webhook_step_4"),
+      ];
+    },
   },
 ];
 
@@ -117,26 +143,26 @@ export function validateChannelConfig(type, config) {
   const def = channelTypeByValue(type);
   const errors = {};
   if (!def) {
-    errors.type = "Choose a platform.";
+    errors.type = t("notify.error_choose_platform");
     return errors;
   }
   for (const field of def.fields) {
     if (field.type === "checkbox") continue;
     const value = (config && config[field.key]) || "";
     if (field.required && value.trim() === "") {
-      errors[field.key] = `${field.label} is required.`;
+      errors[field.key] = t("notify.error_field_required", { field: field.label });
     }
   }
   if (def.value === "discord") {
     const url = (config && config.webhook_url) || "";
     if (url && !/^https:\/\/(discord\.com|discordapp\.com)\/api\/webhooks\//.test(url)) {
-      errors.webhook_url = "Must be a discord.com or discordapp.com webhook URL.";
+      errors.webhook_url = t("notify.error_discord_webhook_url");
     }
   }
   if (def.value === "whatsapp") {
     const to = (config && config.to) || "";
     if (to && !/^[0-9]{6,15}$/.test(to)) {
-      errors.to = "Must be digits only (E.164 without the leading +), e.g. 15551234567.";
+      errors.to = t("notify.error_whatsapp_recipient");
     }
   }
   return errors;

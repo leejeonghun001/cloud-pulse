@@ -31,7 +31,7 @@ func (s *Server) handleGetHostInventory(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		s.logger.Error("get host inventory failed", "host_id", id, "error", err)
-		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error"})
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 

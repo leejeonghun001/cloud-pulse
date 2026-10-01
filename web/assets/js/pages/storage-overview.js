@@ -8,6 +8,7 @@ import { el, progressBar, emptyState } from "../ui/components.js";
 import { formatBytes, formatPercent, formatRelativeTimeFromUnixSeconds } from "../core/format.js";
 import { thresholdBarClass } from "./hosttable.js";
 import { providerLabel, storageStatusLabel, storageStatusChipClass, storageUsedPercent } from "../core/storageusage.js";
+import { t } from "../core/i18n.js";
 
 /**
  * buildStorageAccountsSection renders the overview's Storage section:
@@ -21,14 +22,14 @@ import { providerLabel, storageStatusLabel, storageStatusChipClass, storageUsedP
  */
 export function buildStorageAccountsSection({ accounts, nowMs }) {
   const section = el("section", { class: "cp-section", attrs: { "aria-labelledby": "cp-storage-accounts-heading" } });
-  section.append(el("h2", { id: "cp-storage-accounts-heading", text: "Storage" }));
+  section.append(el("h2", { id: "cp-storage-accounts-heading", text: t("host.storage_section_title") }));
 
   if (!accounts || accounts.length === 0) {
     section.append(
       emptyState({
         iconName: "cloud",
-        title: "No storage accounts connected",
-        message: "Connect a Google Drive or Dropbox account from Settings → Storage to monitor its usage here.",
+        title: t("host.storage_empty_title"),
+        message: t("host.storage_empty_message"),
       }),
     );
     return section;
@@ -63,28 +64,28 @@ function storageAccountCard(view, nowMs) {
   const statusRow = el("div", { class: "cp-metric-head" });
   statusRow.append(el("span", { class: storageStatusChipClass(snap), text: storageStatusLabel(snap) }));
   if (snap?.stale) {
-    statusRow.append(el("span", { class: "cp-chip cp-chip-warning", text: "Stale" }));
+    statusRow.append(el("span", { class: "cp-chip cp-chip-warning", text: t("host.stale") }));
   }
   card.append(statusRow);
 
   if (snap?.status === "ok") {
     const quota = snap.quota;
     if (quota.unlimited) {
-      card.append(el("p", { class: "cp-muted-small", text: `${formatBytes(quota.used_bytes)} used (unlimited)` }));
+      card.append(el("p", { class: "cp-muted-small", text: t("host.storage_used_unlimited", { amount: formatBytes(quota.used_bytes) }) }));
     } else {
       const pct = storageUsedPercent(quota);
       card.append(
         progressBar({
           value: quota.used_bytes,
           max: quota.limit_bytes,
-          label: `${account.name} storage usage`,
+          label: t("host.storage_usage_label", { name: account.name }),
           levelClass: thresholdBarClass(pct),
           valueText: `${formatBytes(quota.used_bytes)} / ${formatBytes(quota.limit_bytes)} (${formatPercent(pct)})`,
         }),
       );
     }
     if (quota.trash_bytes) {
-      card.append(el("p", { class: "cp-muted-small", text: `Trash: ${formatBytes(quota.trash_bytes)}` }));
+      card.append(el("p", { class: "cp-muted-small", text: t("host.storage_trash", { amount: formatBytes(quota.trash_bytes) }) }));
     }
     if (snap.account_email) {
       card.append(el("p", { class: "cp-muted-small", text: snap.account_email }));
@@ -97,8 +98,8 @@ function storageAccountCard(view, nowMs) {
     el("p", {
       class: "cp-muted-small",
       text: snap?.last_success_at
-        ? `Last checked ${formatRelativeTimeFromUnixSeconds(snap.last_success_at, nowMs)}`
-        : "Never successfully checked yet.",
+        ? t("host.storage_last_checked", { relative: formatRelativeTimeFromUnixSeconds(snap.last_success_at, nowMs) })
+        : t("host.storage_never_checked"),
     }),
   );
 

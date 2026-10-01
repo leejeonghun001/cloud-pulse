@@ -9,6 +9,7 @@
 // `node --test` without a browser; the settings UI renders
 // CHECKLISTS' data with its own DOM builders and reads/writes progress
 // via loadChecklistProgress/saveChecklistProgress.
+import { t } from "./i18n.js";
 
 /**
  * CHECKLISTS lists the real-account verification checklist for each
@@ -16,6 +17,12 @@
  * "webhook" channel type has no platform account to verify against,
  * so it is intentionally absent here). Each item is a short, concrete,
  * checkable step per SPEC-v0.6 §4.
+ *
+ * `label` is the platform's product name and is never translated (see
+ * notify-guides.js's CHANNEL_TYPES doc comment); `items` is a getter
+ * so each item's `text` re-resolves against the current language on
+ * every read, since this module's exports are static top-level data
+ * evaluated once at import time.
  * @type {{
  *   value: string,
  *   label: string,
@@ -26,34 +33,40 @@ export const CHECKLISTS = [
   {
     value: "discord",
     label: "Discord",
-    items: [
-      { id: "webhook_permission", text: "Confirm you have the Manage Webhooks permission on the channel the webhook was created in." },
-      { id: "url_format", text: "Confirm the URL matches https://discord.com/api/webhooks/<id>/<token>." },
-      { id: "send_test_image", text: "Send test and confirm the image embed actually appears in the Discord channel." },
-      { id: "regen_invalidates", text: "Remember: deleting or regenerating the webhook invalidates this URL immediately." },
-    ],
+    get items() {
+      return [
+        { id: "webhook_permission", text: t("notify.checklist_discord_webhook_permission") },
+        { id: "url_format", text: t("notify.checklist_discord_url_format") },
+        { id: "send_test_image", text: t("notify.checklist_discord_send_test_image") },
+        { id: "regen_invalidates", text: t("notify.checklist_discord_regen_invalidates") },
+      ];
+    },
   },
   {
     value: "telegram",
     label: "Telegram",
-    items: [
-      { id: "bot_token_issued", text: "Issue a bot token via @BotFather." },
-      { id: "bot_added", text: "Invite the bot to the group (or add it as an admin for a channel)." },
-      { id: "chat_id_confirmed", text: "Message the bot first, then confirm chat_id via getUpdates (negative for groups/channels)." },
-      { id: "thread_id_confirmed", text: "For a topic-enabled group, confirm the message thread id." },
-      { id: "send_test_photo", text: "Send test and confirm the photo and caption both arrive." },
-    ],
+    get items() {
+      return [
+        { id: "bot_token_issued", text: t("notify.checklist_telegram_bot_token_issued") },
+        { id: "bot_added", text: t("notify.checklist_telegram_bot_added") },
+        { id: "chat_id_confirmed", text: t("notify.checklist_telegram_chat_id_confirmed") },
+        { id: "thread_id_confirmed", text: t("notify.checklist_telegram_thread_id_confirmed") },
+        { id: "send_test_photo", text: t("notify.checklist_telegram_send_test_photo") },
+      ];
+    },
   },
   {
     value: "whatsapp",
     label: "WhatsApp",
-    items: [
-      { id: "token_type_confirmed", text: "Confirm the access token type: temporary (24h) vs. a permanent System User token." },
-      { id: "phone_number_id_confirmed", text: "Confirm the Phone number ID from API Setup." },
-      { id: "recipient_allowed", text: "Add the recipient to the test-number allow list (development mode) as E.164 digits." },
-      { id: "template_approved", text: "Confirm the image-header template's approval status and language code." },
-      { id: "send_test_outside_window", text: "Send test via the template path from outside the 24-hour customer-service window." },
-    ],
+    get items() {
+      return [
+        { id: "token_type_confirmed", text: t("notify.checklist_whatsapp_token_type_confirmed") },
+        { id: "phone_number_id_confirmed", text: t("notify.checklist_whatsapp_phone_number_id_confirmed") },
+        { id: "recipient_allowed", text: t("notify.checklist_whatsapp_recipient_allowed") },
+        { id: "template_approved", text: t("notify.checklist_whatsapp_template_approved") },
+        { id: "send_test_outside_window", text: t("notify.checklist_whatsapp_send_test_outside_window") },
+      ];
+    },
   },
 ];
 
