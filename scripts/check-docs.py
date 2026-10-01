@@ -46,6 +46,12 @@ FLAG_RE = re.compile(r"(?<![A-Za-z0-9_.-])(--?[a-z][a-z0-9-]*)\b")
 # repository defines (avoids false positives from grep-like doc text,
 # shell idioms, or third-party tool flags quoted for context).
 FLAG_ALLOWLIST = {
+    # Documented flags of the repo's own Node scripts (not cmd/*/main.go
+    # Go flags): capture-screenshots.mjs (--markers-file, --lang) and
+    # ui-audit.mjs (--lang). check_docs.py's known-flag set is built
+    # from Go flag.*() calls only, so script flags need listing here.
+    "--markers-file",
+    "--lang",
     "-c",
     "-r",
     "-w",

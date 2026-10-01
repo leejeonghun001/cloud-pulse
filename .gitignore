@@ -19,3 +19,6 @@ __pycache__/
 # committed, since committing it would be the leak the scanner exists
 # to catch. See scripts/prepublish-check.py and docs/maintainers.md.
 .prepublish-markers.local
+
+# capture-screenshots.mjs's per-run bookkeeping (see docs/maintainers.md)
+docs/screenshots/**/capture-report.json

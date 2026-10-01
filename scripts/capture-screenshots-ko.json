@@ -1,0 +1,52 @@
+[
+  {
+    "name": "ko-login",
+    "route": "#/login",
+    "lang": "ko",
+    "theme": "dark",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    }
+  },
+  {
+    "name": "ko-overview",
+    "route": "#/",
+    "lang": "ko",
+    "theme": "dark",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    }
+  },
+  {
+    "name": "ko-rollout",
+    "route": "#/rollout",
+    "lang": "ko",
+    "theme": "dark",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    }
+  },
+  {
+    "name": "ko-notifications-health",
+    "route": "#/settings/notifications?tab=health",
+    "lang": "ko",
+    "theme": "dark",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    }
+  },
+  {
+    "name": "ko-settings",
+    "route": "#/settings/network",
+    "lang": "ko",
+    "theme": "dark",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    }
+  }
+]

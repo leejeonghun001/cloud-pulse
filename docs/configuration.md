@@ -125,3 +125,20 @@ to that browser; hub-side settings live in the hub database.
 | Notification language (`en`/`ko`) | Settings → General → Notification language, or `GET/PUT /api/v1/settings/notify-language` | hub setting `notify_language` | `en`; applies to the next message; chart image text stays English |
 | Weekly channel test (on/off, day, time) | Settings → Notifications → Health | hub table `channel_health_settings` (time stored in UTC) | off |
 
+## Dashboard languages
+
+The dashboard ships English (`en`) and Korean (`ko`) catalogs
+(`web/assets/i18n/`). The dashboard language is chosen per browser
+(Auto / English / 한국어); the notification language is a hub-wide
+setting. Representative screens in Korean, produced by the same
+reproducible capture pipeline as the English screenshots (see
+[Regenerating documentation screenshots](maintainers.md#regenerating-documentation-screenshots)),
+are reviewed with each release:
+
+![Korean overview](screenshots/ko/ko-overview.png)
+
+More Korean screens: [sign-in](screenshots/ko/ko-login.png) ·
+[rollout](screenshots/ko/ko-rollout.png) ·
+[notification channel health](screenshots/ko/ko-notifications-health.png) ·
+[network settings](screenshots/ko/ko-settings.png)
+

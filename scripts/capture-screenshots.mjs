@@ -14,6 +14,7 @@
 //     --password-file /tmp/pw.txt --out docs/screenshots \
 //     [--shots scripts/capture-screenshots.json] \
 //     [--markers-file /tmp/markers.json] [--timeout 120000] [--wait 1200]
+//     [--lang en|ko]
 //
 // Before EVERY capture, this tool walks the live DOM (text nodes +
 // title/aria-label/placeholder/alt attributes) and replaces any
@@ -61,6 +62,7 @@ function parseArgs(argv) {
     markersFile: null,
     timeout: DEFAULT_TIMEOUT_MS,
     wait: DEFAULT_WAIT_MS,
+    lang: "en",
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -74,6 +76,7 @@ function parseArgs(argv) {
       case "--markers-file": opt.markersFile = next(); break;
       case "--timeout": opt.timeout = Number(next()); break;
       case "--wait": opt.wait = Number(next()); break;
+      case "--lang": opt.lang = next(); break;
       case "-h":
       case "--help":
         printUsage();
@@ -91,10 +94,10 @@ function parseArgs(argv) {
   return opt;
 }
 
-function printUsage() {
-  process.stderr.write(
+function printUsage() {    process.stderr.write(
     "usage: node scripts/capture-screenshots.mjs --hub URL --password-file FILE --out DIR\n" +
       "  [--user admin] [--shots FILE] [--markers-file FILE] [--timeout ms] [--wait ms]\n" +
+      "  [--lang en|ko]\n" +
       "\n" +
       "The password is NEVER accepted on argv — only via --password-file.\n" +
       "--markers-file points at a JSON file ({\"hostname\":\"...\",\"ipv4\":[...],\"ipv6\":[...]})\n" +
@@ -498,6 +501,18 @@ async function setTheme(session, theme, waitMs) {
 }
 
 /**
+ * setLang applies a dashboard language (localStorage "cp_lang", SPEC-v0.8
+ * §3-3) and reloads so the catalog swap takes effect, mirroring setTheme's
+ * approach (the i18n catalogs load once per page load, so a reload is
+ * required for an already-rendered page).
+ */
+async function setLang(session, lang, waitMs) {
+  await session.evaluate(`localStorage.setItem("cp_lang", ${JSON.stringify(lang)})`);
+  await session.evaluate(`location.reload()`);
+  await sleep(waitMs);
+}
+
+/**
  * resolveFirstHostRoute discovers a real "#/host/<id>" route from the
  * overview page's rendered host links, mirroring ui-audit.mjs's helper
  * of the same name — host IDs are hub-assigned strings (e.g.
@@ -699,12 +714,16 @@ async function main() {
     const otherShots = shots.filter((s) => s.route !== "#/login");
 
     let lastTheme = null;
+    let lastLang = null;
     const captureOne = async (shot) => {
       if (!shot.name || (!shot.route && !shot.resolveHostRoute)) fail(`shot entry missing "name" and "route"/"resolveHostRoute": ${JSON.stringify(shot)}`);
       const viewport = shot.viewport
         ? { width: shot.viewport.width, height: shot.viewport.height }
         : DEFAULT_VIEWPORT;
       const theme = shot.theme || "dark";
+      // Per-shot "lang" overrides --lang (default "en") so one shots file
+      // can mix languages, e.g. a Korean representative-screens set.
+      const lang = shot.lang || opt.lang;
 
       await session.setViewport(viewport.width, viewport.height);
       // Defensively close any native <dialog> left open by a previous
@@ -726,6 +745,10 @@ async function main() {
         route = resolved;
       }
       await session.navigate(`${opt.hub}/${route}`);
+      if (lang !== lastLang) {
+        await setLang(session, lang, opt.wait);
+        lastLang = lang;
+      }
       if (theme !== lastTheme) {
         await setTheme(session, theme, opt.wait);
         lastTheme = theme;
@@ -747,6 +770,7 @@ async function main() {
         route,
         viewport: `${viewport.width}x${viewport.height}`,
         theme,
+        lang,
         bytes: cleanPng.length,
         markersReplaced: replaced,
         chunksBefore,
@@ -765,6 +789,7 @@ async function main() {
 
     await loginViaForm(session, opt.hub, opt.user, password, opt.wait);
     lastTheme = null; // theme was set pre-login against an unauthenticated page; force a re-apply post-login
+    lastLang = null; // same for the dashboard language (cp_lang persists, but re-apply is cheap and explicit)
 
     for (const shot of otherShots) {
       if (hardTimedOut) break;

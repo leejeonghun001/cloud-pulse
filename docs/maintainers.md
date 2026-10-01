@@ -90,6 +90,45 @@ Before running with `--apply`:
 This script is never invoked by CI — it is a deliberate, maintainer-run
 action only.
 
+## Regenerating documentation screenshots
+
+All `docs/screenshots/*.png` images are reproducible from demo data —
+never from this machine's real hosts. The capture tool runs headless
+Firefox via WebDriver BiDi and scrubs any configured local markers
+(real hostname/IPs, supplied only via `--markers-file` or
+`CP_PREPUBLISH_MARKERS`) from the DOM before every shot, then strips
+all PNG metadata chunks. Its `capture-report.json` output is local
+bookkeeping, not documentation — do not commit it.
+
+```bash
+# 1. Sandbox hub on a test port (never :8090)
+CP_AGENT_TOKEN=test-agent-token-0123456789 \
+CP_UI_TOKEN=test-ui-token-0123456789 \
+cloud-pulse-hub -listen 127.0.0.1:18090 -data-dir /tmp/cp-shots &
+
+# 2. Admin password + demo data (keepalive holds hosts "up" during capture)
+printf '%s' 'A-Temporary-Password' | cloud-pulse-hub reset-password \
+  --data-dir /tmp/cp-shots --password-stdin
+python3 scripts/demo-seed.py --hub http://127.0.0.1:18090 \
+  --token test-agent-token-0123456789 --ui-token test-ui-token-0123456789 \
+  --live 240 &
+
+# 3. English set (scripts/capture-screenshots.json)
+node scripts/capture-screenshots.mjs --hub http://127.0.0.1:18090 \
+  --password-file /tmp/pw.txt --out docs/screenshots
+
+# 4. Korean set (SPEC-v0.8 §3-3: representative screens for human
+#    review; reviewed with each release, see docs/configuration.md)
+node scripts/capture-screenshots.mjs --hub http://127.0.0.1:18090 \
+  --password-file /tmp/pw.txt --out docs/screenshots/ko \
+  --shots scripts/capture-screenshots-ko.json
+```
+
+A per-shot `"lang"` field overrides `--lang`, so one shots file can
+mix languages. After regenerating, run
+`python3 scripts/prepublish-check.py` — tree findings (including PNG
+metadata and personal markers) are hard failures.
+
 ## Public-repository final check (`scripts/prepublish-check.py`)
 
 Before merging any change that touches test fixtures, documentation,
