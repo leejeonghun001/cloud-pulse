@@ -78,6 +78,7 @@ require the same; there is no "admin_disabled" mode.
 | `GET /api/v1/audit?entity_type=&limit=&before=` | Paginated audit log | Admin |
 | `GET /healthz` | Liveness check | None |
 | `GET /` and static assets | Embedded dashboard | None |
+| `GET /<route>` (no file extension, not under `/assets/`, e.g. `/login`, `/settings/network`) | Dashboard `index.html`; the page moves the path into its hash route (`/#/login`). Missing `/assets/*` files and paths with an extension return 404 | None |
 
 A validation failure on any `POST`/`PUT` endpoint above responds `400`
 with `APIError.details` — a `field -> message` map — so the Settings

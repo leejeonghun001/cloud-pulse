@@ -1846,3 +1846,18 @@ never rewrite history here, only add to it.
 - **Rejected**: reading the setting once at startup (stale after a
   change); localizing the webhook JSON keys (breaks existing receivers).
 
+### D-096 — Dashboard deep links get `index.html`; missing assets still 404 (2026-10-01)
+
+- **Context**: the dashboard routes by URL hash (`/#/login`), but users
+  type or bookmark `/login`. The static handler returned 404 for every
+  path that named no embedded file.
+- **Decision**: `handleStatic` serves `index.html` (200, `no-cache`) for
+  a path with no file extension outside `/assets/` that names no embedded
+  file; the client's bootstrap rewrites `/login` to `/#/login` with
+  `history.replaceState` before rendering (`pathToHashRoute`). `/api/*`
+  keeps its JSON 404, and missing `/assets/*` or `*.ext` paths keep a
+  plain 404 so a broken script/image reference never receives HTML.
+- **Rejected**: switching the router to the History API (every link,
+  test and installer message uses hash URLs; a larger change for no user
+  benefit in v0.8).
+

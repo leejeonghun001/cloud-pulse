@@ -469,6 +469,24 @@ assert 'error' in doc, 'missing error field in 404 body'
 pass "GET /api/v1/nope -> 404 JSON"
 
 # ---------------------------------------------------------------------------
+# Dashboard deep links (/login, /settings/network) serve index.html; a
+# missing static asset still 404s instead of receiving HTML.
+# ---------------------------------------------------------------------------
+
+for DEEP_PATH in /login /settings/network; do
+  DEEP_STATUS="$(curl -s -o "${TMP_DIR}/deeplink.html" -w '%{http_code}' "${HUB_BASE_URL}${DEEP_PATH}")"
+  if [ "$DEEP_STATUS" != "200" ] || ! grep -q '/assets/js/main.js' "${TMP_DIR}/deeplink.html"; then
+    fail "GET ${DEEP_PATH} returned ${DEEP_STATUS} without the dashboard, want 200 index.html"
+  fi
+done
+pass "GET /login and /settings/network -> 200 dashboard index.html"
+MISSING_ASSET_STATUS="$(curl -s -o /dev/null -w '%{http_code}' "${HUB_BASE_URL}/assets/js/does-not-exist.js")"
+if [ "$MISSING_ASSET_STATUS" != "404" ]; then
+  fail "GET /assets/js/does-not-exist.js returned ${MISSING_ASSET_STATUS}, want 404"
+fi
+pass "GET missing asset -> 404"
+
+# ---------------------------------------------------------------------------
 # v0.2: ingest response server_time_ms is within 5s of local time
 # ---------------------------------------------------------------------------
 

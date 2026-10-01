@@ -307,3 +307,57 @@ func TestWrongMethod_405(t *testing.T) {
 		t.Errorf("error = %q, want method not allowed", got.Error)
 	}
 }
+
+func TestStaticServing_SPADeepLinkFallback(t *testing.T) {
+	t.Parallel()
+	assets := fstest.MapFS{
+		"index.html":          &fstest.MapFile{Data: []byte("<html>dashboard</html>")},
+		"assets/js/main.js":   &fstest.MapFile{Data: []byte("console.log('main')")},
+		"assets/app.css":      &fstest.MapFile{Data: []byte("body{}")},
+		"assets/i18n/en.json": &fstest.MapFile{Data: []byte("{}")},
+	}
+	s := New(testOptions(), newFakeStore(), nil, nil, assets, testLogger())
+
+	for _, p := range []string{"/login", "/settings", "/settings/network", "/host/abc", "/login/"} {
+		rec := doRequest(t, s.Handler(), http.MethodGet, p, "203.0.113.1:1234", "", nil)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "dashboard") {
+			t.Errorf("GET %s = %d %q, want 200 with index.html", p, rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get("Cache-Control"); got != "no-cache" {
+			t.Errorf("GET %s Cache-Control = %q, want no-cache", p, got)
+		}
+	}
+
+	// Real files are still served as themselves.
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/assets/js/main.js", "203.0.113.1:1234", "", nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "console.log") {
+		t.Errorf("GET /assets/js/main.js = %d %q", rec.Code, rec.Body.String())
+	}
+
+	// Missing assets and file-like paths never get HTML.
+	for _, p := range []string{"/assets/js/missing.js", "/assets/nope", "/favicon.ico", "/robots.txt"} {
+		rec := doRequest(t, s.Handler(), http.MethodGet, p, "203.0.113.1:1234", "", nil)
+		if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "dashboard") {
+			t.Errorf("GET %s = %d %q, want a plain 404", p, rec.Code, rec.Body.String())
+		}
+	}
+
+	// Unknown API paths keep their JSON 404.
+	rec = doRequest(t, s.Handler(), http.MethodGet, "/api/v1/login", "203.0.113.1:1234", "", nil)
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Header().Get("Content-Type"), "application/json") {
+		t.Errorf("GET /api/v1/login = %d %s, want JSON 404", rec.Code, rec.Header().Get("Content-Type"))
+	}
+}
+
+func TestIsSPARoute(t *testing.T) {
+	t.Parallel()
+	cases := map[string]bool{
+		"/": false, "": false, "/login": true, "/settings/network": true,
+		"/assets/app.css": false, "/assets/x": false, "/favicon.ico": false, "/a/b.json": false,
+	}
+	for in, want := range cases {
+		if got := isSPARoute(in); got != want {
+			t.Errorf("isSPARoute(%q) = %v, want %v", in, got, want)
+		}
+	}
+}

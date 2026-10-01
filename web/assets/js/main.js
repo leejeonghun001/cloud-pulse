@@ -4,7 +4,7 @@
 // forced change-password modal. Routes: "#/login", "#/" overview,
 // "#/host/<id>" host detail, "#/settings" and "#/settings/<section>".
 import { initThemeWatcher } from "./core/theme.js";
-import { Router } from "./core/router.js";
+import { Router, pathToHashRoute } from "./core/router.js";
 import { getSessionToken, clearSessionToken, removeLegacyToken, parseLoginNext } from "./core/auth.js";
 import { onUnauthorized, onPasswordChangeRequired, getMe, getVersion, getAgentToken, getActiveAlerts } from "./core/api.js";
 import { loadCatalogs, htmlLang, t } from "./core/i18n.js";
@@ -361,6 +361,11 @@ async function checkInitialAuth() {
 }
 
 async function bootstrap() {
+  // A deep link such as /login is served index.html by the hub; move it
+  // into the hash route this app actually uses before anything renders.
+  const hashURL = pathToHashRoute(location.pathname, location.search, location.hash);
+  if (hashURL) history.replaceState(null, "", hashURL);
+
   await loadCatalogs();
   document.documentElement.lang = htmlLang();
 

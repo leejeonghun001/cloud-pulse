@@ -124,3 +124,22 @@ export class Router {
     this.dispatch();
   }
 }
+
+/**
+ * pathToHashRoute converts a deep-link path the hub served index.html
+ * for (e.g. "/login", "/settings/network?x=1") into the equivalent hash
+ * route URL ("/#/login", "/#/settings/network?x=1"), or returns null when
+ * the URL is already a plain "/" (+ hash) URL. An existing hash wins:
+ * "/login#/alerts" becomes "/#/alerts".
+ * @param {string} pathname
+ * @param {string} search
+ * @param {string} hash
+ * @returns {string|null}
+ */
+export function pathToHashRoute(pathname, search, hash) {
+  if (!pathname || pathname === "/") return null;
+  if (hash && hash !== "#") return `/${hash}`;
+  const trimmed = pathname.replace(/\/+$/, "") || "/";
+  return `/#${trimmed}${search || ""}`;
+}
+

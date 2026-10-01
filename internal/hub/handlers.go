@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -44,6 +46,13 @@ func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
 // other route matched) get a JSON 404, since http.ServeMux would
 // otherwise route them here as the least-specific match. When assets is
 // nil, every request falls back to a JSON 404.
+//
+// A path that names no embedded file but looks like a dashboard route
+// (see isSPARoute, e.g. "/login" or "/settings/network") gets index.html
+// with 200, so a bookmarked or typed deep link opens the dashboard; the
+// client then moves the path into its hash route. Missing files under
+// /assets/ or with an extension still 404, so a broken script or image
+// reference never receives HTML.
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/api/") || s.assets == nil {
 		writeJSON(w, http.StatusNotFound, models.APIError{Error: "not found", Code: "not_found"})
@@ -53,7 +62,33 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	// browsers to revalidate them so an upgraded hub immediately serves the
 	// replacement dashboard instead of a stale cached bundle.
 	w.Header().Set("Cache-Control", "no-cache")
+	if isSPARoute(r.URL.Path) && !assetExists(s.assets, r.URL.Path) {
+		http.ServeFileFS(w, r, s.assets, "index.html")
+		return
+	}
 	http.FileServerFS(s.assets).ServeHTTP(w, r)
+}
+
+// isSPARoute reports whether urlPath may be a client-side dashboard
+// route rather than a static file: not the root, not under /assets/,
+// and no file extension in its last segment.
+func isSPARoute(urlPath string) bool {
+	if urlPath == "/" || urlPath == "" || strings.HasPrefix(urlPath, "/assets/") {
+		return false
+	}
+	clean := path.Clean(urlPath)
+	return !strings.Contains(path.Base(clean), ".")
+}
+
+// assetExists reports whether urlPath names a file or directory in
+// assets.
+func assetExists(assets fs.FS, urlPath string) bool {
+	name := strings.TrimPrefix(path.Clean(urlPath), "/")
+	if name == "" {
+		return true
+	}
+	_, err := fs.Stat(assets, name)
+	return err == nil
 }
 
 // handleIngest processes an agent report: POST /api/v1/agent/report.
