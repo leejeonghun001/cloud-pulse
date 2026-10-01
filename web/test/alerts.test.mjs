@@ -307,7 +307,7 @@ test("ruleSummarySentence renders Korean text when lang is ko", () => {
   try {
     const rule = { metric: "cpu", host_id: "", operator: ">", threshold: 90, duration_sec: 300, channel_ids: [1] };
     const sentence = ruleSummarySentence(rule, { channelNameByID: () => "Discord #ops" });
-    assert.equal(sentence, "모든 호스트의 CPU 사용률이 5분 동안 90% 초과이면 Discord #ops로 알립니다");
+    assert.equal(sentence, "모든 호스트의 CPU 사용률이 5분 동안 90% 초과이면 알림 → Discord #ops");
     assert.equal(metricLabel("cpu"), "CPU 사용률");
   } finally {
     setLang("en");

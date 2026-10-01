@@ -113,7 +113,7 @@ function intervalCard({ billing, signal, announce, onChanged }) {
     for (const snap of billing.snapshots) {
       const item = el("li", { class: "cp-billing-provider-status-row" });
       item.append(el("strong", { text: snap.provider.toUpperCase() }));
-      item.append(el("span", { class: "cp-chip", text: snap.status }));
+      item.append(el("span", { class: "cp-chip", text: providerStatusLabel(snap.status) }));
       if (snap.stale) {
         item.append(el("span", { class: "cp-chip cp-chip-warning", text: t("costs.stale_data") }));
       }
@@ -578,3 +578,13 @@ function describeError(err) {
   if (err instanceof ApiError) return err.message;
   return String(err?.message || err);
 }
+
+/** providerStatusLabel localizes a models.CloudBillingStatus value
+ * (shared with the Costs page's costs.status_* keys), falling back to
+ * the raw value for a status this dashboard version doesn't know. */
+export function providerStatusLabel(status) {
+  const key = `costs.status_${status}`;
+  const label = t(key);
+  return label === key ? status : label;
+}
+
