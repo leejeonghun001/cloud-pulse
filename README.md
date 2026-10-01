@@ -15,7 +15,9 @@ the binary.
 
 More screenshots: [host detail](docs/screenshots/host-detail.png) ·
 [mobile](docs/screenshots/mobile.png) ·
-[settings](docs/screenshots/settings.png)
+[settings](docs/screenshots/settings.png) ·
+[rollout](docs/screenshots/rollout.png) ·
+[channel health](docs/screenshots/notifications-health.png)
 
 ## Features
 
@@ -42,11 +44,21 @@ More screenshots: [host detail](docs/screenshots/host-detail.png) ·
   independent of real billing.
 - **Alerting** with chart images to Discord, Telegram, and WhatsApp:
   configurable rules (CPU/memory/disk/load average/egress/host-down/
-  storage-usage) through a persistent state machine.
+  storage-usage, plus agent-outdated and failed update batches)
+  through a persistent state machine.
+- **Notification channel health**: an opt-in weekly test message per
+  channel, 7/30-day delivery success rates, and a "channel X is
+  failing" alert sent through a different, healthy channel (or a
+  dashboard banner when none is left).
 - **Inventory**: Docker/Podman containers and listening ports per host.
 - **Remote agent updates**: trigger `update` on a batch of hosts from
   the dashboard (Linux >= v0.6.0, macOS/Windows >= v0.7.0), opt-in only,
-  request-only from the hub's side.
+  request-only from the hub's side. The **Rollout** page shows versions
+  per OS, outdated hosts, batch history, and updates every opted-in
+  outdated host in one confirmed batch.
+- **English and Korean**: dashboard language per browser (Settings →
+  General, also on the sign-in page) and a separate hub-wide language
+  for notification messages.
 - **Single static binaries**, `CGO_ENABLED=0` always, no AWS SDK
   (hand-written SigV4), embedded SQLite with rollups and automatic
   retention pruning.

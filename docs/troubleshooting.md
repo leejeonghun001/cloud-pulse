@@ -77,9 +77,35 @@ for the full code table, and
 for `cloud-pulse-hub notify verify` as an independent, scriptable check
 outside the browser.
 
+## A channel shows "Failing" on the Health tab
+
+Settings → Notifications → Health (`#/settings/notifications?tab=health`)
+marks a channel failing when its latest weekly test failed or fewer
+than 50% of its deliveries in the last 7 days succeeded — see
+[notifications.md](notifications.md#health-report) for the thresholds.
+Open the channel's diagnosis card (or press **Send test** on the
+Channels tab) for the classified reason, fix the channel, then press
+**Run now** to re-test. The "channel X is failing" alert goes out
+through another healthy channel; when there is none, the dashboard
+shows a banner instead.
+
+## Alerts arrive in the wrong language
+
+Notification text follows the hub-wide Settings → General →
+Notification language, not your dashboard language. Text inside chart
+images is always English.
+
+## `/login` or a bookmarked page returns 404
+
+Hubs older than v0.8.0 only serve the dashboard at `/`; use
+`http://<hub>:8090/#/login` there, or upgrade. On v0.8.0+, a path like
+`/login` or `/settings/network` opens the dashboard, while missing
+files under `/assets/` and unknown `/api/` paths still return 404.
+
 ## Remote agent update stuck or failing
 
-Check the failure reason shown on the Updates page against the table in
+Check the failure reason shown on the Rollout page (select the batch
+in its batch history) against the table in
 [remote-updates.md](remote-updates.md#statuses-and-failure-reasons) —
 most commonly `not_enabled` (the agent hasn't set
 `CP_REMOTE_UPDATE=on`) or `unsupported` (OS/version below that

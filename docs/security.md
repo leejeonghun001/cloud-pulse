@@ -3,7 +3,11 @@
 ## Sign-in and accounts
 
 The dashboard always requires signing in. The hub has a single account,
-username `admin`.
+username `admin`. Since v0.8.0, `http://<hub>:8090/login` (or any other
+dashboard path, such as `/settings/network`) opens the dashboard and
+switches to its hash route (`/#/login`); signing in is still required
+for every page except the sign-in page itself. The sign-in page has a
+language selector (English / 한국어).
 
 - **First run**: the hub bootstraps the admin account with the
   well-known default password `changeme` and marks it as needing a

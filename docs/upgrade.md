@@ -54,6 +54,37 @@ Recommended order for a fleet: **upgrade the hub first, then agents**.
 Old agents keep working against a new hub unmodified, so there is no
 requirement to upgrade every agent in lockstep.
 
+## Upgrading to v0.8.0
+
+v0.8.0 is a hub-only upgrade. `sudo cloud-pulse-hub update` replaces
+the binary and applies migration `0007_v08.sql` on the next start: an
+index on `update_jobs` plus three new tables (`channel_health_settings`,
+`channel_synthetic_results`, `channel_failure_incidents`). Existing
+hosts, alert rules, notify channels, update history, pricing plans,
+storage accounts and the audit log are kept as they are. To get
+evidence of that before and after, use the verification kit below
+(`hub-upgrade-check.sh pre` / `post --expect v0.8.0`).
+
+The agent wire format is unchanged, so v0.7.x agents keep reporting
+to a v0.8.0 hub; update them whenever convenient (the new Rollout
+page shows which ones are behind).
+
+Nothing new turns on by itself:
+
+- The Updates page is now **Rollout** (`#/rollout`); old `#/updates`
+  links redirect there. See
+  [remote-updates.md](remote-updates.md#rollout-dashboard-spec-v08-3-1).
+- The `agent_outdated` and `update_batch_failed` rules exist only once
+  you add them from the rule editor's presets
+  ([alerting.md](alerting.md#rollout-alerts-spec-v08-3-1)).
+- The weekly channel test is off for every channel until you enable it
+  per channel ([notifications.md](notifications.md#health-report)).
+- Notification text stays English until you change Settings → General
+  → Notification language. The dashboard language defaults to the
+  browser's language (Korean for `ko*`, otherwise English).
+- Links such as `http://<hub>:8090/login` now open the dashboard
+  instead of returning 404.
+
 ## Upgrading to v0.7.0
 
 A plain `sudo cloud-pulse-hub update` (no reinstall needed if you're

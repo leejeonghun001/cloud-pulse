@@ -45,6 +45,12 @@ Dependencies point inward, following a Clean-Architecture-style split:
 - `internal/alerting`, `internal/notify`, `internal/billing`,
   `internal/storageusage`, `internal/cloud`: feature-specific business
   logic, each testable in isolation against fakes.
+- `internal/channelhealth`: notification channel health — the weekly
+  synthetic-test scheduler and runner, delivery statistics, the
+  healthy/degraded/failing state, and fallback-channel selection.
+- `internal/i18n`: English/Korean catalogs for hub-generated
+  notification text, selected by the `notify_language` setting. The
+  dashboard's own catalogs live in `web/assets/i18n/`.
 - `internal/poller`: the generic quiet-skip polling framework shared by
   the billing and storage-usage collectors (scheduler with injected
   clock, rate-limited manual refresh, freshness tracking, last-success

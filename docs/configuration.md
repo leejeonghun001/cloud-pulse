@@ -112,3 +112,16 @@ only session-based sign-in works.
 
 Same `update` exit codes as the hub: `0` success/current, `10`
 (`--check` only) update available, `1` error.
+
+## Settings changed from the dashboard
+
+These are not environment variables. Browser-side settings apply only
+to that browser; hub-side settings live in the hub database.
+
+| Setting | Where | Stored in | Default |
+|---|---|---|---|
+| Dashboard language (Auto / English / 한국어) | Settings → General, and the sign-in page | browser `localStorage` key `cp_lang` | Auto: Korean if the browser language starts with `ko`, otherwise English |
+| Theme | Settings → General, navbar toggle | browser `localStorage` key `cp_theme` | follow the OS |
+| Notification language (`en`/`ko`) | Settings → General → Notification language, or `GET/PUT /api/v1/settings/notify-language` | hub setting `notify_language` | `en`; applies to the next message; chart image text stays English |
+| Weekly channel test (on/off, day, time) | Settings → Notifications → Health | hub table `channel_health_settings` (time stored in UTC) | off |
+
