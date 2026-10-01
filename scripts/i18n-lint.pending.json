@@ -28,7 +28,6 @@
     "web/assets/js/pages/settings/storage.js",
     "web/assets/js/pages/settings/traffic.js",
     "web/assets/js/pages/storage-overview.js",
-    "web/assets/js/pages/updates.js",
     "web/assets/js/ui/components.js",
     "web/assets/js/ui/palette.js",
     "web/assets/js/ui/password-field.js"

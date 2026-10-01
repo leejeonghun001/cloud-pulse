@@ -1676,3 +1676,83 @@ never rewrite history here, only add to it.
   `hub-upgrade-check.sh` itself unless that release's schema needs a
   genuinely new *kind* of check beyond row-count/host/settings
   preservation.
+
+### D-091 — `GET /api/v1/fleet/versions` and `GET /api/v1/agents/updates/batches` use `requireUser`, not `requireAdmin` (2026-10-01)
+
+- **Context**: SPEC-v0.8 §3-1's rollout dashboard needed to decide
+  which auth tier its two new read-only endpoints sit at. Every
+  *mutating* remote-update endpoint (`POST /api/v1/agents/updates`,
+  its `/retry`/`/cancel` actions) is `requireAdmin` — creating or
+  altering update batches is an administrative action with real
+  side effects on managed infrastructure. But `GET
+  /api/v1/fleet/versions` and `GET /api/v1/agents/updates/batches`
+  are pure reads.
+- **Decision**: Both new endpoints use `requireUser` (any signed-in
+  account), matching the existing precedent set by `GET /api/v1/hosts`,
+  `GET /api/v1/alerts/events`, `GET /api/v1/storage/accounts`, and
+  every other read-only fleet-wide `GET` route already in the codebase
+  — the hub's established pattern is "read access is available to any
+  signed-in user; only mutations require admin." Neither new endpoint
+  discloses anything a signed-in user couldn't already piece together
+  from `GET /api/v1/hosts` (agent version, OS, remote-update capability
+  are already present there) or `GET /api/v1/agents/updates?batch=`
+  (already `requireAdmin` for the per-job detail view, but the
+  *existence* of a batch and its aggregate counts are not more
+  sensitive than the per-job list a non-admin already can't see) —
+  they only aggregate and present that data differently.
+- **Consequences**: A non-admin signed-in user can see the fleet's
+  version distribution and batch history on the Rollout dashboard, but
+  cannot create, retry, or cancel anything — matching how the rest of
+  the dashboard already splits "look" from "touch." If a future
+  requirement narrows read access to admins only, both routes would
+  need to switch to `requireAdmin` together, since the dashboard page
+  itself doesn't currently branch its own auth-tier assumptions per
+  endpoint.
+
+### D-092 — Rollout alert metrics reuse `alert_state`/`AlertEvent` with a synthetic scope ID, not new tables (2026-10-01)
+
+- **Context**: SPEC-v0.8 §3-1 needed two new alert kinds:
+  `agent_outdated` (host-scoped, needs sustained-duration + cooldown +
+  resolve semantics identical to every existing host-scoped metric) and
+  `update_batch_failed` (batch-scoped, fires exactly once per batch,
+  never resolves). Neither maps cleanly onto a host or a real per-rule
+  duration column without extending the schema, but `internal/alerting`
+  already had a working precedent: SPEC-v0.7 §3's `storage_usage_pct`
+  repurposes `AlertRule.HostID`/`alert_state.host_id` to hold a storage
+  account's ID instead of a real host ID (see D-0xx in the storage
+  section and `storageusage.go`'s own doc comments), reusing the
+  existing state machine and table rather than adding
+  `alert_state_by_account`.
+- **Decision**: `agent_outdated` is host-scoped in the literal sense
+  (its `HostID` really is a host ID, no repurposing needed) and simply
+  slots into the existing `Evaluate`-style state machine
+  (`EvaluateAgentOutdated` in `internal/alerting/rollout.go`), deriving
+  its "satisfied" value from a hub-computed `OutdatedSince` timestamp
+  rather than a queried time series — mirroring `host_down`'s own
+  liveness-timestamp-derived value (`hostDownValue`) rather than
+  inventing a third sustained-window mechanism.
+  `update_batch_failed` goes further: it bypasses the ok/pending/firing
+  state machine entirely (there is no "pending" or "resolved" for an
+  already-finished batch) and instead uses a single `alert_state` row,
+  keyed by `(rule_id, batch_id)` with `batch_id` standing in for
+  `host_id` exactly like `storage_usage_pct`'s account-ID repurposing,
+  purely as an idempotency marker: `State == firing` means "already
+  notified for this batch," checked and set inside
+  `EvaluateUpdateBatch` without ever transitioning through `pending`.
+- **Consequences**: No new migration section, no new store methods —
+  both metrics ride entirely on `ListAlertRules`/`GetAlertState`/
+  `SetAlertState`/`CreateAlertEvent`/`UpdateAlertEvent`, the same
+  interface every other metric already depends on
+  (`internal/alerting/store.go`'s `Store` interface needed zero
+  changes). This is a deliberate repeated pattern now: any future
+  alert metric that doesn't cleanly fit "one host, one sustained
+  numeric condition" should look at repurposing `alert_state`'s
+  `(rule_id, host_id)` key with a synthetic scope ID before reaching
+  for a new table — three metrics (`storage_usage_pct`,
+  `agent_outdated`'s scope reuse is trivial/literal, and
+  `update_batch_failed`'s idempotency-only reuse) now demonstrate the
+  range of what this key can stand in for. The tradeoff is that a
+  `alert_state`/`AlertEvent` row's `host_id`/`hostname` fields no
+  longer always mean literally "a host" — `internal/alerting`'s own
+  doc comments (and this entry) are the source of truth for decoding
+  which repurposing applies to which metric.

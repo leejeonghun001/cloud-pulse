@@ -627,6 +627,30 @@ export function cancelUpdateBatch(batchID, signal) {
 }
 
 // ---------------------------------------------------------------------------
+// Fleet rollout dashboard (SPEC-v0.8 §3-1).
+// ---------------------------------------------------------------------------
+
+/** getFleetVersions fetches GET /api/v1/fleet/versions (any signed-in
+ * user). Returns models.FleetVersionSummary. */
+export function getFleetVersions(signal) {
+  return apiFetch("/api/v1/fleet/versions", { signal });
+}
+
+/**
+ * getUpdateBatches fetches GET /api/v1/agents/updates/batches?limit=&
+ * before= (any signed-in user). Returns
+ * {batches: models.UpdateBatchSummary[]}.
+ * @param {{limit?: number, before?: number}} [params]
+ */
+export function getUpdateBatches({ limit, before } = {}, signal) {
+  const query = {};
+  if (limit) query.limit = String(limit);
+  if (before) query.before = String(before);
+  const qs = Object.keys(query).length > 0 ? `?${new URLSearchParams(query)}` : "";
+  return apiFetch(`/api/v1/agents/updates/batches${qs}`, { signal });
+}
+
+// ---------------------------------------------------------------------------
 // Audit log (SPEC-v0.6 §3 개선 c).
 // ---------------------------------------------------------------------------
 

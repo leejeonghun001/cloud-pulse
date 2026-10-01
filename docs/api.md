@@ -70,6 +70,8 @@ require the same; there is no "admin_disabled" mode.
 | `POST /api/v1/agents/updates` | Create a remote-update batch | Admin |
 | `POST /api/v1/agents/updates/{job_id}/retry` | Re-queue a failed job as a new job | Admin |
 | `POST /api/v1/agents/updates/{batch_id}/cancel` | Cancel every still-`queued` job in a batch | Admin |
+| `GET /api/v1/fleet/versions` | Fleet-wide version × OS distribution, latest release, per-host outdated/capability breakdown | Session or API token |
+| `GET /api/v1/agents/updates/batches?limit=&before=` | Paginated update-batch summaries (succeeded/failed/pending, duration, failure reasons) | Session or API token |
 | `GET /api/v1/audit?entity_type=&limit=&before=` | Paginated audit log | Admin |
 | `GET /healthz` | Liveness check | None |
 | `GET /` and static assets | Embedded dashboard | None |

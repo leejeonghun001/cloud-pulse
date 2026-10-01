@@ -31,6 +31,7 @@ import {
   durationSecFromParts,
   bestDurationParts,
   isStorageScopedMetric,
+  isThresholdlessMetric,
 } from "../../core/alerts.js";
 
 const DURATION_UNITS = [
@@ -289,7 +290,7 @@ function openRuleDialog({ rule, channels, hosts, storageAccounts = [], signal, a
       metric: draft.metric,
       host_id: draft.hostID,
       operator: draft.operator,
-      threshold: draft.metric === "host_down" ? 0 : draft.threshold,
+      threshold: isThresholdlessMetric(draft.metric) ? 0 : draft.threshold,
       duration_sec: durationSec,
       cooldown_sec: cooldownSec,
       notify_resolved: draft.notifyResolved,
@@ -388,7 +389,7 @@ function buildRuleForm(draft, hosts, storageAccounts, channels, onChange, onFull
   });
   row2.append(opNode);
 
-  if (draft.metric !== "host_down") {
+  if (!isThresholdlessMetric(draft.metric)) {
     const thresholdField = el("div", { class: "cp-field" });
     thresholdField.append(el("label", { class: "cp-label", attrs: { for: "cp-rule-threshold" }, text: "Threshold" }));
     const thresholdInput = /** @type {HTMLInputElement} */ (

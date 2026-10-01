@@ -70,6 +70,14 @@ func (s *Server) RunBackground(ctx context.Context) {
 		s.runUpdateJobTimeoutLoop(ctx)
 	}()
 
+	if s.opts.Alerting != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.runUpdateBatchAlertLoop(ctx)
+		}()
+	}
+
 	wg.Wait()
 }
 
@@ -155,6 +163,7 @@ func (s *Server) runAlertEvalLoop(ctx context.Context) {
 			if err := s.opts.Alerting.Evaluate(ctx, now, hosts); err != nil {
 				s.logger.Error("scheduler: alert evaluation failed", "error", err)
 			}
+			s.evaluateAgentOutdatedAlerts(ctx, now)
 		}
 	}
 }

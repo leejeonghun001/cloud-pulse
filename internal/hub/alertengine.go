@@ -25,6 +25,20 @@ type StorageAlertEvaluator interface {
 	EvaluateStorage(ctx context.Context, now time.Time, accounts []alerting.StorageAccountUsage) error
 }
 
+// RolloutAlertEvaluator is an optional capability an AlertEngine
+// implementation may additionally provide: evaluating SPEC-v0.8 §3-1's
+// agent_outdated (host-scoped, reuses the ok/pending/firing state
+// machine) and update_batch_failed (batch-scoped, fire-once) rules.
+// Declared as a separate interface and checked via a type assertion in
+// fleetalerts.go, for the same reason StorageAlertEvaluator is (see its
+// own doc comment): AlertEngine is a multi-stage-owned contract, and a
+// hub build with no rollout rules configured should never be forced to
+// satisfy a wider interface just to keep compiling.
+type RolloutAlertEvaluator interface {
+	EvaluateAgentOutdated(ctx context.Context, now time.Time, hosts []alerting.AgentOutdatedInput) error
+	EvaluateUpdateBatch(ctx context.Context, now time.Time, outcome alerting.UpdateBatchOutcome) error
+}
+
 // alertEngineAdapter adapts a *alerting.Engine to this package's
 // AlertEngine interface. The method sets are already identical
 // (Evaluate/Preview with the same signatures), so this is a type
@@ -67,6 +81,19 @@ func (a alertEngineAdapter) Preview(ctx context.Context, now time.Time, rule mod
 // engine's own EvaluateStorage.
 func (a alertEngineAdapter) EvaluateStorage(ctx context.Context, now time.Time, accounts []alerting.StorageAccountUsage) error {
 	return a.engine.EvaluateStorage(ctx, now, accounts)
+}
+
+// EvaluateAgentOutdated implements hub.RolloutAlertEvaluator (see
+// server.go's RolloutAlertEvaluator doc comment), delegating to the
+// underlying engine.
+func (a alertEngineAdapter) EvaluateAgentOutdated(ctx context.Context, now time.Time, hosts []alerting.AgentOutdatedInput) error {
+	return a.engine.EvaluateAgentOutdated(ctx, now, hosts)
+}
+
+// EvaluateUpdateBatch implements hub.RolloutAlertEvaluator, delegating
+// to the underlying engine.
+func (a alertEngineAdapter) EvaluateUpdateBatch(ctx context.Context, now time.Time, outcome alerting.UpdateBatchOutcome) error {
+	return a.engine.EvaluateUpdateBatch(ctx, now, outcome)
 }
 
 // Wait implements alertEngineWaiter (see server.go's Wait), delegating
