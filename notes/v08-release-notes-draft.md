@@ -2,7 +2,9 @@
 
 > Draft for Hun's review; the final text goes into the GitHub release and
 > `CHANGELOG.md` (regenerate the commit lists with `scripts/release-notes.sh`
-> once v0.8.0 is tagged). Base: v0.7.0 (e925870) → v0.8.0 (74 commits).
+> once v0.8.0 is tagged). Base: v0.7.0 (e925870) → v0.8.0 (78 commits
+as of this draft; the count moves with every pre-release commit —
+regenerate at tag time).
 
 ## Highlights
 
