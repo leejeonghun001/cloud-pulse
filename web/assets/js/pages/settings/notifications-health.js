@@ -263,6 +263,7 @@ function scheduleControls({ channelHealth, signal, announce, onChanged }) {
   const wrap = el("div", { class: "cp-channel-health-schedule" });
   const settings = channelHealth.settings || { enabled: false, weekday: 0, minute_of_day: 0 };
   const local = utcToLocal(settings.weekday, settings.minute_of_day);
+  const idBase = `cp-health-schedule-${channelHealth.channel_id}`;
 
   const toggleField = el("label", { class: "cp-checkbox-field" });
   const toggle = /** @type {HTMLInputElement} */ (el("input", { attrs: { type: "checkbox" } }));
@@ -274,8 +275,8 @@ function scheduleControls({ channelHealth, signal, announce, onChanged }) {
   const fieldsRow = el("div", { class: "cp-channel-health-schedule-fields" });
 
   const weekdaySelectWrap = el("div", { class: "cp-field" });
-  weekdaySelectWrap.append(el("label", { class: "cp-label", text: t("health.schedule_weekday_label") }));
-  const weekdaySelect = /** @type {HTMLSelectElement} */ (el("select", { class: "cp-select" }));
+  weekdaySelectWrap.append(el("label", { class: "cp-label", attrs: { for: `${idBase}-weekday` }, text: t("health.schedule_weekday_label") }));
+  const weekdaySelect = /** @type {HTMLSelectElement} */ (el("select", { class: "cp-select", attrs: { id: `${idBase}-weekday` } }));
   for (let i = 0; i < 7; i++) {
     weekdaySelect.append(el("option", { text: t(`health.weekday_${WEEKDAY_LABEL_KEYS[i]}`), attrs: { value: String(i) } }));
   }
@@ -284,8 +285,8 @@ function scheduleControls({ channelHealth, signal, announce, onChanged }) {
   fieldsRow.append(weekdaySelectWrap);
 
   const timeFieldWrap = el("div", { class: "cp-field" });
-  timeFieldWrap.append(el("label", { class: "cp-label", text: t("health.schedule_time_label") }));
-  const timeInput = /** @type {HTMLInputElement} */ (el("input", { class: "cp-input", attrs: { type: "time", value: formatMinuteOfDay(local.minuteOfDay) } }));
+  timeFieldWrap.append(el("label", { class: "cp-label", attrs: { for: `${idBase}-time` }, text: t("health.schedule_time_label") }));
+  const timeInput = /** @type {HTMLInputElement} */ (el("input", { class: "cp-input", attrs: { id: `${idBase}-time`, type: "time", value: formatMinuteOfDay(local.minuteOfDay) } }));
   timeFieldWrap.append(timeInput);
   timeFieldWrap.append(el("p", { class: "cp-muted-small", text: t("health.schedule_time_hint") }));
   fieldsRow.append(timeFieldWrap);
