@@ -115,9 +115,12 @@ Collects, into a timestamped, root-only (`0700`) directory under
   pass/fail, size, and sha256.
 - Copies of the current binary, unit file, and `hub.env` for a later
   rollback.
-- A JSON snapshot of `schema_migrations`, every known table's row
-  count (tables absent on your version are skipped, so this works
-  whether you're on v0.3.2 or v0.7.0), host IDs, and settings keys.
+- A JSON snapshot of `schema_migrations`, **every table's row count**
+  (discovered dynamically from `sqlite_master`, not a hard-coded
+  per-release table list — a table only your current version has is
+  automatically included, and one your version predates is absent, so
+  this snapshot format itself never needs updating for a new
+  migration), host IDs, and settings keys.
 - An API/dashboard smoke check: `/healthz`, `/api/v1/hosts`,
   `/api/v1/version`, the main HTML page, and static assets.
 
@@ -141,8 +144,12 @@ Re-collects the same facts and diffs them against `pre`'s snapshot:
   dynamically rather than against a hard-coded list, so this stays
   correct as the rendered unit changes across releases.
 - Migrations are a superset of `pre`'s (never regress), row counts
-  never decrease, no host or settings key present in `pre` is missing,
-  and the database's `integrity_check` still reports `ok`.
+  never decrease for every table discovered in the snapshot, no host
+  or settings key present in `pre` is missing, and the database's
+  `integrity_check` still reports `ok`. If new migrations were applied,
+  `post` also notes (informationally, never a failure by itself)
+  whether they came with new tables — again derived from the two
+  snapshots' own table lists, not a hard-coded per-release name list.
 - The default egress alert rules exist.
 - Dashboard sign-in works (`CP_UI_TOKEN` if set, otherwise a
   `--password-file`/prompted password login) — a hub still on the
@@ -176,6 +183,50 @@ case you need it later.
 | Dashboard login stops working after upgrading past v0.3.x | v0.4+ requires signing in (`admin`/`changeme` on first login) | Sign in and change the password; use `cloud-pulse-hub reset-password` if you're locked out |
 | The hub becomes unreachable on its old address | A network/listen setting changed | `cloud-pulse-hub reset-network` restores the env-file-configured listener |
 | Any of the above doesn't resolve it | — | Run `rollback` (dry-run first to see the plan, then `--apply`) |
+
+### Automated rehearsals (`test-hub-upgrade.sh`)
+
+`scripts/test-hub-upgrade.sh` is the end-to-end rehearsal that exercises
+every one of `hub-upgrade-check.sh`'s subcommands above (plus the real
+`update`/`systemd-unit apply` flow between them) against a fully
+sandboxed hub — no root, no real network, no port 8090, nothing under
+`/etc` or `/var/lib` outside a throwaway `mktemp` directory. It is what
+CI's `hub-upgrade` job runs; you can run it yourself the same way:
+
+```bash
+bash scripts/test-hub-upgrade.sh                # --from v0.3.2 (default)
+bash scripts/test-hub-upgrade.sh --from v0.7.0
+```
+
+`--from` selects the version to install first (via a `git worktree` of
+that tag, built and installed with **that tag's own**
+`install-hub.sh`) before rehearsing the upgrade to the current tree.
+Two versions are supported, each seeding data appropriate to its own
+schema so the rehearsal actually exercises data preservation across a
+real schema gap, not just a version-string change:
+
+- **`v0.3.2`** (default): the oldest supported upgrade source, from
+  before dashboard authentication existed. Seeds hosts, egress
+  accounting, a per-host limit override, an alert webhook setting, and
+  a sent-alert record.
+- **`v0.7.0`**: the previous minor release, one schema generation
+  short of the current tree. Seeds everything `v0.3.2` does, plus an
+  alert rule, a notification channel, a remote-update job, and a
+  connected storage account + its usage snapshot — the tables that
+  only exist from v0.6.0/v0.7.0 onward — so the rehearsal also verifies
+  that a hub already running recent-era features keeps every one of
+  them intact across the v0.8 upgrade.
+
+Both rehearsals build the *current* tree as a fake `v0.7.99-test`
+release, serve it from a local fixture HTTP server
+(`scripts/fake_release_server.py`, loopback-only), and drive the same
+pre → update → apply-unit → restart → post → negative-cases → rollback
+→ dry-run-rollback sequence documented above, asserting each step's
+PASS/FAIL itself. Every port used (the sandboxed hub's own listener and
+the fake release server's) is chosen at run time from the OS's free
+ephemeral pool, never a fixed number, so multiple rehearsals (e.g. both
+`--from` values, or this script alongside any other sandboxed-hub test)
+never collide even when run concurrently.
 
 ## v0.3.x → v0.4+ notes
 

@@ -777,16 +777,21 @@ jobs:
           retention-days: 14
 
   # hub-upgrade (SPEC-v0.8 SS1): local hub upgrade verification kit
-  # rehearsal. This is the ONLY job block this stage (upgrade-kit) owns
-  # in this file — every other job above is pre-existing/owned by
-  # other stages and left untouched. Needs full history (fetch-depth:
-  # 0) so the v0.3.2 tag used by scripts/test-hub-upgrade.sh's git
-  # worktree step is reachable.
+  # rehearsal, matrixed over every supported --from version. This is
+  # the ONLY job block this stage (upgrade-kit) owns in this file —
+  # every other job above is pre-existing/owned by other stages and
+  # left untouched. Needs full history (fetch-depth: 0) so the
+  # v0.3.2/v0.7.0 tags used by scripts/test-hub-upgrade.sh's git
+  # worktree step are reachable.
   hub-upgrade:
     runs-on: ubuntu-latest
     needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        from: [v0.3.2, v0.7.0]
     steps:
-      - name: Checkout (full history — needs the v0.3.2 tag)
+      - name: Checkout (full history — needs the v0.3.2/v0.7.0 tags)
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -797,5 +802,5 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Upgrade kit rehearsal (v0.3.2 sandbox -> v0.7.99-test -> rollback, no root/real network/port 8090)
-        run: bash scripts/test-hub-upgrade.sh
+      - name: Upgrade kit rehearsal (--from ${{ matrix.from }} sandbox -> v0.7.99-test -> rollback, no root/real network/port 8090)
+        run: bash scripts/test-hub-upgrade.sh --from ${{ matrix.from }}

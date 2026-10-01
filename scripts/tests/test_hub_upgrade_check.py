@@ -275,13 +275,74 @@ class SqlitePythonHelperTests(unittest.TestCase):
             self.assertEqual(snapshot["setting_keys"], ["alert_webhook_url"])
             self.assertEqual(len(snapshot["egress_rule_names"]), 3)
             # A table this fixture never created (e.g. storage_accounts,
-            # only added in a later migration) must be silently skipped,
-            # not raise or appear with a count of 0 — this is what makes
-            # the snapshot logic work unmodified against both an old
-            # (v0.3.2) and a current schema.
+            # only added in a later migration) is genuinely absent from
+            # sqlite_master, so it is genuinely absent from both
+            # row_counts and tables_present too -- there is no
+            # hard-coded per-release table allowlist to fall out of
+            # sync here; py_sqlite_snapshot discovers every real table
+            # for itself (see test_snapshot_row_counts_are_derived_
+            # dynamically_not_from_a_hard_coded_list below), so this is
+            # what makes the snapshot logic work unmodified against
+            # both an old (v0.3.2) and a current (or future, v0.8+)
+            # schema alike.
             self.assertNotIn("storage_accounts", snapshot["row_counts"])
             self.assertIn("hosts", snapshot["tables_present"])
             self.assertNotIn("storage_accounts", snapshot["tables_present"])
+
+    def test_snapshot_row_counts_are_derived_dynamically_not_from_a_hard_coded_list(self) -> None:
+        # Regression guard for SPEC-v0.8's "derive expectations from
+        # the target binary/migrations rather than a hard-coded list"
+        # requirement: a table py_sqlite_snapshot's implementation has
+        # never heard of by name (a stand-in for a future migration's
+        # new table, e.g. 0007_v08.sql's channel_health_settings) must
+        # still be discovered via sqlite_master and appear in both
+        # tables_present and row_counts, with its real row count.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            db_path = tmp_path / "cloud-pulse.db"
+            conn = sqlite3.connect(db_path)
+            conn.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY)")
+            conn.execute("INSERT INTO schema_migrations (version) VALUES (1)")
+            conn.execute(
+                "CREATE TABLE a_totally_new_v0_8_table (id INTEGER PRIMARY KEY, value TEXT)"
+            )
+            conn.execute("INSERT INTO a_totally_new_v0_8_table (value) VALUES ('x'), ('y'), ('z')")
+            conn.commit()
+            conn.close()
+
+            out_json = tmp_path / "snapshot.json"
+            _run_shell_function("py_sqlite_snapshot", [str(db_path), str(out_json)])
+            snapshot = json.loads(out_json.read_text(encoding="utf-8"))
+
+            self.assertIn("a_totally_new_v0_8_table", snapshot["tables_present"])
+            self.assertEqual(snapshot["row_counts"]["a_totally_new_v0_8_table"], 3)
+
+    def test_snapshot_excludes_schema_migrations_and_sqlite_sequence_from_row_counts(self) -> None:
+        # schema_migrations is reported separately as "migrations"
+        # (versions, not a row count) and sqlite_sequence is SQLite's
+        # own internal AUTOINCREMENT bookkeeping table -- neither
+        # should show up as an app-data table needing row-count
+        # preservation, even though schema_migrations itself is a real
+        # table and legitimately still listed in tables_present.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            db_path = tmp_path / "cloud-pulse.db"
+            conn = sqlite3.connect(db_path)
+            conn.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY)")
+            conn.execute("INSERT INTO schema_migrations (version) VALUES (1)")
+            conn.execute("CREATE TABLE hosts (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)")
+            conn.execute("INSERT INTO hosts (name) VALUES ('host-a')")
+            conn.commit()
+            conn.close()
+
+            out_json = tmp_path / "snapshot.json"
+            _run_shell_function("py_sqlite_snapshot", [str(db_path), str(out_json)])
+            snapshot = json.loads(out_json.read_text(encoding="utf-8"))
+
+            self.assertNotIn("schema_migrations", snapshot["row_counts"])
+            self.assertNotIn("sqlite_sequence", snapshot["row_counts"])
+            self.assertIn("schema_migrations", snapshot["tables_present"])
+            self.assertNotIn("sqlite_sequence", snapshot["tables_present"])
 
     def test_snapshot_never_embeds_secret_looking_setting_values_only_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -319,6 +380,118 @@ class JsonFieldTests(unittest.TestCase):
     def test_malformed_json_returns_empty_rather_than_raising(self) -> None:
         out = _run_shell_function("json_field", ["not json at all {{{", "version"])
         self.assertEqual(out.strip(), "")
+
+
+class PySqliteDiffSnapshotsTests(unittest.TestCase):
+    """Exercises hub-upgrade-check.sh's pre/post snapshot diff logic
+    directly (extracted into its own py_sqlite_diff_snapshots shell
+    function, called by cmd_post) against hand-built snapshot JSON
+    fixtures — no real hub, no real sqlite files needed here since
+    py_sqlite_snapshot's own output shape is covered separately by
+    SqlitePythonHelperTests above.
+    """
+
+    def _run_diff(self, tmp: Path, pre_pre_json: dict, pre_snapshot: dict, post_snapshot: dict) -> str:
+        pre_json_path = tmp / "pre.json"
+        pre_snapshot_path = tmp / "pre-db-snapshot.json"
+        post_snapshot_path = tmp / "post-db-snapshot.json"
+        pre_json_path.write_text(json.dumps(pre_pre_json), encoding="utf-8")
+        pre_snapshot_path.write_text(json.dumps(pre_snapshot), encoding="utf-8")
+        post_snapshot_path.write_text(json.dumps(post_snapshot), encoding="utf-8")
+        return _run_shell_function(
+            "py_sqlite_diff_snapshots",
+            [str(pre_json_path), str(pre_snapshot_path), str(post_snapshot_path)],
+        )
+
+    def _base_snapshot(self, **overrides: object) -> dict:
+        base = {
+            "tables_present": ["hosts", "settings"],
+            "migrations": ["1", "2", "3"],
+            "row_counts": {"hosts": 3, "settings": 1},
+            "host_ids": ["host-a", "host-b", "host-c"],
+            "setting_keys": ["alert_webhook_url"],
+            "egress_rule_names": ["a", "b", "c"],
+        }
+        base.update(overrides)
+        return base
+
+    def test_clean_upgrade_with_no_schema_change_emits_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pre_snap = self._base_snapshot()
+            post_snap = self._base_snapshot()
+            out = self._run_diff(Path(tmp), {}, pre_snap, post_snap)
+            self.assertEqual(out.strip(), "")
+
+    def test_new_migration_with_new_table_emits_a_note_not_a_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pre_snap = self._base_snapshot()
+            post_snap = self._base_snapshot(
+                tables_present=["hosts", "settings", "channel_health_settings"],
+                migrations=["1", "2", "3", "7"],
+                row_counts={"hosts": 3, "settings": 1, "channel_health_settings": 0},
+            )
+            out = self._run_diff(Path(tmp), {}, pre_snap, post_snap)
+            lines = [line for line in out.splitlines() if line]
+            self.assertTrue(any(line.startswith("NOTE:") for line in lines))
+            self.assertFalse(any(line.startswith("FAIL:") for line in lines))
+            self.assertIn("channel_health_settings", "".join(lines))
+
+    def test_new_migration_with_no_new_table_still_emits_an_informational_note(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pre_snap = self._base_snapshot()
+            post_snap = self._base_snapshot(migrations=["1", "2", "3", "7"])
+            out = self._run_diff(Path(tmp), {}, pre_snap, post_snap)
+            lines = [line for line in out.splitlines() if line]
+            self.assertEqual(len(lines), 1)
+            self.assertTrue(lines[0].startswith("NOTE:"))
+            self.assertIn("no new tables", lines[0])
+
+    def test_migrations_regressed_is_a_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pre_snap = self._base_snapshot(migrations=["1", "2", "3", "7"])
+            post_snap = self._base_snapshot(migrations=["1", "2", "3"])
+            out = self._run_diff(Path(tmp), {}, pre_snap, post_snap)
+            self.assertIn("FAIL:migrations regressed", out)
+
+    def test_row_count_decrease_is_a_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pre_snap = self._base_snapshot(row_counts={"hosts": 3, "settings": 1})
+            post_snap = self._base_snapshot(row_counts={"hosts": 2, "settings": 1})
+            out = self._run_diff(Path(tmp), {}, pre_snap, post_snap)
+            self.assertIn("FAIL:", out)
+            self.assertIn("row count decreased", out)
+
+    def test_table_disappearing_entirely_is_only_a_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pre_snap = self._base_snapshot(row_counts={"hosts": 3, "settings": 1})
+            post_snap = self._base_snapshot(
+                tables_present=["hosts"], row_counts={"hosts": 3}
+            )
+            out = self._run_diff(Path(tmp), {}, pre_snap, post_snap)
+            self.assertIn("WARN:", out)
+            self.assertNotIn("FAIL:", out)
+
+    def test_missing_host_is_a_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pre_snap = self._base_snapshot()
+            post_snap = self._base_snapshot(host_ids=["host-a", "host-b"])
+            out = self._run_diff(Path(tmp), {}, pre_snap, post_snap)
+            self.assertIn("FAIL:hosts missing post-upgrade", out)
+
+    def test_missing_setting_is_a_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pre_snap = self._base_snapshot()
+            post_snap = self._base_snapshot(setting_keys=[])
+            out = self._run_diff(Path(tmp), {}, pre_snap, post_snap)
+            self.assertIn("FAIL:settings keys missing post-upgrade", out)
+
+    def test_too_few_egress_rules_is_a_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pre_snap = self._base_snapshot()
+            post_snap = self._base_snapshot(egress_rule_names=["a"])
+            out = self._run_diff(Path(tmp), {}, pre_snap, post_snap)
+            self.assertIn("WARN:", out)
+            self.assertIn("egress", out)
 
 
 if __name__ == "__main__":
