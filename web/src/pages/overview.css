@@ -44,8 +44,10 @@
     @apply text-lg font-semibold text-[rgb(var(--text))] tabular-nums leading-tight whitespace-nowrap;
   }
 
+  /* Wrap rather than truncate: Korean labels ("전체 송신 (월간)") are
+     wider than the English ones at a 360px viewport. */
   .cp-stat-card-label {
-    @apply text-xs text-[rgb(var(--muted))] truncate;
+    @apply text-xs text-[rgb(var(--muted))] break-keep;
   }
 
   /* -------------------------------------------------------------- */
