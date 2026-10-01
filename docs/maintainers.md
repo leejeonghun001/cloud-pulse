@@ -93,7 +93,11 @@ action only.
 ## Regenerating documentation screenshots
 
 All `docs/screenshots/*.png` images are reproducible from demo data —
-never from this machine's real hosts. The capture tool runs headless
+never from this machine's real hosts. "Reproducible" means layout,
+labels and text render identically run to run; screens showing live
+metrics also embed time-relative labels and sine-phase chart data, so
+their pixels vary with when the seed ran (dataless screens such as the
+login page come out byte-identical). The capture tool runs headless
 Firefox via WebDriver BiDi and scrubs any configured local markers
 (real hostname/IPs, supplied only via `--markers-file` or
 `CP_PREPUBLISH_MARKERS`) from the DOM before every shot, then strips
