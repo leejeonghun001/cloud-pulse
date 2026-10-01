@@ -84,6 +84,20 @@ func (s *Server) handleCreateUpdateBatch(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, models.APIError{Error: err.Error()})
 		return
 	}
+	// A batch in which *every* requested host was skipped (unknown at
+	// creation time) would otherwise be created and immediately 200 as
+	// an empty job list — indistinguishable from a success, and nothing
+	// would ever run or fail. Per-host races that leave at least one
+	// real host keep the skip behavior (see createUpdateBatch's doc
+	// comment); only the nothing-was-created case is a client error.
+	if len(batch.Jobs) == 0 {
+		s.logger.Warn("update batch: no requested host exists",
+			"requested_host_count", len(req.HostIDs),
+			"actor", auditActorFor(ctx),
+		)
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "none of the requested hosts exists", Code: "hosts_not_found"})
+		return
+	}
 	s.setBatchMaxParallel(batch.BatchID, batch.MaxParallel)
 
 	s.logger.Info("audit: remote update batch created",

@@ -70,7 +70,7 @@ require the same; there is no "admin_disabled" mode.
 | `POST /api/v1/storage/refresh` | Trigger an immediate storage-usage poll; rate-limited to once per minute | Admin |
 | `PUT /api/v1/settings/storage/interval` | Set the hub-side storage polling interval override | Admin |
 | `GET /api/v1/agents/updates?batch=` | List remote-update jobs, optionally filtered to one batch | Admin |
-| `POST /api/v1/agents/updates` | Create a remote-update batch | Admin |
+| `POST /api/v1/agents/updates` | Create a remote-update batch (host IDs unknown at creation time are skipped; `400 hosts_not_found` if that leaves zero jobs) | Admin |
 | `POST /api/v1/agents/updates/{job_id}/retry` | Re-queue a failed job as a new job | Admin |
 | `POST /api/v1/agents/updates/{batch_id}/cancel` | Cancel every still-`queued` job in a batch | Admin |
 | `GET /api/v1/fleet/versions` | Fleet-wide version × OS distribution, latest release, per-host outdated/capability breakdown | Session or API token |

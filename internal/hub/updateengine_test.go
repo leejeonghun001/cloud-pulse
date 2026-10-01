@@ -754,6 +754,31 @@ func TestHandleCreateUpdateBatch_EmptyHostIDsRejected(t *testing.T) {
 	}
 }
 
+func TestHandleCreateUpdateBatch_AllUnknownHostsRejected(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	s := newTestServer(t, testOptions(), store)
+	// No hosts registered at all: every requested ID is unknown.
+
+	body := []byte(`{"host_ids":["does-not-exist"],"target":"v0.6.1"}`)
+	rec := doRequest(t, s.Handler(), http.MethodPost, "/api/v1/agents/updates", "203.0.113.1:1234", testUIToken, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	got := decodeJSON[models.APIError](t, rec.Body)
+	if got.Code != "hosts_not_found" {
+		t.Fatalf("error code = %q, want hosts_not_found", got.Code)
+	}
+	// Nothing must have been created.
+	jobs, err := store.ListUpdateJobs(context.Background(), "", "")
+	if err != nil {
+		t.Fatalf("ListUpdateJobs: %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Fatalf("len(jobs) after rejected batch = %d, want 0", len(jobs))
+	}
+}
+
 func TestHandleListUpdateJobs_ViaHTTP(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
