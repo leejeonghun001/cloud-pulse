@@ -45,6 +45,21 @@ language of alert and channel-health messages.
 deep links such as `/login` or `/settings/network`; the hub now serves
 the SPA for every known dashboard route.
 
+## Fixes since v0.8.0-rc.2
+
+- `POST /api/v1/agents/updates` now returns `400 hosts_not_found`
+  when *every* requested host is unknown at creation time, instead of
+  creating an empty job batch that nothing would ever run (batches
+  where at least one host still exists keep the documented
+  per-host skip behavior). Found in a post-deployment live-exercise
+  round; covered by an HTTP-level regression test.
+- `docs/maintainers.md` states the screenshot reproducibility
+  expectation precisely: layout, labels and text reproduce run to run
+  (dataless screens such as the sign-in page come out byte-identical),
+  while screens embedding live metrics vary pixel-wise with seed time
+  by design — so a pixel delta on regenerated shots is not read as UI
+  drift.
+
 ## Upgrade
 
 ```bash
@@ -81,6 +96,10 @@ preservation for you.
 
 - Go: all packages pass (`CGO_ENABLED=0 go test ./...`), 32-bit
   (386/arm7) cross-build + vet clean.
+- rc.3 live-check: the rc.3 build was exercised on a fresh test port
+  (`/login`, `/settings/network`, `/healthz` all 200, SPA served for
+  deep links) and the `hosts_not_found` rejection was re-verified
+  against the running hub.
 - Web: 469 node tests pass; i18n catalog parity + hard-coded-string
   lint clean.
 - UI audit: 320 combinations (5 viewports × 2 themes × en/ko × 16

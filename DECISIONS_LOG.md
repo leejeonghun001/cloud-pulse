@@ -1861,3 +1861,29 @@ never rewrite history here, only add to it.
   test and installer message uses hash URLs; a larger change for no user
   benefit in v0.8).
 
+### D-097 — No timestamp anchor for demo seeding; time-relative screenshots are the documented contract (2026-10-02)
+
+- **Context**: regenerating the documentation screenshots reproduces
+  layout, labels and text exactly (dataless screens such as the sign-in
+  page are byte-identical), but screens embedding metrics differ
+  pixel-wise run to run: `demo-seed.py` backdates its rows relative to
+  the seed run, the S3/R2 history rows are sine waves anchored at seed
+  time, and charts/labels render values derived from *now* ("3 hours
+  ago", egress-rate axes, sine phase). A `--anchor <ts>` option was
+  evaluated as a way to make the PNGs fully deterministic.
+- **Decision**: do not add one in v0.8. All anchors funnel through the
+  seeder's `now`, so a flag would have to thread through every insert,
+  the keepalive writer and the backdating arithmetic — a wide, invasive
+  change serving only byte-reproducible pixels, for demo data whose
+  entire purpose is to *look live*; pixel-identical shots of
+  time-bearing screens would also quietly stop demonstrating that the
+  screens render current data. The already-shipped contract is the
+  right one: layout/labels/text reproduce (asserted by the 320-combo
+  ui-audit and by hash-comparing dataless shots); time-relative pixels
+  are expected to differ, and `docs/maintainers.md` states this so a
+  future audit does not misread the delta as UI drift. Revisit only if
+  screenshots ever need automated byte-level regression tests.
+- **Rejected**: `--anchor <ts>` on the seeder (invasive, serves no user
+  need); fixed pixel baselines committed per release (maintenance cost
+  without a consumer — no byte-level test exists).
+
