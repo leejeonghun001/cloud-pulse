@@ -1887,3 +1887,21 @@ never rewrite history here, only add to it.
   need); fixed pixel baselines committed per release (maintenance cost
   without a consumer — no byte-level test exists).
 
+### D-098 — Every shipped hub/agent change on main is released automatically (2026-10-16)
+
+- **Context**: `cloud-pulse-hub update` and `cloud-pulse-agent update`
+  install GitHub's latest stable release, and releases were cut by hand.
+  Features merged to `main` (e.g. agent-side OCI billing) stayed
+  unreachable by `update` until someone remembered to tag.
+- **Decision**: `.github/workflows/auto-release.yml` runs on every push
+  to `main`. `scripts/next-version.py` computes the next stable tag from
+  Conventional Commits since the latest stable tag, counting only
+  `feat`/`fix`/`perf`/breaking commits that touch shipped paths (`cmd/`,
+  `internal/`, `web/`, `go.mod`, `go.sum`, test files excluded). If a
+  tag results, the workflow runs `go test ./...`, pushes the tag, and
+  dispatches `release.yml` on it (a `GITHUB_TOKEN` tag push would not
+  fire the tag trigger).
+- **Rejected**: a CI gate that fails merges lacking a manual version
+  bump (still depends on a person to tag); release-please style release
+  PRs (an extra merge step per release for a single-maintainer repo).
+

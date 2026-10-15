@@ -128,6 +128,20 @@ never as a Go string literal.
 
 ## Releasing (maintainers)
 
+Releases are automatic. On every push to `main`,
+`.github/workflows/auto-release.yml` runs `scripts/next-version.py`: if
+any commit since the latest stable `vX.Y.Z` tag is a `feat`, `fix` or
+`perf` (or breaking) change touching what ships in the binaries
+(`cmd/`, `internal/`, `web/`, `go.mod`, `go.sum`; test files excluded),
+it runs the tests, pushes the next tag and starts `release.yml` for it.
+`feat` bumps minor, `fix`/`perf` patch, breaking major (minor while on
+`0.x`). Docs-, CI- and test-only pushes release nothing. Hub and agent
+changes therefore must use a releasing commit type, so the
+`cloud-pulse-hub update` / `cloud-pulse-agent update` users run always
+see them; preview the outcome locally with `python3 scripts/next-version.py`.
+Pre-release tags (`-rc.N`) can still be pushed by hand and never serve as
+the automatic base.
+
 Release notes are generated deterministically from Conventional Commits, never hand-written and never `--generate-notes`:
 
 ```bash

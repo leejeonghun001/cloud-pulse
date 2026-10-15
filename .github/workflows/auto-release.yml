@@ -1,0 +1,57 @@
+name: Auto release
+
+# Every push to main that adds a shipped feat/fix/perf change to the hub
+# or agent (see scripts/next-version.py for the exact rule) gets a new
+# stable vX.Y.Z tag and release, so `cloud-pulse-hub update` and
+# `cloud-pulse-agent update` (which follow the latest stable release)
+# always pick it up. Docs-, CI- and test-only pushes release nothing.
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Determine next version
+        id: next
+        run: echo "tag=$(python3 scripts/next-version.py)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        if: steps.next.outputs.tag != ''
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run tests
+        if: steps.next.outputs.tag != ''
+        run: go test ./...
+
+      - name: Tag and start the release
+        if: steps.next.outputs.tag != ''
+        env:
+          TAG: ${{ steps.next.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git tag "${TAG}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${TAG}"
+          # A tag pushed with GITHUB_TOKEN does not fire release.yml's
+          # tag-push trigger; a workflow_dispatch on the tag ref does.
+          gh workflow run release.yml --ref "${TAG}" -f tag="${TAG}"
+          echo "Released ${TAG}" >> "$GITHUB_STEP_SUMMARY"
