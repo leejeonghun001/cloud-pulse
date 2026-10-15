@@ -21,6 +21,13 @@ type OCIConfig struct {
 	Env []string
 	// HomeDir is the sandboxed HOME directory `oci` is run with.
 	HomeDir string
+	// Auth, when non-empty, is passed as `--auth <Auth>` (e.g.
+	// "instance_principal" for agent-side collection on an OCI
+	// instance); empty uses the CLI's config-file API key.
+	Auth string
+	// CLI is the `oci` executable name or path; empty means "oci"
+	// looked up on Env's PATH.
+	CLI string
 }
 
 // BuildOCIEnv constructs the minimal environment passed to every `oci`
@@ -67,6 +74,9 @@ func CollectOCI(ctx context.Context, runner CommandRunner, cfg OCIConfig, now ti
 		}
 	}
 
+	// The Usage API wants DAILY bounds at exactly 00:00 UTC; on a
+	// non-UTC host a local now would format as e.g. "T09:00:00Z".
+	now = now.UTC()
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 	tomorrow := now.AddDate(0, 0, 1).Truncate(24 * time.Hour)
 
@@ -80,7 +90,14 @@ func CollectOCI(ctx context.Context, runner CommandRunner, cfg OCIConfig, now ti
 		"--group-by", `["resourceId"]`,
 		"--output", "json",
 	}
-	res, err := runner.Run(ctx, cfg.HomeDir, cfg.Env, "oci", args...)
+	if cfg.Auth != "" {
+		args = append(args, "--auth", cfg.Auth)
+	}
+	cli := cfg.CLI
+	if cli == "" {
+		cli = "oci"
+	}
+	res, err := runner.Run(ctx, cfg.HomeDir, cfg.Env, cli, args...)
 	if err != nil {
 		return errSnapshot(models.CloudBillingOCI, fmt.Sprintf("run oci usage-api: %v", err))
 	}

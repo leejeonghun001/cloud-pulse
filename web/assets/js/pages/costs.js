@@ -210,6 +210,11 @@ function providerCard(snap, intervalSeconds) {
     card.append(el("p", { class: "cp-muted-small", text: t("costs.amounts_unavailable") }));
   }
 
+  if (snap.source_host) {
+    notes.append(el("p", { class: "cp-muted-small", text: t("costs.collected_by_agent", { host: snap.source_host }) }));
+  } else if (snap.provider === "oci" && snap.status !== "ok") {
+    notes.append(el("a", { class: "cp-back-link", attrs: { href: "#/settings/billing" }, text: t("costs.oci_agent_link") }));
+  }
   notes.append(freshnessNote(snap, intervalSeconds));
   notes.append(el("p", { class: "cp-muted-small", text: t("costs.excl_tax") }));
   card.append(notes);

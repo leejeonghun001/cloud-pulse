@@ -116,12 +116,7 @@ func (c *Collector) Run(ctx context.Context, interval models.BillingInterval) ([
 	}
 	results = append(results, awsSnap)
 
-	ociSnap := CollectOCI(ctx, c.opts.Runner, OCIConfig{
-		TenancyID: c.opts.OCITenancyID,
-		Env:       BuildOCIEnv(home, c.opts.PATH, c.opts.OCIConfigFile, c.opts.OCIProfile),
-		HomeDir:   home,
-	}, now)
-	ociSnap, err = c.mergeAndPersist(ctx, ociSnap, now, interval)
+	ociSnap, err := c.collectOCI(ctx, home, now, interval)
 	if err != nil {
 		storeErrs = append(storeErrs, err)
 	}
@@ -133,13 +128,45 @@ func (c *Collector) Run(ctx context.Context, interval models.BillingInterval) ([
 	return results, nil
 }
 
-// mergeAndPersist merges fresh's quiet-skip-vs-success outcome against
+// collectOCI runs the hub's own OCI collection, unless the hub has no
+// tenancy configured and the stored OCI snapshot was reported by an
+// agent (agent-side instance-principal collection): then the hub has
+// nothing of its own to contribute, and polling would only overwrite
+// the agent's status with not_configured. The skipped snapshot is
+// returned with Stale recomputed, but not re-persisted.
+func (c *Collector) collectOCI(ctx context.Context, home string, now time.Time, interval models.BillingInterval) (models.CloudCostSnapshot, error) {
+	if c.opts.OCITenancyID == "" {
+		prev, err := c.store.GetCloudCostSnapshot(ctx, models.CloudBillingOCI)
+		if err != nil {
+			return models.CloudCostSnapshot{Provider: models.CloudBillingOCI, Status: models.CloudBillingError},
+				fmt.Errorf("billing: load previous snapshot: %w", err)
+		}
+		if prev.SourceHost != "" {
+			prev.Stale = models.CloudCostStale(prev.LastSuccessAt, now.Unix(), interval)
+			return prev, nil
+		}
+	}
+	snap := CollectOCI(ctx, c.opts.Runner, OCIConfig{
+		TenancyID: c.opts.OCITenancyID,
+		Env:       BuildOCIEnv(home, c.opts.PATH, c.opts.OCIConfigFile, c.opts.OCIProfile),
+		HomeDir:   home,
+	}, now)
+	return c.mergeAndPersist(ctx, snap, now, interval)
+}
+
+// mergeAndPersist is PersistSnapshot against c's own store.
+func (c *Collector) mergeAndPersist(ctx context.Context, fresh models.CloudCostSnapshot, now time.Time, interval models.BillingInterval) (models.CloudCostSnapshot, error) {
+	return PersistSnapshot(ctx, c.store, fresh, now, interval)
+}
+
+// PersistSnapshot merges fresh's quiet-skip-vs-success outcome against
 // the previously stored snapshot for fresh.Provider (preserving
 // LastSuccessAt and the last successful MTD/forecast/currency/
 // PerResource values on a non-OK status per SPEC-v0.6 §1 개선 a),
-// recomputes Stale, persists the result, and returns it.
-func (c *Collector) mergeAndPersist(ctx context.Context, fresh models.CloudCostSnapshot, now time.Time, interval models.BillingInterval) (models.CloudCostSnapshot, error) {
-	prev, err := c.store.GetCloudCostSnapshot(ctx, fresh.Provider)
+// recomputes Stale, persists the result, and returns it. Used by the
+// hub's own collector and by agent-reported snapshots alike.
+func PersistSnapshot(ctx context.Context, store Store, fresh models.CloudCostSnapshot, now time.Time, interval models.BillingInterval) (models.CloudCostSnapshot, error) {
+	prev, err := store.GetCloudCostSnapshot(ctx, fresh.Provider)
 	if err != nil {
 		return fresh, fmt.Errorf("billing: load previous snapshot: %w", err)
 	}
@@ -147,7 +174,7 @@ func (c *Collector) mergeAndPersist(ctx context.Context, fresh models.CloudCostS
 	merged := mergeSnapshot(prev, fresh, now.Unix())
 	merged.Stale = models.CloudCostStale(merged.LastSuccessAt, now.Unix(), interval)
 
-	if err := c.store.SetCloudCostSnapshot(ctx, merged); err != nil {
+	if err := store.SetCloudCostSnapshot(ctx, merged); err != nil {
 		return merged, fmt.Errorf("billing: save snapshot: %w", err)
 	}
 	return merged, nil

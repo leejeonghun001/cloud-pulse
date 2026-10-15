@@ -72,6 +72,10 @@ type ReporterOptions struct {
 	// reporting entirely (the field is simply omitted, matching a
 	// pre-v0.5.0 agent).
 	Inventory InventoryProvider
+	// CloudCost, if non-nil, supplies an agent-collected provider cost
+	// snapshot to attach to the next report (see OCICostCollector). nil
+	// disables agent-side billing reporting.
+	CloudCost *OCICostCollector
 }
 
 // InventoryProvider supplies the Reporter with the agent's current
@@ -96,6 +100,7 @@ type Reporter struct {
 	logClockWarn func(offset time.Duration)
 	updateNotice *updateNotifier
 	inventory    *inventoryReportHook
+	cloudCost    *OCICostCollector
 
 	mu      sync.Mutex
 	samples []models.Sample
@@ -130,6 +135,7 @@ func NewReporter(opts ReporterOptions) *Reporter {
 		logClockWarn: opts.LogClockWarn,
 		updateNotice: newUpdateNotifier(opts.UpdateNow),
 		inventory:    newInventoryReportHook(opts.Inventory),
+		cloudCost:    opts.CloudCost,
 	}
 }
 
@@ -168,6 +174,7 @@ func (r *Reporter) Buffered() int {
 func (r *Reporter) Flush(ctx context.Context, host models.HostInfo) error {
 	inv := r.inventory.next(ctx, r.logger)
 	updateStatus := pendingUpdateStatus(ctx, r.logger)
+	cloudCost := r.cloudCost.Pending()
 	first := true
 	for {
 		batch := r.peekBatch()
@@ -177,11 +184,13 @@ func (r *Reporter) Flush(ctx context.Context, host models.HostInfo) error {
 
 		var reportInv *models.Inventory
 		var reportUpdateStatus *models.AgentUpdateStatus
+		var reportCloudCost *models.CloudCostSnapshot
 		if first {
 			reportInv = inv
 			reportUpdateStatus = updateStatus
+			reportCloudCost = cloudCost
 		}
-		status, serverTimeMs, latestVersion, updateRequest, t0, t1, err := r.postBatch(ctx, host, batch, reportInv, reportUpdateStatus)
+		status, serverTimeMs, latestVersion, updateRequest, t0, t1, err := r.postBatch(ctx, host, batch, reportInv, reportUpdateStatus, reportCloudCost)
 		if err != nil {
 			return fmt.Errorf("agent: flush: %w", err)
 		}
@@ -194,6 +203,9 @@ func (r *Reporter) Flush(ctx context.Context, host models.HostInfo) error {
 			r.updateNotice.Observe(r.logger, latestVersion)
 			if first && reportInv != nil {
 				r.inventory.markSent(*reportInv)
+			}
+			if first && reportCloudCost != nil {
+				r.cloudCost.MarkSent(reportCloudCost)
 			}
 			if first && updateRequest != nil {
 				handleUpdateRequest(ctx, r.logger, updateRequest)
@@ -249,8 +261,8 @@ func (r *Reporter) dropBatch(n int) {
 // timestamps bracketing the request, for clock offset estimation. A
 // non-nil error indicates the request could not be completed (network
 // error, non-HTTP failure); it does not indicate an HTTP error status.
-func (r *Reporter) postBatch(ctx context.Context, host models.HostInfo, batch []models.Sample, inv *models.Inventory, updateStatus *models.AgentUpdateStatus) (status int, serverTimeMs int64, latestVersion string, updateRequest *models.UpdateRequest, t0, t1 time.Time, err error) {
-	report := models.AgentReport{Host: host, Samples: batch, Inventory: inv, UpdateStatus: updateStatus}
+func (r *Reporter) postBatch(ctx context.Context, host models.HostInfo, batch []models.Sample, inv *models.Inventory, updateStatus *models.AgentUpdateStatus, cloudCost *models.CloudCostSnapshot) (status int, serverTimeMs int64, latestVersion string, updateRequest *models.UpdateRequest, t0, t1 time.Time, err error) {
+	report := models.AgentReport{Host: host, Samples: batch, Inventory: inv, UpdateStatus: updateStatus, CloudCost: cloudCost}
 	body, err := json.Marshal(report)
 	if err != nil {
 		return 0, 0, "", nil, time.Time{}, time.Time{}, fmt.Errorf("agent: marshal report: %w", err)

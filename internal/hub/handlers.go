@@ -166,6 +166,10 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if report.CloudCost != nil {
+		s.ingestAgentCloudCost(ctx, report.Host.ID, *report.CloudCost, now)
+	}
+
 	resp := models.IngestResponse{
 		Accepted:      inserted,
 		Duplicates:    len(valid) - inserted,

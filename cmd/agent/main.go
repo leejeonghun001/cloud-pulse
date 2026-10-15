@@ -190,6 +190,18 @@ func runAgentWithContext(ctx context.Context, envFile string) error {
 		syncCancel()
 	}
 
+	var ociCost *agent.OCICostCollector
+	if cfg.OCIBilling != "off" {
+		ociCost = agent.NewOCICostCollector(agent.OCICostCollectorOptions{
+			TenancyID: cfg.OCITenancyID,
+			Auth:      cfg.OCIBilling,
+			CLI:       cfg.OCICLI,
+			Interval:  cfg.OCIBillingInterval,
+			Logger:    logger,
+		})
+		go ociCost.Run(ctx)
+	}
+
 	reporter := agent.NewReporter(agent.ReporterOptions{
 		HubURL:       cfg.HubURL,
 		Token:        cfg.Token,
@@ -197,6 +209,7 @@ func runAgentWithContext(ctx context.Context, envFile string) error {
 		Clock:        clock,
 		LogClockWarn: logClockOffsetWarning(logger),
 		Inventory:    agent.NewInventoryCollector(agent.InventoryCollectorOptions{Docker: cfg.Docker, Logger: logger}),
+		CloudCost:    ociCost,
 	})
 
 	hostInfoFunc := func(ctx context.Context) models.HostInfo {
@@ -210,6 +223,7 @@ func runAgentWithContext(ctx context.Context, envFile string) error {
 		"time_sync", cfg.TimeSync,
 		"remote_update", cfg.RemoteUpdate,
 		"cloud_metadata", cfg.CloudMetadata,
+		"oci_billing", cfg.OCIBilling,
 		"version", version.Version,
 	)
 

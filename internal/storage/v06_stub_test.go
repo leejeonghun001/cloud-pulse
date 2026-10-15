@@ -55,6 +55,7 @@ func TestCloudCostSnapshot_SetAndGetRoundTrip(t *testing.T) {
 		CollectedAt:    1000,
 		LastSuccessAt:  1000,
 		LastAttemptAt:  1000,
+		SourceHost:     "oci-box",
 	}
 	if err := db.SetCloudCostSnapshot(ctx, snap); err != nil {
 		t.Fatalf("SetCloudCostSnapshot: %v", err)
@@ -64,7 +65,7 @@ func TestCloudCostSnapshot_SetAndGetRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCloudCostSnapshot: %v", err)
 	}
-	if got.Status != snap.Status || got.MTDCost != snap.MTDCost || got.PerResource["i-abc"] != 5.5 {
+	if got.Status != snap.Status || got.MTDCost != snap.MTDCost || got.PerResource["i-abc"] != 5.5 || got.SourceHost != "oci-box" {
 		t.Errorf("GetCloudCostSnapshot round-trip = %+v, want %+v", got, snap)
 	}
 
@@ -81,7 +82,7 @@ func TestCloudCostSnapshot_SetAndGetRoundTrip(t *testing.T) {
 	if len(list) != 1 {
 		t.Fatalf("ListCloudCostSnapshots len = %d, want 1 (upsert, not duplicate)", len(list))
 	}
-	if list[0].MTDCost != 20 {
+	if list[0].MTDCost != 20 || list[0].SourceHost != "oci-box" {
 		t.Errorf("MTDCost after upsert = %v, want 20", list[0].MTDCost)
 	}
 }

@@ -209,3 +209,53 @@ var errBoom = &boomError{}
 type boomError struct{}
 
 func (*boomError) Error() string { return "boom" }
+
+func TestCollector_SkipsHubOCIWhenAgentReportsIt(t *testing.T) {
+	store := newFakeStore()
+	agentSnap := models.CloudCostSnapshot{
+		Provider:      models.CloudBillingOCI,
+		Status:        models.CloudBillingOK,
+		Currency:      "USD",
+		MTDCost:       7,
+		LastSuccessAt: 100,
+		SourceHost:    "oci-box",
+	}
+	store.snapshots[models.CloudBillingOCI] = agentSnap
+	runner := &fakeRunner{Default: Result{NotFound: true}}
+
+	now := fixedNow("2026-09-15T12:00:00Z")
+	c := New(store, Options{Runner: runner, DataDir: t.TempDir(), Now: func() time.Time { return now }})
+	results, err := c.Run(context.Background(), models.BillingInterval24h)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, call := range runner.Calls {
+		if call.Name == "oci" {
+			t.Fatalf("hub ran oci %v, want it skipped for an agent-reported snapshot", call.Args)
+		}
+	}
+	got := store.snapshots[models.CloudBillingOCI]
+	if got.SourceHost != "oci-box" || got.Status != models.CloudBillingOK || got.MTDCost != 7 {
+		t.Errorf("stored OCI snapshot = %+v, want the agent's untouched", got)
+	}
+	if len(results) != 2 || results[1].SourceHost != "oci-box" || !results[1].Stale {
+		t.Errorf("results = %+v, want the agent snapshot returned with Stale recomputed", results)
+	}
+}
+
+func TestPersistSnapshot_FailureKeepsLastSuccessAndSource(t *testing.T) {
+	store := newFakeStore()
+	now := fixedNow("2026-09-15T12:00:00Z")
+	ok := models.CloudCostSnapshot{Provider: models.CloudBillingOCI, Status: models.CloudBillingOK, Currency: "USD", MTDCost: 3, SourceHost: "a"}
+	if _, err := PersistSnapshot(context.Background(), store, ok, now, models.BillingInterval24h); err != nil {
+		t.Fatalf("PersistSnapshot: %v", err)
+	}
+	failed := models.CloudCostSnapshot{Provider: models.CloudBillingOCI, Status: models.CloudBillingPermissionDenied, SourceHost: "a"}
+	got, err := PersistSnapshot(context.Background(), store, failed, now.Add(time.Hour), models.BillingInterval24h)
+	if err != nil {
+		t.Fatalf("PersistSnapshot: %v", err)
+	}
+	if got.Status != models.CloudBillingPermissionDenied || got.MTDCost != 3 || got.LastSuccessAt != now.Unix() || got.SourceHost != "a" {
+		t.Errorf("merged = %+v, want failure status over the last successful values", got)
+	}
+}

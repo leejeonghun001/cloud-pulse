@@ -23,6 +23,7 @@ import {
   localizeApiError,
 } from "../../core/api.js";
 import { t } from "../../core/i18n.js";
+import { ociAgentGuideCard } from "./oci-agent-guide.js";
 
 /** INTERVAL_API_COST_HINTS shows the AWS Cost Explorer API cost
  * estimate for each poll interval (SPEC-v0.6 §1: 24h ≈ $0.6/mo, 12h ≈
@@ -79,6 +80,7 @@ export function mountBillingSection(container, { announce }) {
     controls.append(intervalCard({ billing, signal: controller.signal, announce, onChanged: refresh, feedback }));
     controls.append(currencyCard({ currency, signal: controller.signal, announce, onChanged: refresh, feedback }));
     root.append(controls);
+    root.append(ociAgentGuideCard({ oci: (billing.snapshots || []).find((snap) => snap.provider === "oci") }));
     root.append(plansCard({ plans, signal: controller.signal, announce, onChanged: refresh }));
     root.append(auditLogCard({ signal: controller.signal }));
     if (feedback?.id) document.getElementById(feedback.id)?.focus();
@@ -149,6 +151,7 @@ function intervalCard({ billing, signal, announce, onChanged, feedback }) {
       }
       item.append(statusHead);
       if (snap.status_detail) item.append(el("span", { class: "cp-muted-small", text: snap.status_detail }));
+      if (snap.source_host) item.append(el("span", { class: "cp-muted-small", text: t("billing.oci_agent_active", { host: snap.source_host }) }));
       const vm = freshnessViewModel({
         status: snap.status,
         lastSuccessAt: snap.last_success_at || 0,

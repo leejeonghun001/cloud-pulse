@@ -29,6 +29,25 @@
   .cp-billing-page .cp-btn-icon,
   .cp-billing-plan-dialog .cp-btn-icon { @apply min-w-11; }
 
+  .cp-oci-guide-state {
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--text))];
+  }
+  .cp-oci-guide-fields { @apply grid grid-cols-1 gap-3 min-w-0 lg:grid-cols-3; }
+  .cp-oci-guide-steps {
+    @apply flex flex-col gap-4 m-0 pl-5 list-decimal border-t border-[rgb(var(--border))] pt-3;
+  }
+  /* list-item, not flex: a flex <li> loses its step number marker. */
+  .cp-oci-guide-step { @apply min-w-0; }
+  .cp-oci-guide-step > * + * { @apply mt-1.5; }
+  .cp-oci-guide-step::marker { @apply text-[rgb(var(--muted))]; }
+  .cp-oci-guide-step-title {
+    @apply m-0 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))];
+  }
+  .cp-oci-guide-code { @apply flex items-start gap-2 min-w-0 flex-wrap sm:flex-nowrap; }
+  .cp-oci-guide-code .cp-code-block { @apply m-0 min-w-0 flex-1 max-w-none; flex-basis: 16rem; }
+  .cp-oci-guide-copy { @apply shrink-0; }
+  .cp-oci-guide-copy-status:empty { @apply hidden; }
+
   .cp-billing-provider-status-list {
     @apply flex flex-col gap-2 list-none p-0 m-0;
   }

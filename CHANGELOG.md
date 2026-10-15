@@ -16,6 +16,12 @@ manually maintained, unreleased, and are not a tag or publication.
 
 ### Provisional features
 
+- feat(billing): agent-side OCI cost collection via instance principal
+  (`CP_OCI_BILLING=instance_principal`): an agent on an OCI instance runs
+  `oci --auth instance_principal` itself and reports the tenancy's cost
+  to the hub, for hubs that can't run the OCI CLI; Settings → Billing
+  gains a step-by-step setup guide. See
+  [billing.md](docs/billing.md#agent-side-oci-collection-instance-principal).
 - feat(alerting): configurable warning/critical rule severity, snapshotted on each alert event; the seeded 95%/100% egress rules become critical to match their names (past events keep the severity they were delivered with)
 - feat(channel-health): add per-channel health reporting from recent delivery
   outcomes and synthetic-test history, with an opt-in weekly synthetic check
@@ -32,6 +38,9 @@ manually maintained, unreleased, and are not a tag or publication.
 
 ### Provisional fixes
 
+- fix(billing): OCI Usage API day bounds are computed in UTC; on a non-UTC
+  host (e.g. KST) the end bound was sent as a non-midnight `T09:00:00Z`,
+  which DAILY granularity rejects.
 - fix(security): apply the existing security headers to CIDR-allowlist
   rejection responses as well as allowed routes, without changing CSP policy.
 - fix(notifications): redact configured channel secrets and endpoint values

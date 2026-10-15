@@ -644,3 +644,47 @@ func TestLoadAgent_LogFile(t *testing.T) {
 		t.Errorf("LogFile = %q, want %q", cfg.LogFile, env["CP_LOG_FILE"])
 	}
 }
+
+func TestLoadAgent_OCIBilling(t *testing.T) {
+	t.Parallel()
+
+	with := func(extra map[string]string) map[string]string {
+		env := validAgentEnv()
+		for k, v := range extra {
+			env[k] = v
+		}
+		return env
+	}
+
+	cfg, err := LoadAgent(mapLookup(validAgentEnv()), "h")
+	if err != nil {
+		t.Fatalf("LoadAgent default: %v", err)
+	}
+	if cfg.OCIBilling != "off" {
+		t.Errorf("default OCIBilling = %q, want off", cfg.OCIBilling)
+	}
+
+	cfg, err = LoadAgent(mapLookup(with(map[string]string{
+		"CP_OCI_BILLING":    "instance_principal",
+		"CP_OCI_TENANCY_ID": "ocid1.tenancy.oc1..aaa",
+	})), "h")
+	if err != nil {
+		t.Fatalf("LoadAgent enabled: %v", err)
+	}
+	if cfg.OCIBilling != "instance_principal" || cfg.OCITenancyID != "ocid1.tenancy.oc1..aaa" || cfg.OCIBillingInterval != time.Hour {
+		t.Errorf("cfg = %q %q %s, want instance_principal, the tenancy, 1h", cfg.OCIBilling, cfg.OCITenancyID, cfg.OCIBillingInterval)
+	}
+
+	bad := []map[string]string{
+		{"CP_OCI_BILLING": "api_key"},
+		{"CP_OCI_BILLING": "instance_principal"},
+		{"CP_OCI_BILLING": "instance_principal", "CP_OCI_TENANCY_ID": "ocid1.compartment.oc1..aaa"},
+		{"CP_OCI_BILLING": "instance_principal", "CP_OCI_TENANCY_ID": "ocid1.tenancy.oc1..aaa", "CP_OCI_CLI": "bin/oci"},
+		{"CP_OCI_BILLING": "instance_principal", "CP_OCI_TENANCY_ID": "ocid1.tenancy.oc1..aaa", "CP_OCI_BILLING_INTERVAL": "5m"},
+	}
+	for _, extra := range bad {
+		if _, err := LoadAgent(mapLookup(with(extra)), "h"); err == nil {
+			t.Errorf("LoadAgent(%v) succeeded, want an error", extra)
+		}
+	}
+}

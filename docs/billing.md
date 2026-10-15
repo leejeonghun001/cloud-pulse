@@ -99,6 +99,72 @@ are **never** treated as hub errors:
 logged at most once per day per provider — raw stderr and credentials
 are never logged.
 
+## Agent-side OCI collection (instance principal)
+
+If the hub can't run the `oci` CLI (or shouldn't hold an OCI API key),
+an agent running on any OCI instance in the tenancy can query the Usage
+API itself, authenticating as the instance through an **instance
+principal**. No API key file is stored anywhere. Settings → Billing has
+a step-by-step guide that fills in the commands below from your OCIDs.
+
+1. **Dynamic group** (Identity & Security → Domains → Default → Dynamic
+   groups) with the matching rule `instance.id = '<instance OCID>'`.
+2. **Policy** in the root compartment:
+
+   ```text
+   Allow dynamic-group CostReader to read usage-reports in tenancy
+   ```
+
+   For a dynamic group in a non-Default identity domain, write
+   `'<domain>'/'CostReader'`.
+3. **Install the CLI system-wide.** The agent runs as the `cloud-pulse`
+   system user under `ProtectHome=read-only`, so a CLI under a personal
+   home directory is unusable:
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh -o /tmp/oci-install.sh
+   sudo bash /tmp/oci-install.sh --accept-all-defaults \
+     --install-dir /opt/oci-cli --exec-dir /usr/local/bin --script-dir /opt/oci-cli/scripts
+   ```
+
+4. **Test as the agent's user** — `NotAuthorizedOrNotFound` means the
+   dynamic group or policy is wrong or hasn't propagated yet:
+
+   ```bash
+   sudo -u cloud-pulse env HOME=/tmp oci usage-api usage-summary request-summarized-usages \
+     --auth instance_principal --tenant-id "<tenancy OCID>" \
+     --time-usage-started "$(date -u +%Y-%m-01T00:00:00Z)" \
+     --time-usage-ended "$(date -u -d tomorrow +%Y-%m-%dT00:00:00Z)" \
+     --granularity DAILY --query-type COST
+   ```
+
+5. **Enable it in `/etc/cloud-pulse/agent.env`** and restart the agent:
+
+   ```bash
+   CP_OCI_BILLING=instance_principal
+   CP_OCI_TENANCY_ID=<tenancy OCID>
+   # CP_OCI_CLI=/path/to/oci         only if not in /usr/local/bin:/usr/bin:/bin
+   # CP_OCI_BILLING_INTERVAL=1h      default 1h, minimum 15m
+   ```
+
+The agent queries once at startup and then every interval, on its own
+goroutine so a slow CLI call never delays metric samples. It runs the
+CLI with the same fixed argument array and 60-second timeout as the
+hub, a minimal `PATH`, and `HOME` set to a private directory under the
+service's private `/tmp`. The resulting snapshot rides on the next
+agent report; the hub validates it (OCI only, known status, finite
+amounts, bounded size), records the reporting host as `source_host`, and
+merges it exactly like a hub-collected snapshot, so last-success values
+survive a failed query. A hub with `CP_BILLING=off` ignores it.
+
+On the hub, keep `CP_BILLING` on and leave `CP_OCI_TENANCY_ID` unset:
+while the stored OCI snapshot is agent-reported, the hub's own poll
+skips OCI instead of overwriting it with `not_configured`. Enable this
+on **one** agent per tenancy — every agent shares the hub's single OCI
+snapshot, so two reporters (or an agent plus a hub-side tenancy) simply
+overwrite each other. Any holder of the agent token can submit this
+snapshot, the same trust level as the metrics it already reports.
+
 ## Not-connected states and data freshness
 
 A provider showing anything other than `ok` still displays its last
@@ -124,10 +190,11 @@ host that doesn't match shows `matched: false`.
 `GET /api/v1/billing` returns every provider's snapshot plus per-host
 combined cost. `POST /api/v1/billing/refresh` (admin) triggers an
 immediate poll, rate-limited to once per 10 minutes. The dashboard's
-**Costs** page shows a provider card per cloud and a per-host cost
-table; Settings → Billing exposes status/staleness, the interval
-selector, the AWS resource-level toggle, a refresh button, and the
-display-currency setting.
+**Costs** page shows a provider card per cloud (noting the agent for an
+agent-collected snapshot) and a per-host cost table; Settings → Billing
+exposes status/staleness, the interval selector, the AWS resource-level
+toggle, a refresh button, the display-currency setting, and the
+agent-side OCI setup guide.
 
 ## Network cost estimate
 

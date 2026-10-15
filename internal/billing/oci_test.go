@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
 )
@@ -125,4 +126,52 @@ func abs(f float64) float64 {
 		return -f
 	}
 	return f
+}
+
+func TestCollectOCI_InstancePrincipalAuthAndCLIPath(t *testing.T) {
+	runner := &fakeRunner{Default: Result{ExitCode: 0, Stdout: []byte(`{"data":[]}`)}}
+	snap := CollectOCI(context.Background(), runner, OCIConfig{
+		TenancyID: "ocid1.tenancy.oc1..xyz",
+		HomeDir:   t.TempDir(),
+		Auth:      "instance_principal",
+		CLI:       "/opt/oci-cli/bin/oci",
+	}, fixedNow("2026-09-15T00:00:00Z"))
+	if snap.Status != models.CloudBillingOK {
+		t.Fatalf("Status = %q, want ok", snap.Status)
+	}
+	if len(runner.Calls) != 1 {
+		t.Fatalf("Calls = %d, want 1", len(runner.Calls))
+	}
+	call := runner.Calls[0]
+	if call.Name != "/opt/oci-cli/bin/oci" {
+		t.Errorf("Name = %q, want the configured CLI path", call.Name)
+	}
+	n := len(call.Args)
+	if n < 2 || call.Args[n-2] != "--auth" || call.Args[n-1] != "instance_principal" {
+		t.Errorf("Args = %v, want trailing --auth instance_principal", call.Args)
+	}
+}
+
+func TestCollectOCI_DayBoundsAreUTCMidnightOnNonUTCHost(t *testing.T) {
+	kst := time.FixedZone("KST", 9*60*60)
+	// 2026-10-01 05:00 KST is still 2026-09-30 in UTC.
+	now := time.Date(2026, 10, 1, 5, 0, 0, 0, kst)
+	runner := &fakeRunner{Default: Result{ExitCode: 0, Stdout: []byte(`{"data":[]}`)}}
+	CollectOCI(context.Background(), runner, OCIConfig{TenancyID: "ocid1.tenancy.oc1..xyz", HomeDir: t.TempDir()}, now)
+
+	args := runner.Calls[0].Args
+	flag := func(name string) string {
+		for i := 0; i+1 < len(args); i++ {
+			if args[i] == name {
+				return args[i+1]
+			}
+		}
+		return ""
+	}
+	if got := flag("--time-usage-started"); got != "2026-09-01T00:00:00Z" {
+		t.Errorf("--time-usage-started = %q, want 2026-09-01T00:00:00Z", got)
+	}
+	if got := flag("--time-usage-ended"); got != "2026-10-01T00:00:00Z" {
+		t.Errorf("--time-usage-ended = %q, want 2026-10-01T00:00:00Z", got)
+	}
 }

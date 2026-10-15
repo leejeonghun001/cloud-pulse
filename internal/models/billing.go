@@ -92,6 +92,11 @@ type CloudCostSnapshot struct {
 	// LastSuccessAt exceeds twice the configured billing interval (see
 	// CloudCostStale).
 	Stale bool `json:"stale"`
+	// SourceHost is the host ID of the agent that collected this
+	// snapshot with its own provider CLI (agent-side OCI collection via
+	// instance principal), or empty when the hub's own collector
+	// produced it.
+	SourceHost string `json:"source_host,omitempty"`
 }
 
 // CloudCostStale reports whether a snapshot last successful at

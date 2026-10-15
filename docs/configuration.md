@@ -91,6 +91,10 @@ only session-based sign-in works.
 | `CP_UPDATE_LATEST_URL` | *(unset)* | Override the latest-release URL. When explicitly supplied to an agent installer, it is persisted in `agent.env` so Linux/macOS/Windows privileged remote-update helpers use the same mirror. |
 | `CP_RELEASE_BASE_URL` | *(unset)* | Override the asset + `checksums.txt` base URL. When explicitly supplied to an agent installer, it is persisted in `agent.env` for mirrors/air-gapped remote updates. |
 | `CP_CLOUD_METADATA` | `auto` | `auto\|off` — detects `HostInfo.CloudInstanceID` via DMI/AWS IMDSv2/OCI instance metadata |
+| `CP_OCI_BILLING` | `off` | `off\|instance_principal` — query the OCI Usage API from this agent with `oci --auth instance_principal` and report the tenancy's cost to the hub; see [billing.md](billing.md#agent-side-oci-collection-instance-principal) |
+| `CP_OCI_TENANCY_ID` | *(unset)* | Tenancy OCID to query; required when `CP_OCI_BILLING` is on |
+| `CP_OCI_CLI` | *(unset)* | Absolute path to `oci` when it is not in `/usr/local/bin:/usr/bin:/bin` |
+| `CP_OCI_BILLING_INTERVAL` | `1h` | Time between agent-side Usage API queries; minimum `15m` |
 
 ## Agent CLI flags (`cloud-pulse-agent`)
 

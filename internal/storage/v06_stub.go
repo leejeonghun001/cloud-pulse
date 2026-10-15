@@ -28,7 +28,7 @@ import (
 func (db *DB) GetCloudCostSnapshot(ctx context.Context, provider models.CloudBillingProvider) (models.CloudCostSnapshot, error) {
 	row := db.sql.QueryRowContext(ctx, `
 		SELECT status, status_detail, currency, mtd_cost, forecast_cost, forecast_method,
-		       account_level, per_resource, collected_at, last_success_at, last_attempt_at
+		       account_level, per_resource, collected_at, last_success_at, last_attempt_at, source_host
 		FROM cloud_cost_snapshots WHERE provider = ?
 	`, string(provider))
 	snap, err := scanCloudCostSnapshot(row.Scan, provider)
@@ -46,7 +46,7 @@ func (db *DB) GetCloudCostSnapshot(ctx context.Context, provider models.CloudBil
 func (db *DB) ListCloudCostSnapshots(ctx context.Context) ([]models.CloudCostSnapshot, error) {
 	rows, err := db.sql.QueryContext(ctx, `
 		SELECT provider, status, status_detail, currency, mtd_cost, forecast_cost, forecast_method,
-		       account_level, per_resource, collected_at, last_success_at, last_attempt_at
+		       account_level, per_resource, collected_at, last_success_at, last_attempt_at, source_host
 		FROM cloud_cost_snapshots ORDER BY provider
 	`)
 	if err != nil {
@@ -61,7 +61,7 @@ func (db *DB) ListCloudCostSnapshots(ctx context.Context) ([]models.CloudCostSna
 		var perResourceJSON string
 		if err := rows.Scan(&provider, &snap.Status, &snap.StatusDetail, &snap.Currency, &snap.MTDCost,
 			&snap.ForecastCost, &snap.ForecastMethod, &snap.AccountLevel, &perResourceJSON,
-			&snap.CollectedAt, &snap.LastSuccessAt, &snap.LastAttemptAt); err != nil {
+			&snap.CollectedAt, &snap.LastSuccessAt, &snap.LastAttemptAt, &snap.SourceHost); err != nil {
 			return nil, fmt.Errorf("storage: list cloud cost snapshots: %w", err)
 		}
 		snap.Provider = models.CloudBillingProvider(provider)
@@ -87,8 +87,8 @@ func (db *DB) SetCloudCostSnapshot(ctx context.Context, snap models.CloudCostSna
 	_, err = db.sql.ExecContext(ctx, `
 		INSERT INTO cloud_cost_snapshots (
 			provider, status, status_detail, currency, mtd_cost, forecast_cost, forecast_method,
-			account_level, per_resource, collected_at, last_success_at, last_attempt_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			account_level, per_resource, collected_at, last_success_at, last_attempt_at, source_host
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(provider) DO UPDATE SET
 			status = excluded.status,
 			status_detail = excluded.status_detail,
@@ -100,10 +100,11 @@ func (db *DB) SetCloudCostSnapshot(ctx context.Context, snap models.CloudCostSna
 			per_resource = excluded.per_resource,
 			collected_at = excluded.collected_at,
 			last_success_at = excluded.last_success_at,
-			last_attempt_at = excluded.last_attempt_at
+			last_attempt_at = excluded.last_attempt_at,
+			source_host = excluded.source_host
 	`, string(snap.Provider), string(snap.Status), snap.StatusDetail, snap.Currency, snap.MTDCost,
 		snap.ForecastCost, snap.ForecastMethod, snap.AccountLevel, perResourceJSON,
-		snap.CollectedAt, snap.LastSuccessAt, snap.LastAttemptAt)
+		snap.CollectedAt, snap.LastSuccessAt, snap.LastAttemptAt, snap.SourceHost)
 	if err != nil {
 		return fmt.Errorf("storage: set cloud cost snapshot: %w", err)
 	}
@@ -116,7 +117,7 @@ func scanCloudCostSnapshot(scan func(dest ...any) error, provider models.CloudBi
 	var perResourceJSON string
 	if err := scan(&status, &snap.StatusDetail, &snap.Currency, &snap.MTDCost, &snap.ForecastCost,
 		&snap.ForecastMethod, &snap.AccountLevel, &perResourceJSON, &snap.CollectedAt,
-		&snap.LastSuccessAt, &snap.LastAttemptAt); err != nil {
+		&snap.LastSuccessAt, &snap.LastAttemptAt, &snap.SourceHost); err != nil {
 		return models.CloudCostSnapshot{}, err
 	}
 	snap.Provider = provider

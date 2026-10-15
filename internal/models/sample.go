@@ -65,6 +65,12 @@ type AgentReport struct {
 	// (SPEC-v0.6 §2 step 5). Omitted when the agent has no pending
 	// result to report; a hub older than v0.6.0 ignores this field.
 	UpdateStatus *AgentUpdateStatus `json:"update_status,omitempty"`
+	// CloudCost carries a provider cost snapshot the agent collected
+	// itself (CP_OCI_BILLING=instance_principal), included on the first
+	// report after each collection until the hub accepts it. Omitted by
+	// agents with agent-side billing off; a hub older than this field
+	// ignores it.
+	CloudCost *CloudCostSnapshot `json:"cloud_cost,omitempty"`
 }
 
 // IngestResponse is returned by the hub after processing an AgentReport.

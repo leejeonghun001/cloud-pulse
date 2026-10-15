@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -63,6 +64,21 @@ type Agent struct {
 	// "off" (skip detection entirely; CloudInstanceID is always empty).
 	// See SPEC-v0.6 §1.
 	CloudMetadata string
+	// OCIBilling is the resolved CP_OCI_BILLING setting: "off" (default)
+	// or "instance_principal", which makes this agent query the OCI
+	// Usage API itself with `oci --auth instance_principal` and report
+	// the tenancy's cost to the hub — for hubs that can't run the OCI
+	// CLI themselves.
+	OCIBilling string
+	// OCITenancyID is CP_OCI_TENANCY_ID, the tenancy OCID to query.
+	// Required when OCIBilling is not "off".
+	OCITenancyID string
+	// OCICLI is CP_OCI_CLI, the `oci` executable path; empty looks it up
+	// on /usr/local/bin:/usr/bin:/bin.
+	OCICLI string
+	// OCIBillingInterval is CP_OCI_BILLING_INTERVAL (default 1h, min
+	// 15m), the time between two agent-side Usage API queries.
+	OCIBillingInterval time.Duration
 }
 
 // DefaultAgentNetExclude returns the default network interface exclusion
@@ -84,7 +100,9 @@ func DefaultAgentNetExclude() []string {
 // (hub|local, default hub), CP_SEND_JITTER (default 0, must be
 // <= CP_INTERVAL/2), CP_DOCKER (auto|off|<socket path/URL>, default
 // auto), CP_REMOTE_UPDATE (off|on, default off), CP_CLOUD_METADATA
-// (auto|off, default auto).
+// (auto|off, default auto), CP_OCI_BILLING (off|instance_principal,
+// default off), CP_OCI_TENANCY_ID (required when CP_OCI_BILLING is on),
+// CP_OCI_CLI, CP_OCI_BILLING_INTERVAL (default 1h, min 15m).
 func LoadAgent(l LookupFunc, hostname string) (Agent, error) {
 	cfg := Agent{}
 
@@ -155,7 +173,40 @@ func LoadAgent(l LookupFunc, hostname string) (Agent, error) {
 	}
 	cfg.CloudMetadata = cloudMetadata
 
+	if err := loadOCIBilling(l, &cfg); err != nil {
+		return Agent{}, err
+	}
+
 	return cfg, nil
+}
+
+// loadOCIBilling reads CP_OCI_BILLING and, when it is enabled, the
+// tenancy, CLI path and interval settings it depends on.
+func loadOCIBilling(l LookupFunc, cfg *Agent) error {
+	mode := strings.ToLower(getString(l, "CP_OCI_BILLING", "off"))
+	switch mode {
+	case "off", "instance_principal":
+	default:
+		return fmt.Errorf("config: CP_OCI_BILLING must be one of off|instance_principal, got %q", mode)
+	}
+	cfg.OCIBilling = mode
+	if mode == "off" {
+		return nil
+	}
+	cfg.OCITenancyID = strings.TrimSpace(getString(l, "CP_OCI_TENANCY_ID", ""))
+	if !strings.HasPrefix(cfg.OCITenancyID, "ocid1.tenancy.") {
+		return fmt.Errorf("config: CP_OCI_TENANCY_ID must be a tenancy OCID (ocid1.tenancy...) when CP_OCI_BILLING=%s", mode)
+	}
+	cfg.OCICLI = strings.TrimSpace(getString(l, "CP_OCI_CLI", ""))
+	if cfg.OCICLI != "" && !filepath.IsAbs(cfg.OCICLI) {
+		return fmt.Errorf("config: CP_OCI_CLI must be an absolute path, got %q", cfg.OCICLI)
+	}
+	interval, err := getDuration(l, "CP_OCI_BILLING_INTERVAL", time.Hour, 15*time.Minute)
+	if err != nil {
+		return err
+	}
+	cfg.OCIBillingInterval = interval
+	return nil
 }
 
 // loadRemoteUpdate reads and validates CP_REMOTE_UPDATE (off|on,
