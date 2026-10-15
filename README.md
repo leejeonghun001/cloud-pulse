@@ -11,13 +11,27 @@ the binary.
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8)](go.mod)
 
-![cloud-pulse fleet overview](docs/screenshots/overview.png)
+![cloud-pulse fleet overview (isolated demo-host data)](docs/screenshots/overview.png)
 
 More screenshots: [host detail](docs/screenshots/host-detail.png) ·
-[mobile](docs/screenshots/mobile.png) ·
+[Activity](docs/screenshots/alerts.png) ·
+[mobile onboarding](docs/screenshots/mobile-overview.png) ·
+[masked install guide](docs/screenshots/add-agent.png) ·
+[notification test](docs/screenshots/notifications.png) ·
+[illustrative costs](docs/screenshots/costs.png) ·
+[Korean overview](docs/screenshots/ko/ko-overview.png) ·
+[mobile (earlier capture)](docs/screenshots/mobile.png) ·
 [settings](docs/screenshots/settings.png) ·
 [rollout](docs/screenshots/rollout.png) ·
 [channel health](docs/screenshots/notifications-health.png)
+
+The refreshed overview, detail and Activity images use demo metrics, inventory
+and historical event fixtures, not real incidents or provider truth. Mobile
+onboarding uses a browser-only empty-host response over a seeded sandbox, not
+an empty backend. The install command/token stays masked. The notification
+result is a browser stub: nothing was sent or delivery verified, and recorded
+health is unchanged. Costs are illustrative billing fixtures, not live charges.
+The earlier mobile, settings, rollout and channel-health images are unchanged.
 
 ## Features
 
@@ -68,11 +82,14 @@ More screenshots: [host detail](docs/screenshots/host-detail.png) ·
 
 ## Architecture
 
-Agents push metrics to the hub over HTTP(S) authenticated with a
-pre-shared bearer token — no inbound access to agents is required, so
-it works behind NAT/CGNAT (a [Tailscale](https://tailscale.com) mesh is
-recommended). See [docs/architecture.md](docs/architecture.md) for the
-full diagram and package layering.
+Agents initiate authenticated metric/inventory reports to the hub; no
+inbound access to agents is needed, so they work behind NAT/CGNAT (a
+[Tailscale](https://tailscale.com) mesh is recommended). The hub stores
+state in embedded SQLite, serves its embedded dashboard, and contacts
+external services only for enabled/configured integrations. See
+[docs/architecture.md](docs/architecture.md) for the flow diagram and
+[docs/api.md](docs/api.md) for the public, agent, and dashboard API auth
+classes.
 
 ## Quick start
 
@@ -137,6 +154,156 @@ curl -fsSL .../install-agent.sh | sudo bash -s -- --uninstall [--purge]
 
 Details: [docs/install.md](docs/install.md#uninstall).
 
+## Local development (specimen)
+
+This **local-development specimen** is not a production/deployment recipe or
+supported image. It builds only the hub, persists embedded SQLite in a named
+volume, and has no agents, provider/notification credentials, custom endpoints,
+or remote agents. `CP_UPDATE_CHECK=false`/`CP_BILLING=off` apply only here.
+Docker source IP varies; never widen the bridge allowlist to `*`. Inspect the
+observed source; on subnet conflict, change Compose IPAM and `.env` CIDR together.
+
+### Docker Compose
+
+Requires Docker Engine and Compose v2. The project builds a local image; no
+published image is implied. Create a private local env file and generate a
+64-hex-character random agent token (the command refuses to overwrite `.env`):
+
+```bash
+if [ -e .env ]; then
+  printf '%s\n' '.env already exists; refusing to overwrite it' >&2
+  exit 1
+fi
+(umask 077; cp .env.example .env)
+python3 -c 'from pathlib import Path; import secrets; p=Path(".env"); s=p.read_text(); old="CP_AGENT_TOKEN=\n"; assert s.count(old) == 1; p.write_text(s.replace(old, "CP_AGENT_TOKEN=" + secrets.token_hex(32) + "\n", 1))'
+```
+
+Validate without printing the expanded token-bearing environment, then
+build/start the hub, check health, and open the sign-in page:
+
+```bash
+docker compose --env-file .env config --quiet
+docker compose --env-file .env up --build -d
+curl --noproxy '*' --connect-timeout 2 --max-time 5 --fail http://127.0.0.1:18091/healthz
+```
+
+Sign in at <http://127.0.0.1:18091/login> as `admin` / `changeme`; the first
+login requires changing that well-known default password before other pages
+or APIs are available. Stop the service without deleting its data with:
+
+```bash
+docker compose --env-file .env down
+```
+
+The named volume remains after `down`; do not add `-v` unless intentionally
+deleting this specimen's local database. Docker host-source translation,
+bridge routing, and IPv4 subnet availability are engine/OS dependent; this
+sample is not evidence of runtime compatibility on other hosts.
+
+### Native source smoke (offline)
+
+This offline smoke uses the installed Go toolchain/module cache and disposable
+paths, contacting loopback only. It checks health, first-login password-change
+enforcement, rotation, and access. Harness-only `SMOKE_PORT` defaults to `18091`,
+validates loopback/unprivileged ports and rejects `8090`; it is not a CP setting.
+
+```bash
+set -eu
+tmp="$(mktemp -d)"
+SMOKE_PORT="${SMOKE_PORT:-18091}"
+SMOKE_PORT="$(python3 -c 'import socket,sys; raw=sys.argv[1]; port=int(raw,10) if raw.isascii() and raw.isdigit() else -1; (1024 <= port <= 65535 and port != 8090) or sys.exit("SMOKE_PORT must be 1024..65535 except 8090"); s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1", port)); s.close(); print(port)' "$SMOKE_PORT")"
+SMOKE_ADDR="127.0.0.1:$SMOKE_PORT"
+SMOKE_BASE_URL="http://$SMOKE_ADDR"
+export SMOKE_PORT SMOKE_ADDR SMOKE_BASE_URL
+pid=
+cleanup() {
+  status=$?
+  trap - EXIT
+  if [ -n "$pid" ]; then
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -TERM "$pid" 2>/dev/null || true
+      ticks=0
+      while [ "$ticks" -lt 3 ] && kill -0 "$pid" 2>/dev/null; do
+        sleep 1
+        ticks=$((ticks + 1))
+      done
+      if kill -0 "$pid" 2>/dev/null; then
+        kill -KILL "$pid" 2>/dev/null || true
+      fi
+    fi
+    wait "$pid" 2>/dev/null || true
+  fi
+  rm -rf "$tmp"; exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off CGO_ENABLED=0 go build -trimpath -o "$tmp/cloud-pulse-hub" ./cmd/hub
+mkdir -m 700 "$tmp/data"
+mkdir -m 700 "$tmp/home" "$tmp/tmp"
+token="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+env -i PATH=/usr/bin:/bin TMPDIR="$tmp/tmp" HOME="$tmp/home" \
+  CP_AGENT_TOKEN="$token" \
+  CP_LISTEN="$SMOKE_ADDR" \
+  CP_DATA_DIR="$tmp/data" \
+  CP_ALLOWED_CIDRS=127.0.0.0/8,::1/128 \
+  CP_UPDATE_CHECK=false CP_BILLING=off \
+  "$tmp/cloud-pulse-hub" >"$tmp/hub.log" 2>&1 &
+pid=$!; unset token
+ready=
+for _ in $(seq 1 40); do
+  if curl --noproxy '*' --connect-timeout 1 --max-time 2 \
+      --fail --silent "$SMOKE_BASE_URL/healthz" >/dev/null; then
+    ready=1
+    break
+  fi
+  sleep 0.25
+done
+test "$ready" = 1
+python3 - <<'PY'
+import json
+import os
+import secrets
+import urllib.error
+import urllib.request
+
+base = os.environ["SMOKE_BASE_URL"]
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+def request(path, method="GET", token=None, payload=None):
+    headers = {}
+    body = None
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+        body = json.dumps(payload).encode()
+    req = urllib.request.Request(base + path, data=body, headers=headers, method=method)
+    try:
+        with opener.open(req, timeout=5) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as error:
+        return error.code, json.loads(error.read())
+
+status, login = request("/api/v1/auth/login", "POST", payload={"username": "admin", "password": "changeme"})
+assert status == 200 and login["must_change_password"] is True
+status, _ = request("/api/v1/hosts", token=login["token"])
+assert status == 403, f"must-change gate returned {status}, expected 403"
+status, changed = request("/api/v1/auth/password", "POST", token=login["token"], payload={
+    "current_password": "changeme",
+    "new_password": secrets.token_urlsafe(24),
+})
+assert status == 200 and changed["must_change_password"] is False
+status, _ = request("/api/v1/hosts", token=changed["token"])
+assert status == 200, f"post-change access returned {status}, expected 200"
+print("PASS login admin/changeme -> must-change=true; GET hosts -> 403; password change -> must-change=false; GET hosts -> 200")
+PY
+python3 -c 'import hashlib, pathlib, sys; p=pathlib.Path(sys.argv[1]); print(hashlib.sha256(p.read_bytes()).hexdigest(), p)' "$tmp/cloud-pulse-hub"
+```
+
+The trap stops the temporary hub and removes only its temporary directory.
+This source smoke is not a Docker/Compose runtime check.
+
 ## Documentation
 
 | Doc | Covers |
@@ -157,7 +324,7 @@ Details: [docs/install.md](docs/install.md#uninstall).
 Contributing (setup, adding a metric/notifier/storage provider/page,
 release process): [CONTRIBUTING.md](CONTRIBUTING.md). Architecture and
 security conventions: [CODING_CONVENTIONS.md](CODING_CONVENTIONS.md).
-Design decisions and their rationale: [DECISIONS_LOG.md](DECISIONS_LOG.md).
+Design decisions and rationale: [DECISIONS_LOG.md](DECISIONS_LOG.md); local performance baseline: [docs/performance.md](docs/performance.md).
 Security vulnerability reporting: [SECURITY.md](SECURITY.md).
 
 ```bash

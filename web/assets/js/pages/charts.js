@@ -6,30 +6,79 @@
 import uPlot from "../../vendor/uplot/uPlot.esm.js";
 import { t } from "../core/i18n.js";
 
-/** Series colors, reused across charts for visual consistency. Chosen
- * to hold up against both the light and dark surface colors. */
-export const SERIES_COLORS = {
-  cpu: "#22d3ee",
-  mem: "#a78bfa",
-  disk: "#fb923c",
-  netRx: "#34d399",
-  netTx: "#f472b6",
-  diskRead: "#60a5fa",
-  diskWrite: "#fbbf24",
-  load1: "#f87171",
-  sparkline: "#38bdf8",
+/**
+ * Series colors, reused across charts for visual consistency. Declared
+ * as CSS custom properties in web/src/tokens.css (--chart-cp-*) and read
+ * back here, so a palette change is one edit in the design system rather
+ * than a JS edit that would silently drift from the CSS.
+ *
+ * The FALLBACK map below is a defensive light-theme palette: if
+ * app.css ever fails to load (a stale cached build, a stripped asset
+ * bundle) a chart should still draw in roughly the right colors rather
+ * than render every series as transparent black.
+ */
+const SERIES_COLOR_FALLBACK = {
+  cpu: "#0e7490",
+  mem: "#7c3aed",
+  disk: "#c2410c",
+  netRx: "#047857",
+  netTx: "#be185d",
+  diskRead: "#2563eb",
+  diskWrite: "#a16207",
+  load1: "#dc2626",
+  sparkline: "#0369a1",
+};
+
+/** Maps each series key to its --chart-cp-* custom property name. */
+const SERIES_COLOR_TOKEN = {
+  cpu: "--chart-cp-cpu",
+  mem: "--chart-cp-mem",
+  disk: "--chart-cp-disk",
+  netRx: "--chart-cp-net-rx",
+  netTx: "--chart-cp-net-tx",
+  diskRead: "--chart-cp-disk-read",
+  diskWrite: "--chart-cp-disk-write",
+  load1: "--chart-cp-load1",
+  sparkline: "--chart-cp-sparkline",
 };
 
 /**
+ * readToken resolves a CSS custom property to a usable color string,
+ * falling back to `fallback` when the property is unset or empty (which
+ * is what a browser reports for an undefined custom property).
+ * @param {string} name
+ * @param {string} fallback
+ * @returns {string}
+ */
+function readToken(name, fallback) {
+  if (typeof document === "undefined" || typeof getComputedStyle !== "function") return fallback;
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+
+/** Keep the enumerable property API, but resolve colors at read time so
+ *  callers recreating charts after cp-theme-change see the active palette. */
+export const SERIES_COLORS = Object.freeze(
+  Object.defineProperties({}, Object.fromEntries(
+    Object.entries(SERIES_COLOR_TOKEN).map(([key, name]) => [key, {
+      enumerable: true,
+      get: () => readToken(name, SERIES_COLOR_FALLBACK[key]),
+    }]),
+  )),
+);
+
+/**
  * readThemeColors reads the current axis/grid colors from CSS
- * variables so charts match the active light/dark theme.
+ * variables so charts match the active light/dark theme. Resolved on
+ * every call (not cached at module load) so a chart created after a
+ * theme toggle gets the new theme's axis without a reload.
  * @returns {{axis: string, grid: string}}
  */
 function readThemeColors() {
-  const isDark = document.documentElement.classList.contains("dark");
-  return isDark
-    ? { axis: "#a1a1aa", grid: "#27272a" }
-    : { axis: "#71717a", grid: "#e4e4e7" };
+  return {
+    axis: readToken("--chart-cp-axis", "#64646c"),
+    grid: readToken("--chart-cp-grid", "#e4e4e7"),
+  };
 }
 
 /**
@@ -162,21 +211,22 @@ export class ChartHandle {
  * @param {number[][]} opts.values one array per series, same length as timestamps
  * @param {(rawValue: number, seriesIdx: number) => string} [opts.valueFormatter] legend/cursor value formatter
  * @param {(rawValue: number) => string} [opts.yAxisFormatter] y-axis tick formatter
+ * @param {boolean} [opts.lineOnly] renders comparison-style series without area fills
  * @returns {ChartHandle}
  */
 export function createTimeSeriesChart(container, opts) {
-  const { title, series, timestamps, values, valueFormatter, yAxisFormatter, syncKey } = opts;
+  const { title, series, timestamps, values, valueFormatter, yAxisFormatter, syncKey, lineOnly = false } = opts;
 
   const uplotSeries = [
     { label: t("host.chart_series_time") },
     ...series.map((s) => ({
       label: s.label,
       stroke: s.color,
-      width: 2,
+      width: lineOnly ? 1.5 : 2,
       // A translucent fill under the line ("area chart" per
       // SPEC-v0.4 §4) using the series' own color at low alpha so
       // multiple overlapping series (e.g. Rx/Tx) stay readable.
-      fill: `${s.color}26`,
+      ...(lineOnly ? {} : { fill: `${s.color}26` }),
       points: { show: false },
       value: valueFormatter
         ? (_u, v, seriesIdx) => (v == null ? "–" : valueFormatter(v, seriesIdx))

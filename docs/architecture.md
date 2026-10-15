@@ -1,27 +1,38 @@
 # Architecture
 
-```text
-                    Tailscale HTTPS/HTTP + bearer PSK
- +----------+   push    +------------------------------+   pulls    +-------------+
- |  agent A |---------->|                              |----------->|  CloudWatch |
- +----------+   push    |             hub              |            |   (S3)      |
- |  agent B |---------->|  REST API - SQLite - collec- |            +-------------+
- +----------+   push    |  tors - embedded dashboard    |----------->+-------------+
- |  agent N |---------->|                              |            |  Cloudflare |
- +----------+           +------------------------------+            |  GraphQL(R2)|
-                                       | serves                     +-------------+
-                                       v
-                                  +---------+
-                                  | browser |
-                                  +---------+
+```mermaid
+flowchart LR
+    A["cloud-pulse-agent<br/>metrics + inventory"] -->|"POST report<br/>CP_AGENT_TOKEN"| H["cloud-pulse hub<br/>HTTP API + schedulers"]
+    H <-->|"samples, settings,<br/>events, sessions"| DB[("embedded SQLite")]
+    H -->|"embedded HTML/CSS/JS"| B["browser dashboard"]
+    B -->|"dashboard API<br/>session"| H
+    C["API clients"] -->|"optional CP_UI_TOKEN"| H
+    H -. "configured S3 buckets + AWS credentials" .-> CW["CloudWatch / S3"]
+    H -. "configured account credentials" .-> R2["Cloudflare R2"]
+    H -. "configured accounts only" .-> GD["Google Drive / Dropbox"]
+    H -. "billing enabled + usable provider CLI" .-> Bill["AWS / OCI CLI"]
+    H -. "configured alerts or explicit/opt-in tests" .-> N["notification destinations"]
+    H -. "CP_UPDATE_CHECK enabled" .-> GH["GitHub release metadata"]
 ```
 
-Agents push metrics to the hub over HTTP(S) authenticated with a
-pre-shared bearer token (`CP_AGENT_TOKEN`) — no inbound access to
-agents is required, so it works behind NAT/CGNAT. The hub separately
-polls AWS CloudWatch, Cloudflare's GraphQL Analytics API, and (since
-v0.7.0) Google Drive/Dropbox's own REST APIs on a timer, and serves
-both a JSON REST API and its own embedded dashboard to the browser.
+**Text fallback:** Agents initiate HTTPS/HTTP report requests with the
+`CP_AGENT_TOKEN`; the hub stores reports and dashboard state in SQLite
+and serves the dashboard from embedded assets. The browser calls the
+hub API using a dashboard session (or `CP_UI_TOKEN` for API clients).
+At startup the hub indexes every embedded asset once, calculating a strong
+ETag and retaining a smaller gzip variant for compressible files; dashboard
+responses still use `Cache-Control: no-cache`, so an upgraded binary is picked
+up on the next revalidation without re-downloading unchanged bytes.
+There is no inbound connection to an agent. External service activity
+depends on configuration: S3/R2 collectors need their configured
+credentials and buckets/accounts; Drive/Dropbox polling runs only for
+accounts configured in the hub; billing runs only when enabled (set
+`CP_BILLING=off` to disable it); notification sends require configured
+channels and an alert, test, or enabled synthetic-test schedule. The
+separate release lookup is controlled by `CP_UPDATE_CHECK` (enabled by
+default). These are optional/configuration-dependent integrations, not
+unconditional calls to every provider. See [configuration.md](configuration.md)
+for the settings and [api.md](api.md) for route authentication.
 
 ## Layering
 

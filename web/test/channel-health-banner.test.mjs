@@ -193,6 +193,33 @@ test("startChannelHealthBannerPolling skips polling when isActive returns false"
   });
 });
 
+test("startChannelHealthBannerPolling pauses while hidden and refreshes on visibility", async () => {
+  const { startChannelHealthBannerPolling } = await import("../assets/js/ui/channel-health-banner.js");
+  const previousDocument = globalThis.document;
+  const listeners = {};
+  globalThis.document = {
+    hidden: true,
+    addEventListener(type, handler) { listeners[type] = handler; },
+    removeEventListener(type) { delete listeners[type]; },
+  };
+  try {
+    await withFakeFetch([{ status: 200, body: { channels: [], banner_needed: false } }], async () => {
+      let renders = 0;
+      const stop = startChannelHealthBannerPolling(() => { renders++; }, { intervalMs: 1000000 });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(renders, 0, "hidden tabs do not start a health request");
+      globalThis.document.hidden = false;
+      listeners.visibilitychange();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(renders, 1, "becoming visible refreshes immediately");
+      stop();
+    });
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+  }
+});
+
 test("startChannelHealthBannerPolling clears the banner on a 401 (session ended)", async () => {
   const { startChannelHealthBannerPolling } = await import("../assets/js/ui/channel-health-banner.js");
   await withFakeFetch([{ status: 401, body: { error: "session expired" } }], async () => {

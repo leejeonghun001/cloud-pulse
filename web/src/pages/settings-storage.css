@@ -7,7 +7,7 @@
   }
 
   .cp-storage-account-row {
-    @apply flex flex-col gap-2 rounded-lg border border-[rgb(var(--border))] p-3;
+    @apply flex flex-col gap-2 rounded-[var(--radius-cp-md)] border border-[rgb(var(--border))] p-3;
   }
 
   .cp-storage-account-row-header {

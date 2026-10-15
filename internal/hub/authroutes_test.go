@@ -2,10 +2,13 @@ package hub
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -445,6 +448,467 @@ func TestChangePassword_Success(t *testing.T) {
 	rec3 := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/auth/me", "203.0.113.27:1", got.Token, nil)
 	if rec3.Code != http.StatusOK {
 		t.Fatalf("new token status = %d, want 200 (body=%s)", rec3.Code, rec3.Body.String())
+	}
+}
+
+// TestChangePassword_RecordsAudit covers the audit_log gap this route
+// used to have: a successful rotation wrote the new hash but no
+// AuditEntry, so the change history in Settings could not show who
+// rotated the admin credential, from where, or that the other sessions
+// were revoked.
+func TestChangePassword_RecordsAudit(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	s := newTestServer(t, testOptions(), store)
+	tokenA := loginAndGetToken(t, s, store, "old-password-1")
+
+	// A second session, so the entry can prove the revocation count.
+	body, _ := json.Marshal(loginRequest{Username: "admin", Password: "old-password-1"})
+	rec := doRequest(t, s.Handler(), http.MethodPost, "/api/v1/auth/login", "203.0.113.36:2", "", body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("second login status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+
+	changeBody, _ := json.Marshal(changePasswordRequest{CurrentPassword: "old-password-1", NewPassword: "brand-new-password-1"})
+	rec2 := doRequest(t, s.Handler(), http.MethodPost, "/api/v1/auth/password", "203.0.113.36:1", tokenA, changeBody)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec2.Code, rec2.Body.String())
+	}
+
+	entries, err := store.ListAuditEntries(t.Context(), "", 0, 10)
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("audit entries = %+v, want exactly one password_change entry", entries)
+	}
+	entry := entries[0]
+	if entry.Action != AuditActionPasswordChange {
+		t.Errorf("Action = %q, want %q", entry.Action, AuditActionPasswordChange)
+	}
+	if entry.EntityType != "admin_password" || entry.EntityID != "" {
+		t.Errorf("EntityType/EntityID = %q/%q, want admin_password and a singleton empty ID", entry.EntityType, entry.EntityID)
+	}
+	if entry.Actor != "admin" {
+		t.Errorf("Actor = %q, want admin (a session-authenticated request)", entry.Actor)
+	}
+	if entry.Remote != "203.0.113.36" {
+		t.Errorf("Remote = %q, want the client host without its port", entry.Remote)
+	}
+	if entry.BeforeJSON != "" {
+		t.Errorf("BeforeJSON = %q, want empty (there is no previous non-secret state worth recording)", entry.BeforeJSON)
+	}
+
+	var after struct {
+		PasswordChanged   *bool  `json:"password_changed"`
+		MustChangeCleared *bool  `json:"must_change_cleared"`
+		SessionsRevoked   *int   `json:"sessions_revoked"`
+		SessionIssued     bool   `json:"session_issued"`
+		RevocationStatus  string `json:"session_revocation_status"`
+		FailureStage      string `json:"failure_stage"`
+	}
+	if err := json.Unmarshal([]byte(entry.AfterJSON), &after); err != nil {
+		t.Fatalf("unmarshal AfterJSON %q: %v", entry.AfterJSON, err)
+	}
+	if after.PasswordChanged == nil || !*after.PasswordChanged {
+		t.Errorf("AfterJSON password_changed = %v, want true", after.PasswordChanged)
+	}
+	if after.MustChangeCleared == nil || !*after.MustChangeCleared {
+		t.Errorf("AfterJSON must_change_cleared = %v, want true", after.MustChangeCleared)
+	}
+	// Two sessions existed before the rotation (tokenA's and the
+	// second login's) and the fresh one issued by this request is
+	// kept, so exactly the two older ones are revoked.
+	if after.SessionsRevoked == nil || *after.SessionsRevoked != 2 {
+		t.Errorf("AfterJSON sessions_revoked = %v, want 2 (both pre-rotation sessions)", after.SessionsRevoked)
+	}
+	if !after.SessionIssued || after.RevocationStatus != "completed" || after.FailureStage != "" {
+		t.Error("successful rotation must report session issuance and completed revocation without a failure stage")
+	}
+}
+
+// TestChangePassword_AuditNeverContainsSecrets is the security
+// counterpart of TestChangePassword_RecordsAudit: the audit row is
+// readable by every admin session and API-token holder, so neither the
+// password itself nor either PBKDF2 hash may appear in it.
+func TestChangePassword_AuditNeverContainsSecrets(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	s := New(testOptions(), store, nil, nil, nil, logger)
+	token := loginAndGetToken(t, s, store, "old-password-1")
+	oldHash, ok, err := store.GetSetting(t.Context(), SettingPasswordHash)
+	if err != nil || !ok {
+		t.Fatal("could not capture the old password hash")
+	}
+
+	body, _ := json.Marshal(changePasswordRequest{CurrentPassword: "old-password-1", NewPassword: "brand-new-password-1"})
+	rec := doRequest(t, s.Handler(), http.MethodPost, "/api/v1/auth/password", "203.0.113.37:1", token, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var response models.LoginResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || response.Token == "" {
+		t.Fatal("could not capture the new session token")
+	}
+
+	entries, err := store.ListAuditEntries(t.Context(), "", 0, 10)
+	if err != nil {
+		t.Fatal("could not list audit entries")
+	}
+	if len(entries) != 1 {
+		t.Fatalf("audit entry count = %d, want exactly one entry", len(entries))
+	}
+	storedHash, ok, err := store.GetSetting(t.Context(), SettingPasswordHash)
+	if err != nil || !ok {
+		t.Fatal("could not capture the new password hash")
+	}
+	serialized, err := json.Marshal(entries[0])
+	if err != nil {
+		t.Fatal("could not serialize audit entry")
+	}
+	assertPasswordChangeSecretsAbsent(t, string(serialized), logBuf.String(), []string{
+		"old-password-1", "brand-new-password-1", oldHash, storedHash,
+		token, hashSessionToken(token), response.Token, hashSessionToken(response.Token),
+	})
+}
+
+// TestChangePassword_FailedChangeRecordsNoAudit guards the negative
+// case: only a rotation that actually happened may leave a trace, so a
+// wrong current password or a rejected new password must not look like
+// a credential change in the history.
+func TestChangePassword_FailedChangeRecordsNoAudit(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		req    changePasswordRequest
+		status int
+		code   string
+	}{
+		{"wrong_current", changePasswordRequest{CurrentPassword: "totally-wrong", NewPassword: "brand-new-password-1"}, http.StatusUnauthorized, "invalid_credentials"},
+		{"weak_new", changePasswordRequest{CurrentPassword: "old-password-1", NewPassword: "short"}, http.StatusBadRequest, "weak_password"},
+		{"same_as_current", changePasswordRequest{CurrentPassword: "old-password-1", NewPassword: "old-password-1"}, http.StatusBadRequest, "weak_password"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := &passwordChangeFaultStore{fakeStore: newFakeStore()}
+			s := newTestServer(t, testOptions(), store)
+			token := loginAndGetToken(t, s, store, "old-password-1")
+			oldHash, _, _ := store.GetSetting(t.Context(), SettingPasswordHash)
+			beforeSessions, _ := store.ListSessions(t.Context())
+			beforeFlag, _, _ := store.GetSetting(t.Context(), SettingMustChangePassword)
+			store.settingWrites, store.sessionCreates, store.revocationCalls = 0, 0, 0
+			body, _ := json.Marshal(tc.req)
+			rec := doRequest(t, s.Handler(), http.MethodPost, "/api/v1/auth/password", "203.0.113.38:1", token, body)
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.status)
+			}
+			var response models.APIError
+			if json.Unmarshal(rec.Body.Bytes(), &response) != nil || response.Code != tc.code {
+				t.Error("rejection error code changed")
+			}
+			afterHash, _, _ := store.GetSetting(t.Context(), SettingPasswordHash)
+			afterSessions, _ := store.ListSessions(t.Context())
+			afterFlag, _, _ := store.GetSetting(t.Context(), SettingMustChangePassword)
+			if afterHash != oldHash || afterFlag != beforeFlag || !reflect.DeepEqual(beforeSessions, afterSessions) {
+				t.Error("rejected change mutated credentials, must-change flag, or sessions")
+			}
+			if store.settingWrites != 0 || store.sessionCreates != 0 || store.revocationCalls != 0 || len(store.auditAttempts) != 0 {
+				t.Error("rejected change attempted a state write or audit")
+			}
+			entries, err := store.ListAuditEntries(t.Context(), "", 0, 10)
+			if err != nil {
+				t.Fatalf("list audit entries: %v", err)
+			}
+			if len(entries) != 0 {
+				t.Errorf("audit entry count = %d, want none for a rejected change", len(entries))
+			}
+		})
+	}
+}
+
+// passwordChangeFaultStore is route-local: seed the embedded store before
+// enabling faults so bootstrap/login cannot consume the injected failure.
+type passwordChangeFaultStore struct {
+	*fakeStore
+	fault                  string
+	failureSecrets         string
+	deleteBeforeError      bool
+	cancelOnFailure        context.CancelFunc
+	settingWrites          int
+	sessionCreates         int
+	revocationCalls        int
+	attemptedPasswordHash  string
+	attemptedSessionHashes []string
+	auditAttempts          []models.AuditEntry
+	auditContextErr        error
+	auditDeadline          time.Time
+	auditHasDeadline       bool
+	auditContextValue      any
+}
+
+type passwordChangeAuditTestContextKey struct{}
+
+func (f *passwordChangeFaultStore) injectedError(extra string) error {
+	if f.cancelOnFailure != nil {
+		f.cancelOnFailure()
+	}
+	// Deliberately secret-bearing errors prove the route does not log raw
+	// error text. Test failure messages must not print these errors either.
+	return fmt.Errorf("injected store failure: %s %s %s", f.failureSecrets, f.attemptedPasswordHash, extra)
+}
+
+func (f *passwordChangeFaultStore) SetSetting(ctx context.Context, key, value string) error {
+	f.settingWrites++
+	if key == SettingPasswordHash {
+		f.attemptedPasswordHash = value
+		if f.fault == "hash_write" {
+			return f.injectedError(value)
+		}
+	}
+	if key == SettingMustChangePassword && f.fault == "must_change_clear" {
+		return f.injectedError("")
+	}
+	return f.fakeStore.SetSetting(ctx, key, value)
+}
+
+func (f *passwordChangeFaultStore) CreateSession(ctx context.Context, sess models.Session) error {
+	f.sessionCreates++
+	f.attemptedSessionHashes = append(f.attemptedSessionHashes, sess.IDHash)
+	if f.fault == "session_issue" {
+		return f.injectedError(sess.IDHash)
+	}
+	return f.fakeStore.CreateSession(ctx, sess)
+}
+
+func (f *passwordChangeFaultStore) DeleteSessionsExcept(ctx context.Context, keepIDHash string) (int, error) {
+	f.revocationCalls++
+	if f.fault == "session_revocation" {
+		if f.deleteBeforeError {
+			if _, err := f.fakeStore.DeleteSessionsExcept(ctx, keepIDHash); err != nil {
+				return 0, err
+			}
+		}
+		// A RowsAffected failure can return zero even when DELETE succeeded.
+		return 0, f.injectedError(keepIDHash)
+	}
+	return f.fakeStore.DeleteSessionsExcept(ctx, keepIDHash)
+}
+
+func (f *passwordChangeFaultStore) CreateAuditEntry(ctx context.Context, entry models.AuditEntry) (models.AuditEntry, error) {
+	f.auditAttempts = append(f.auditAttempts, entry)
+	f.auditContextErr = ctx.Err()
+	f.auditDeadline, f.auditHasDeadline = ctx.Deadline()
+	f.auditContextValue = ctx.Value(passwordChangeAuditTestContextKey{})
+	if f.fault == "audit_write" {
+		return models.AuditEntry{}, f.injectedError(strings.Join(f.attemptedSessionHashes, " "))
+	}
+	return f.fakeStore.CreateAuditEntry(ctx, entry)
+}
+
+func assertPasswordChangeSecretsAbsent(t *testing.T, serializedEntry, logs string, secrets []string) {
+	t.Helper()
+	for i, secret := range secrets {
+		if secret == "" {
+			continue
+		}
+		if strings.Contains(serializedEntry, secret) {
+			t.Errorf("serialized audit entry contains secret at index %d", i)
+		}
+		if strings.Contains(logs, secret) {
+			t.Errorf("log output contains secret at index %d", i)
+		}
+	}
+}
+
+func TestChangePassword_AuditConfirmedOutcomes(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name              string
+		fault             string
+		status            int
+		mustChangeCleared bool
+		sessionIssued     bool
+		revocationStatus  string
+		failureStage      string
+		revoked           int // -1 means the JSON value must be null, not zero.
+		deleteBeforeError bool
+		cancelRequest     bool
+		apiToken          bool
+	}{
+		{name: "success", status: 200, mustChangeCleared: true, sessionIssued: true, revocationStatus: "completed", revoked: 1},
+		{name: "hash_write_failure", fault: "hash_write", status: 500, revoked: -1},
+		{name: "flag_failure", fault: "must_change_clear", status: 500, revocationStatus: "not_attempted", failureStage: "must_change_clear", revoked: -1},
+		{name: "session_failure", fault: "session_issue", status: 500, mustChangeCleared: true, revocationStatus: "not_attempted", failureStage: "session_issue", revoked: -1},
+		{name: "revocation_failure", fault: "session_revocation", status: 200, mustChangeCleared: true, sessionIssued: true, revocationStatus: "failed", failureStage: "session_revocation", revoked: -1},
+		{name: "revocation_count_failure_after_delete", fault: "session_revocation", status: 200, mustChangeCleared: true, sessionIssued: true, revocationStatus: "failed", failureStage: "session_revocation", revoked: -1, deleteBeforeError: true},
+		{name: "audit_write_failure", fault: "audit_write", status: 200, mustChangeCleared: true, sessionIssued: true, revocationStatus: "completed", revoked: 1},
+		{name: "canceled_flag_failure", fault: "must_change_clear", status: 500, revocationStatus: "not_attempted", failureStage: "must_change_clear", revoked: -1, cancelRequest: true},
+		{name: "api_token_actor_zero_revocations", status: 200, mustChangeCleared: true, sessionIssued: true, revocationStatus: "completed", revoked: 0, apiToken: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			const oldPassword = "round28-old-password-1"
+			const newPassword = "round28-new-password-2"
+			base := newFakeStore()
+			seedPassword(t, base, oldPassword, true)
+			oldHash, _, _ := base.GetSetting(t.Context(), SettingPasswordHash)
+			store := &passwordChangeFaultStore{fakeStore: base}
+			var logBuf bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			opts := testOptions()
+			s := New(opts, store, nil, nil, nil, logger)
+			var oldToken string
+			bearer := opts.UIToken
+			if !tc.apiToken {
+				body, _ := json.Marshal(loginRequest{Username: adminUsername, Password: oldPassword})
+				rec := doRequest(t, s.Handler(), http.MethodPost, "/api/v1/auth/login", "203.0.113.40:1", "", body)
+				var response models.LoginResponse
+				if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &response) != nil || response.Token == "" {
+					t.Fatal("seed login failed")
+				}
+				oldToken, bearer = response.Token, response.Token
+			}
+			beforeSessions, _ := base.ListSessions(t.Context())
+			store.settingWrites, store.sessionCreates, store.revocationCalls = 0, 0, 0
+			store.attemptedSessionHashes = nil
+			store.fault, store.deleteBeforeError = tc.fault, tc.deleteBeforeError
+			store.failureSecrets = strings.Join([]string{oldPassword, newPassword, oldHash, bearer, hashSessionToken(bearer)}, " ")
+			ctx, cancel := context.WithTimeout(context.WithValue(t.Context(), passwordChangeAuditTestContextKey{}, "preserved"), time.Hour)
+			defer cancel()
+			if tc.cancelRequest {
+				store.cancelOnFailure = cancel
+			}
+			body, _ := json.Marshal(changePasswordRequest{CurrentPassword: oldPassword, NewPassword: newPassword})
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/password", bytes.NewReader(body)).WithContext(ctx)
+			req.RemoteAddr = "203.0.113.40:2"
+			req.Header.Set("Authorization", "Bearer "+bearer)
+			rec := httptest.NewRecorder()
+			s.Handler().ServeHTTP(rec, req)
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.status)
+			}
+			newHash, _, _ := base.GetSetting(t.Context(), SettingPasswordHash)
+			flag, _, _ := base.GetSetting(t.Context(), SettingMustChangePassword)
+			afterSessions, _ := base.ListSessions(t.Context())
+			var response models.LoginResponse
+			if tc.status == http.StatusOK {
+				var responseKeys map[string]json.RawMessage
+				if json.Unmarshal(rec.Body.Bytes(), &response) != nil || response.Token == "" || response.Token == bearer || response.MustChangePassword || response.Username != adminUsername || response.ExpiresAt <= s.opts.now().Unix() {
+					t.Error("successful rotation response contract changed")
+				}
+				if json.Unmarshal(rec.Body.Bytes(), &responseKeys) != nil || len(responseKeys) != 4 {
+					t.Error("successful rotation must retain exactly the four existing response fields")
+				}
+				if _, err := base.GetSession(t.Context(), hashSessionToken(response.Token)); err != nil {
+					t.Error("issued session was not retained")
+				}
+			} else {
+				var response models.APIError
+				if json.Unmarshal(rec.Body.Bytes(), &response) != nil || response.Code != "internal_error" || response.Error != "internal server error" {
+					t.Error("failure response must keep the existing generic internal error")
+				}
+			}
+			wantFlag := "1"
+			if tc.mustChangeCleared {
+				wantFlag = "0"
+			}
+			if flag != wantFlag {
+				t.Error("persisted must-change flag does not match the confirmed outcome")
+			}
+			if tc.fault == "hash_write" {
+				if newHash != oldHash || !reflect.DeepEqual(beforeSessions, afterSessions) || len(store.auditAttempts) != 0 || store.settingWrites != 1 || store.sessionCreates != 0 || store.revocationCalls != 0 {
+					t.Error("failed hash write must not mutate credentials/sessions or attempt later steps/audit")
+				}
+			} else {
+				if newHash == oldHash || !verifyPassword(newPassword, newHash) || verifyPassword(oldPassword, newHash) {
+					t.Error("confirmed hash write must persist the new credential even after a later failure")
+				}
+				if len(store.auditAttempts) != 1 {
+					t.Fatalf("audit attempts = %d, want one", len(store.auditAttempts))
+				}
+				entry := store.auditAttempts[0]
+				wantActor := "admin"
+				if tc.apiToken {
+					wantActor = "api_token"
+				}
+				if entry.Action != AuditActionPasswordChange || entry.EntityType != "admin_password" || entry.EntityID != "" || entry.BeforeJSON != "" || entry.Actor != wantActor || entry.Remote != "203.0.113.40" {
+					t.Error("audit identity, actor, remote, or empty-before contract changed")
+				}
+				var after map[string]any
+				if json.Unmarshal([]byte(entry.AfterJSON), &after) != nil {
+					t.Fatal("could not decode audit outcome")
+				}
+				want := map[string]any{
+					"password_changed": true, "must_change_cleared": tc.mustChangeCleared,
+					"sessions_revoked": nil, "session_issued": tc.sessionIssued,
+					"session_revocation_status": tc.revocationStatus,
+				}
+				if tc.revoked >= 0 {
+					want["sessions_revoked"] = float64(tc.revoked)
+				}
+				if tc.failureStage != "" {
+					want["failure_stage"] = tc.failureStage
+				}
+				if !reflect.DeepEqual(after, want) {
+					t.Error("audit metadata must match only confirmed outcomes, with null for unknown counts")
+				}
+				if store.auditContextErr != nil || !store.auditHasDeadline || time.Until(store.auditDeadline) > 2*time.Second || store.auditContextValue != "preserved" {
+					t.Error("audit context must preserve values, ignore request cancellation/deadline, and have a short bound")
+				}
+				if tc.cancelRequest && ctx.Err() != context.Canceled {
+					t.Error("test did not cancel the request at the injected failure")
+				}
+				wantCreates, wantRevocations := 0, 0
+				if tc.mustChangeCleared {
+					wantCreates = 1
+				}
+				if tc.sessionIssued {
+					wantRevocations = 1
+				}
+				if store.settingWrites != 2 || store.sessionCreates != wantCreates || store.revocationCalls != wantRevocations {
+					t.Error("unexpected later-stage attempt count")
+				}
+				if !tc.sessionIssued && !reflect.DeepEqual(beforeSessions, afterSessions) {
+					t.Error("failure before session issuance must leave existing sessions intact")
+				}
+				if tc.sessionIssued && oldToken != "" {
+					_, oldSessionErr := base.GetSession(t.Context(), hashSessionToken(oldToken))
+					wantOldSession := tc.fault == "session_revocation" && !tc.deleteBeforeError
+					if (oldSessionErr == nil) != wantOldSession {
+						t.Error("old session persistence does not match the injected revocation outcome")
+					}
+				}
+			}
+			entries, err := base.ListAuditEntries(t.Context(), "", 0, 10)
+			if err != nil {
+				t.Fatal("could not list persisted audit entries")
+			}
+			wantEntries := 1
+			if tc.fault == "hash_write" || tc.fault == "audit_write" {
+				wantEntries = 0
+			}
+			if len(entries) != wantEntries {
+				t.Errorf("persisted audit entry count = %d, want %d", len(entries), wantEntries)
+			}
+			if tc.fault == "audit_write" && !strings.Contains(logBuf.String(), "audit: create entry failed") {
+				t.Error("audit write failure must leave a safe failure log")
+			}
+			serialized, err := json.Marshal(store.auditAttempts)
+			if err != nil {
+				t.Fatal("could not serialize attempted audit entries")
+			}
+			secrets := []string{oldPassword, newPassword, oldHash, newHash, store.attemptedPasswordHash, bearer, hashSessionToken(bearer)}
+			if response.Token != "" {
+				secrets = append(secrets, response.Token, hashSessionToken(response.Token))
+			}
+			secrets = append(secrets, store.attemptedSessionHashes...)
+			assertPasswordChangeSecretsAbsent(t, string(serialized), logBuf.String(), secrets)
+		})
 	}
 }
 

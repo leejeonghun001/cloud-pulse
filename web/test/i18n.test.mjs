@@ -12,6 +12,8 @@ import {
   detectAutoLang,
   htmlLang,
   t,
+  loadCatalogs,
+  ensureCatalog,
   SUPPORTED_LANGUAGES,
 } from "../assets/js/core/i18n.js";
 
@@ -25,6 +27,21 @@ function withFakeLocalStorage(fn) {
   };
   try {
     fn(store);
+  } finally {
+    globalThis.localStorage = original;
+  }
+}
+
+async function withFakeLocalStorageAsync(fn) {
+  const store = new Map();
+  const original = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  };
+  try {
+    return await fn(store);
   } finally {
     globalThis.localStorage = original;
   }
@@ -180,4 +197,25 @@ test("t() plural form also works in Korean (identical one/other text)", () => {
     assert.equal(t("nav.host_count", { count: 1 }), "호스트 1개");
     assert.equal(t("nav.host_count", { count: 5 }), "호스트 5개");
   });
+});
+
+test("loadCatalogs fetches only the active catalog and ensureCatalog lazily loads a switch target", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (path) => {
+    requests.push(path);
+    return { ok: true, json: async () => path.endsWith("ko.json") ? { common: { hello: "안녕하세요" } } : { common: { hello: "Hello" } } };
+  };
+  try {
+    await withFakeLocalStorageAsync(async () => {
+      setCatalogs({ en: {}, ko: {} });
+      setLang("ko");
+      await loadCatalogs();
+      assert.deepEqual(requests, ["/assets/i18n/ko.json"]);
+      await ensureCatalog("en");
+      assert.deepEqual(requests, ["/assets/i18n/ko.json", "/assets/i18n/en.json"]);
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

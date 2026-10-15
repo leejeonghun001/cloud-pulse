@@ -20,6 +20,7 @@ func TestAlertRules_CRUD(t *testing.T) {
 		Name:           "CPU high",
 		Enabled:        true,
 		Metric:         models.AlertMetricCPU,
+		Severity:       models.AlertSeverityCritical,
 		HostID:         "",
 		Operator:       models.AlertOperatorGT,
 		Threshold:      90,
@@ -44,7 +45,7 @@ func TestAlertRules_CRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAlertRule: %v", err)
 	}
-	if got.Name != r.Name || got.Threshold != r.Threshold || len(got.ChannelIDs) != 2 {
+	if got.Name != r.Name || got.Threshold != r.Threshold || got.Severity != r.Severity || len(got.ChannelIDs) != 2 {
 		t.Fatalf("GetAlertRule = %+v, want matching %+v", got, r)
 	}
 
@@ -294,6 +295,7 @@ func TestAlertEvents_CreateUpdateGet(t *testing.T) {
 		HostID:     "host-1",
 		Hostname:   "box1",
 		Metric:     models.AlertMetricCPU,
+		Severity:   models.AlertSeverityCritical,
 		State:      models.AlertEventFiring,
 		Value:      95.5,
 		Threshold:  90,
@@ -315,7 +317,7 @@ func TestAlertEvents_CreateUpdateGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAlertEvent: %v", err)
 	}
-	if got.RuleName != ev.RuleName || got.Value != ev.Value {
+	if got.RuleName != ev.RuleName || got.Value != ev.Value || got.Severity != ev.Severity {
 		t.Fatalf("GetAlertEvent = %+v", got)
 	}
 
@@ -340,6 +342,9 @@ func TestAlertEvents_CreateUpdateGet(t *testing.T) {
 	}
 	if reloaded.State != models.AlertEventResolved || reloaded.ResolvedAt != 2000 {
 		t.Fatalf("GetAlertEvent (after update) = %+v", reloaded)
+	}
+	if reloaded.Severity != models.AlertSeverityCritical {
+		t.Errorf("reloaded Severity = %q, want critical", reloaded.Severity)
 	}
 	if len(reloaded.Deliveries) != 1 || reloaded.Deliveries[0].ChannelName != "discord" {
 		t.Fatalf("GetAlertEvent (after update) Deliveries = %+v", reloaded.Deliveries)

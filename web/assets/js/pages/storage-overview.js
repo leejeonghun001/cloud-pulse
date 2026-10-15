@@ -22,7 +22,7 @@ import { t } from "../core/i18n.js";
  */
 export function buildStorageAccountsSection({ accounts, nowMs }) {
   const section = el("section", { class: "cp-section", attrs: { "aria-labelledby": "cp-storage-accounts-heading" } });
-  section.append(el("h2", { id: "cp-storage-accounts-heading", text: t("host.storage_section_title") }));
+  section.append(el("h2", { attrs: { id: "cp-storage-accounts-heading" }, text: t("host.storage_section_title") }));
 
   if (!accounts || accounts.length === 0) {
     section.append(

@@ -4,13 +4,13 @@
 // tooltips (destroy+recreate on theme change), disks table, monthly
 // traffic card, and agent update card. Redesigned per SPEC-v0.4 §4 on
 // top of the v0.3.x data layer (zero feature loss).
-import { getHost, getHostMetrics, getHostInventory, ApiError } from "../core/api.js";
+import { getHost, getHostMetrics, getHostInventory, getAlertEvents, ApiError } from "../core/api.js";
 import { formatDisplayAmount } from "../core/currency.js";
 import { loadDisplayCurrency } from "../core/display-currency.js";
-import { el, clearChildren, emptyState, errorBanner, egressDirectionRow, agentUpdatePanel, statusDot } from "../ui/components.js";
+import { el, clearChildren, emptyState, errorBanner, agentUpdatePanel } from "../ui/components.js";
 import { selectField } from "../ui/select.js";
 import { icon } from "../ui/icons.js";
-import { formatBytes, formatBitrate, formatDuration, formatRelativeTimeFromUnixSeconds, formatLoad } from "../core/format.js";
+import { formatBytes, formatBitrate, formatRelativeTimeFromUnixSeconds, formatLoad } from "../core/format.js";
 import { createTimeSeriesChart, SERIES_COLORS } from "./charts.js";
 import { runHostDetailRefresh } from "../core/refresh.js";
 import { getItem, setItem } from "../core/store.js";
@@ -26,6 +26,8 @@ import {
 } from "../core/ports.js";
 import { t } from "../core/i18n.js";
 import { localizeApiError } from "../core/api.js";
+import { buildDetailIdentity, buildDetailResources, detailTrafficDirection, detailReading, isMeasurement } from "./hostdetail.js";
+import { buildAlertTimeline } from "./alerttimeline.js";
 
 const RANGE_OPTIONS = [
   { value: "1h", get label() { return t("host.range_1h"); } },
@@ -54,23 +56,43 @@ export function mountHostDetailPage(container, hostID, { announce, copyToClipboa
     notFound: false,
     layout: getItem(LAYOUT_STORAGE_KEY, "2") === "1" ? "1" : "2",
     lastSeries: null,
+    loadedRange: null,
+    summaryLoaded: false,
+    activityEvents: [],
+    activityLoaded: false,
+    activityError: "",
+    activityRequest: 0,
   };
+  let metricsController = null;
+  let metricsRequest = 0;
+  controller.signal.addEventListener("abort", () => metricsController?.abort(), { once: true });
 
   clearChildren(container);
-  const backLink = el("a", { class: "cp-back-link", attrs: { href: "#/" }, text: t("host.back_to_overview") });
-  container.append(backLink);
+  const breadcrumb = el("nav", { class: "cp-detail-breadcrumb", attrs: { "aria-label": t("host.breadcrumb_label") } });
+  breadcrumb.append(el("a", { attrs: { href: "#/" }, text: t("nav.overview") }));
+  const breadcrumbCurrent = el("span", { class: "cp-detail-breadcrumb-current", attrs: { "aria-current": "page" } });
+  breadcrumb.append(el("span", { class: "cp-detail-breadcrumb-separator", attrs: { "aria-hidden": "true" }, text: "/" }), breadcrumbCurrent);
+  container.append(breadcrumb);
 
   const bannerHost = el("div");
   const headerHost = el("div", { class: "cp-card cp-host-detail-header" });
   container.append(bannerHost, headerHost);
+  headerHost.append(el("p", { class: "cp-muted", attrs: { role: "status" }, text: t("host.detail_loading") }));
 
   const chartsHost = el("div", { class: `cp-charts-grid cp-charts-grid-cols-${state.layout}` });
   const disksHost = el("div", { class: "cp-disks-host" });
   const egressHost = el("div", { class: "cp-egress-host" });
   const inventoryHost = el("div", { class: "cp-inventory-host" });
-  const agentUpdateHost = el("div", { class: "cp-agent-update-host" });
+  const agentUpdateHost = el("div", { class: "cp-agent-update-host cp-detail-agent-target", attrs: { id: "cp-detail-agent-update" } });
+  const activityHost = el("div", { class: "cp-detail-activity-host" });
   const costHost = el("div", { class: "cp-host-cost-host" });
-  container.append(chartsHost, disksHost, egressHost, inventoryHost, agentUpdateHost, costHost);
+  const historySection = el("section", { class: "cp-detail-history", attrs: { "aria-labelledby": "cp-detail-history-heading" } });
+  const chartNotice = el("p", { class: "cp-muted-small cp-detail-history-notice", attrs: { role: "status" } });
+  const chartRange = el("p", { class: "cp-muted-small cp-detail-history-range", attrs: { id: "cp-detail-loaded-range" } });
+  historySection.append(el("h2", { class: "cp-detail-section-title", attrs: { id: "cp-detail-history-heading" }, text: t("host.detail_history") }), chartRange, chartNotice, chartsHost);
+  const inventoryNotice = el("div", { class: "cp-detail-inventory-notice" });
+  container.append(agentUpdateHost, activityHost, historySection, egressHost, disksHost, inventoryNotice, inventoryHost, costHost);
+  chartsHost.append(el("p", { class: "cp-muted", attrs: { role: "status" }, text: t("host.detail_loading_charts") }));
 
   const onThemeChange = () => {
     if (state.lastSeries) {
@@ -92,16 +114,17 @@ export function mountHostDetailPage(container, hostID, { announce, copyToClipboa
     try {
       const summary = await getHost(hostID, controller.signal);
       clearBanner();
+      const focusedControl = headerHost.contains(document.activeElement) ? document.activeElement.id : null;
       renderHostDetailHeader(headerHost, summary, Date.now(), { onRangeChange: handleRangeChange, onLayoutChange: handleLayoutChange, range: state.range, layout: state.layout });
+      breadcrumbCurrent.textContent = summary.host.hostname || summary.host.id;
+      state.summaryLoaded = true;
+      if (focusedControl) Array.from(headerHost.querySelectorAll("[id]")).find((node) => node.id === focusedControl)?.focus({ preventScroll: true });
       renderHostEgressCard(egressHost, hostID, summary.egress);
       renderAgentUpdatePanel(agentUpdateHost, summary.update, announce, copyToClipboard);
       renderHostCostCard(costHost, summary.cost, summary.cost ? await loadDisplayCurrency(controller.signal) : null);
-      if (summary.latest?.disks) {
-        renderDisksTable(disksHost, summary.latest.disks);
-      } else {
-        clearChildren(disksHost);
-      }
+      renderDisksTable(disksHost, summary.latest?.disks);
       loadInventory();
+      loadActivity();
       return true;
     } catch (err) {
       if (err?.name === "AbortError") return false;
@@ -115,34 +138,84 @@ export function mountHostDetailPage(container, hostID, { announce, copyToClipboa
         return false;
       }
       showBanner(describeError(err));
+      if (!state.summaryLoaded) {
+        clearChildren(headerHost);
+        headerHost.append(el("p", { class: "cp-muted", text: t("host.detail_unavailable") }));
+      }
       return true;
+    }
+  }
+
+  async function loadActivity() {
+    const request = ++state.activityRequest;
+    // Retain the current card during background refreshes: rebuilding it would
+    // collapse the timeline and repeatedly announce a loading status.
+    state.activityError = "";
+    if (!state.activityLoaded) renderHostActivity(activityHost, { loading: true, events: state.activityEvents, error: "" });
+    try {
+      const response = await getAlertEvents({ host: hostID, limit: 10 }, controller.signal);
+      if (controller.signal.aborted || request !== state.activityRequest) return;
+      state.activityEvents = response.events || [];
+      state.activityLoaded = true;
+      state.activityError = "";
+      renderHostActivity(activityHost, { loading: false, events: state.activityEvents, error: "" });
+    } catch (err) {
+      if (err?.name === "AbortError" || controller.signal.aborted || request !== state.activityRequest) return;
+      state.activityError = describeError(err);
+      // Keep last-known events visible beneath the refresh error.
+      renderHostActivity(activityHost, { loading: false, events: state.activityEvents, error: state.activityError });
     }
   }
 
   async function loadInventory() {
     try {
       const inventory = await getHostInventory(hostID, controller.signal);
+      clearChildren(inventoryNotice);
       renderServicesCard(inventoryHost, inventory);
     } catch (err) {
       if (err?.name === "AbortError") return;
       if (err instanceof ApiError && err.status === 404) {
         clearChildren(inventoryHost);
+        clearChildren(inventoryNotice);
+        renderInventoryState(inventoryHost, t("host.detail_inventory_pending"));
         return;
       }
-      // Non-404 inventory errors don't block the rest of the page —
-      // just leave the card in its last-known state.
+      // Preserve last-known inventory, but disclose a failed refresh.
+      clearChildren(inventoryNotice);
+      inventoryNotice.append(errorBanner(t("host.detail_inventory_error")));
+      if (!inventoryHost.firstChild) renderInventoryState(inventoryHost, t("host.detail_inventory_unavailable"));
     }
   }
 
   async function loadMetrics() {
+    if (controller.signal.aborted || state.notFound) return;
+    metricsController?.abort();
+    const request = ++metricsRequest;
+    const current = new AbortController();
+    metricsController = current;
+    const requestedRange = state.range;
+    const rangeLabel = (range) => RANGE_OPTIONS.find((option) => option.value === range)?.label || range;
+    const ranges = { requested: rangeLabel(requestedRange), loaded: rangeLabel(state.loadedRange) };
+    chartsHost.setAttribute("aria-busy", "true");
+    chartNotice.textContent = state.lastSeries && state.loadedRange !== requestedRange
+      ? t("host.detail_history_loading_retained", ranges) : t("host.detail_loading_charts");
     try {
-      const series = await getHostMetrics(hostID, state.range, controller.signal);
+      const series = await getHostMetrics(hostID, requestedRange, current.signal);
+      // A -> B -> A may share a range string, but never a request generation.
+      if (controller.signal.aborted || current.signal.aborted || request !== metricsRequest || requestedRange !== state.range) return;
       state.lastSeries = series;
+      state.loadedRange = requestedRange;
       state.charts.forEach((c) => c.destroy());
       state.charts = renderHostCharts(chartsHost, series);
+      chartRange.textContent = t("host.detail_history_loaded_range", { range: rangeLabel(state.loadedRange) });
+      chartNotice.textContent = "";
     } catch (err) {
-      if (err?.name === "AbortError") return;
+      if (err?.name === "AbortError" || controller.signal.aborted || current.signal.aborted || request !== metricsRequest || requestedRange !== state.range) return;
       showBanner(describeError(err));
+      chartNotice.textContent = state.lastSeries ? t("host.detail_history_error_retained", ranges) : t("host.detail_history_error");
+      if (!state.lastSeries) clearChildren(chartsHost);
+    } finally {
+      if (request === metricsRequest && !controller.signal.aborted) chartsHost.setAttribute("aria-busy", "false");
     }
   }
 
@@ -177,77 +250,36 @@ export function mountHostDetailPage(container, hostID, { announce, copyToClipboa
   return { refresh, teardown };
 }
 
-function renderHostDetailHeader(host, summary, nowMs, { onRangeChange, onLayoutChange, range, layout }) {
+export function renderHostDetailHeader(host, summary, nowMs, { onRangeChange, onLayoutChange, range, layout }) {
   clearChildren(host);
-  const h = summary.host;
-  const isUp = summary.status === "up";
-
-  const top = el("div", { class: "cp-host-detail-top" });
-  const titleGroup = el("div", { class: "cp-host-detail-title-group" });
-  titleGroup.append(el("h1", { class: "cp-page-title", text: h.hostname }));
-  top.append(titleGroup);
+  const { top, meta } = buildDetailIdentity(summary, nowMs);
 
   const rightControls = el("div", { class: "cp-host-detail-controls" });
   const { node: rangeNode, select: rangeSelect } = selectField({
     id: "cp-host-range",
-    ariaLabel: t("host.time_range"),
+    label: t("host.time_range"),
     options: RANGE_OPTIONS,
     value: range,
   });
   rangeSelect.addEventListener("change", () => onRangeChange(rangeSelect.value));
   rightControls.append(rangeNode);
+  rightControls.append(el("a", { class: "cp-btn cp-btn-secondary", attrs: { href: `#/compare?hosts=${encodeURIComponent(summary.host.id)}` }, text: t("compare.open_from_host") }));
   rightControls.append(buildLayoutToggle(layout, onLayoutChange));
   top.append(rightControls);
   host.append(top);
-
-  const badgeRow = el("div", { class: "cp-host-detail-badges" });
-  const badges = [
-    statusBadge(isUp, summary.status),
-    textBadge(h.hostname),
-    textBadge(`${h.platform || t("overview.unknown")} ${h.platform_version || ""}`.trim()),
-    textBadge(t("host.badge_uptime", { value: summary.latest ? formatDuration(summary.latest.uptime_seconds) : t("overview.unknown") })),
-    textBadge(t("host.badge_kernel", { value: h.kernel_version || t("overview.unknown") })),
-    textBadge(t("host.badge_cpu", { model: h.cpu_model || t("overview.unknown"), cores: h.cpu_cores || 0 })),
-    textBadge(t("host.badge_agent", { value: h.agent_version || t("overview.unknown") })),
-    textBadge(h.provider ? h.provider.toUpperCase() : t("host.provider_other_upper")),
-  ];
-  badges.forEach((b, i) => {
-    if (i > 0) badgeRow.append(el("span", { class: "cp-host-detail-badge-divider", attrs: { "aria-hidden": "true" } }));
-    badgeRow.append(b);
-  });
-  host.append(badgeRow);
-
-  if (!isUp) {
-    host.append(
-      el("p", {
-        class: "cp-host-card-offline-note",
-        text: t("overview.offline_since", { relative: formatRelativeTimeFromUnixSeconds(summary.last_seen, nowMs) }),
-      }),
-    );
-  }
-}
-
-function statusBadge(isUp, status) {
-  const wrap = el("span", { class: "cp-host-detail-badge cp-host-detail-badge-status" });
-  wrap.append(statusDot(status));
-  wrap.append(el("span", { text: isUp ? t("host.status_up") : t("host.status_down") }));
-  return wrap;
-}
-
-function textBadge(text) {
-  return el("span", { class: "cp-host-detail-badge", text });
+  host.append(meta, buildDetailResources(summary, nowMs));
 }
 
 function buildLayoutToggle(current, onChange) {
   const group = el("div", { class: "cp-segmented cp-layout-toggle", attrs: { role: "group", "aria-label": t("host.chart_layout") } });
   const oneBtn = el("button", {
     class: "cp-btn cp-segmented-btn cp-btn-icon",
-    attrs: { type: "button", "aria-pressed": current === "1" ? "true" : "false", "aria-label": t("host.one_column"), title: t("host.one_column") },
+    attrs: { id: "cp-detail-layout-one", type: "button", "aria-pressed": current === "1" ? "true" : "false", "aria-label": t("host.one_column"), title: t("host.one_column") },
   });
   oneBtn.append(icon("rows3"));
   const twoBtn = el("button", {
     class: "cp-btn cp-segmented-btn cp-btn-icon",
-    attrs: { type: "button", "aria-pressed": current === "2" ? "true" : "false", "aria-label": t("host.two_columns"), title: t("host.two_columns") },
+    attrs: { id: "cp-detail-layout-two", type: "button", "aria-pressed": current === "2" ? "true" : "false", "aria-label": t("host.two_columns"), title: t("host.two_columns") },
   });
   twoBtn.append(icon("columns3"));
   oneBtn.addEventListener("click", () => {
@@ -264,44 +296,21 @@ function buildLayoutToggle(current, onChange) {
   return group;
 }
 
-function renderHostEgressCard(host, hostID, egress) {
+export function renderHostEgressCard(host, hostID, egress) {
   clearChildren(host);
-  const card = el("div", { class: "cp-card" });
-  const headRow = el("div", { class: "cp-metric-head" });
-  headRow.append(el("h2", { text: t("host.monthly_traffic") }));
-  card.append(headRow);
-
-  card.append(
-    egressDirectionRow({
-      label: t("host.egress_outbound_label"),
-      bytes: egress.tx_bytes,
-      limitBytes: egress.limit_bytes,
-      level: egress.level,
-      projectedBytes: egress.projected_tx_bytes,
-      hubOverride: egress.limit_source === "hub",
-      barLabel: t("host.egress_outbound_bar_label"),
-    }),
-  );
-  card.append(
-    egressDirectionRow({
-      label: t("host.egress_inbound_label"),
-      bytes: egress.rx_bytes,
-      limitBytes: egress.rx_limit_bytes,
-      level: egress.rx_level,
-      projectedBytes: egress.projected_rx_bytes,
-      hubOverride: egress.rx_limit_source === "hub",
-      barLabel: t("host.egress_inbound_bar_label"),
-    }),
-  );
-
-  card.append(
+  const card = el("section", { class: "cp-card cp-detail-traffic-card", attrs: { "aria-labelledby": "cp-detail-traffic-heading" } });
+  const headRow = el("div", { class: "cp-detail-section-head" });
+  headRow.append(el("h2", { class: "cp-card-title", attrs: { id: "cp-detail-traffic-heading" }, text: t("host.monthly_traffic") }));
+  headRow.append(
     el("a", {
       class: "cp-back-link",
       attrs: { href: `#/settings/limits?host=${encodeURIComponent(hostID)}` },
       text: t("host.edit_limits"),
     }),
   );
-
+  const grid = el("div", { class: "cp-detail-traffic-grid" });
+  grid.append(detailTrafficDirection(egress, "out"), detailTrafficDirection(egress, "in"));
+  card.append(headRow, grid);
   host.append(card);
 }
 
@@ -309,13 +318,33 @@ function renderAgentUpdatePanel(host, update, announce, copyToClipboard) {
   clearChildren(host);
   const built = agentUpdatePanel(update);
   if (!built) return;
+  built.node.classList.add("cp-detail-agent-panel");
   if (built.copyBtn) {
+    built.copyBtn.className = "cp-btn cp-btn-secondary cp-btn-icon cp-detail-agent-copy";
+    built.copyBtn.setAttribute("aria-label", t("common.copy"));
+    built.copyBtn.setAttribute("title", t("common.copy"));
+    clearChildren(built.copyBtn);
+    built.copyBtn.append(icon("copy"));
     built.copyBtn.addEventListener("click", async () => {
       await copyToClipboard(built.command, undefined);
       announce?.(t("host.agent_update_command_copied"));
     });
   }
   host.append(built.node);
+}
+
+export function renderHostActivity(host, state) {
+  clearChildren(host);
+  const card = el("section", { class: "cp-card cp-detail-activity-card", attrs: { "aria-labelledby": "cp-detail-activity-heading", "aria-busy": state.loading ? "true" : "false" } });
+  const head = el("div", { class: "cp-detail-section-head" });
+  head.append(el("div", { class: "cp-activity-title-group", children: [el("h2", { class: "cp-card-title", attrs: { id: "cp-detail-activity-heading" }, text: t("alerts_page.activity_title") }), el("p", { class: "cp-muted-small", text: t("host.activity_description") })] }));
+  head.append(el("a", { class: "cp-back-link", attrs: { href: "#/alerts" }, text: t("nav.view_all") }));
+  card.append(head);
+  if (state.loading) card.append(el("p", { class: "cp-activity-notice", attrs: { role: "status" }, text: t("alerts_page.activity_loading") }));
+  if (state.error) card.append(errorBanner(state.error));
+  if (!state.loading && !state.error && state.events.length === 0) card.append(emptyState({ title: t("host.activity_empty_title"), message: t("host.activity_empty_message"), iconName: "activity" }));
+  if (state.events.length > 0) card.append(buildAlertTimeline(state.events, Math.floor(Date.now() / 1000), { hideHost: true }));
+  host.append(card);
 }
 
 /**
@@ -333,11 +362,11 @@ function renderHostCostCard(host, cost, displayCurrency) {
   const money = (v) => formatDisplayAmount(Number(v || 0), displayCurrency, { taxNote: false });
 
   const card = el("div", { class: "cp-card cp-host-cost-card" });
-  card.append(el("h2", { text: t("host.cost_title") }));
+  card.append(el("h2", { class: "cp-card-title", text: t("host.cost_title") }));
 
   if (cost.provider) {
     if (cost.matched) {
-      card.append(el("p", { text: t("host.cloud_billing_matched", { provider: cost.provider.toUpperCase(), mtd: money(cost.cloud_mtd), forecast: money(cost.cloud_forecast) }) }));
+      card.append(el("p", { class: "cp-tabular", text: t("host.cloud_billing_matched", { provider: cost.provider.toUpperCase(), mtd: money(cost.cloud_mtd), forecast: money(cost.cloud_forecast) }) }));
     } else {
       card.append(el("p", { class: "cp-muted-small", text: t("host.cloud_billing_unmatched", { provider: cost.provider.toUpperCase() }) }));
     }
@@ -346,12 +375,12 @@ function renderHostCostCard(host, cost, displayCurrency) {
   }
 
   if (cost.network_estimate?.plan_id) {
-    card.append(el("p", { text: t("host.network_estimate_line", { plan: cost.network_estimate.plan_name, mtd: money(cost.network_estimate.mtd), projected: money(cost.network_estimate.projected) }) }));
+    card.append(el("p", { class: "cp-tabular", text: t("host.network_estimate_line", { plan: cost.network_estimate.plan_name, mtd: money(cost.network_estimate.mtd), projected: money(cost.network_estimate.projected) }) }));
   } else {
     card.append(el("p", { class: "cp-muted-small", text: t("host.no_pricing_plan_assigned") }));
   }
 
-  card.append(el("p", { class: "cp-muted-small", text: t("host.cost_total_line", { mtd: money(cost.total_mtd), forecast: money(cost.total_forecast) }) }));
+  card.append(el("p", { class: "cp-muted-small cp-tabular", text: t("host.cost_total_line", { mtd: money(cost.total_mtd), forecast: money(cost.total_forecast) }) }));
   host.append(card);
 }
 
@@ -363,14 +392,28 @@ function renderHostCostCard(host, cost, displayCurrency) {
  * @param {HTMLElement} host
  * @param {Object} inventory a models.Inventory JSON object
  */
-function renderServicesCard(host, inventory) {
+export function renderServicesCard(host, inventory) {
   clearChildren(host);
-  const card = el("div", { class: "cp-card cp-services-card" });
-  card.append(el("h2", { text: t("host.services_and_ports") }));
-
-  card.append(renderDockerSection(inventory.docker));
+  const card = el("section", { class: "cp-card cp-services-card cp-detail-services", attrs: { "aria-labelledby": "cp-detail-services-heading" } });
+  const head = el("div", { class: "cp-detail-section-head" });
+  head.append(el("h2", { class: "cp-card-title", attrs: { id: "cp-detail-services-heading" }, text: t("host.services_and_ports") }));
+  if (isMeasurement(inventory.collected_at) && inventory.collected_at > 0) head.append(el("span", { class: "cp-muted-small", text: t("host.detail_inventory_age", { relative: formatRelativeTimeFromUnixSeconds(inventory.collected_at) }) }));
+  card.append(head);
+  if (inventory.docker?.status === "ok" && !(inventory.docker.containers || []).length && !(inventory.ports || []).length) {
+    card.append(compactInventoryEmpty(t("host.no_services_or_ports_reported")));
+    host.append(card);
+    return;
+  }
+  card.append(renderDockerSection(inventory.docker || { status: "unknown" }));
   card.append(renderPortsSection(inventory.ports));
 
+  host.append(card);
+}
+
+export function renderInventoryState(host, message) {
+  clearChildren(host);
+  const card = el("section", { class: "cp-card cp-detail-services", attrs: { "aria-labelledby": "cp-detail-services-heading" } });
+  card.append(el("h2", { class: "cp-card-title", attrs: { id: "cp-detail-services-heading" }, text: t("host.services_and_ports") }), compactInventoryEmpty(message));
   host.append(card);
 }
 
@@ -396,12 +439,12 @@ function renderDockerSection(docker) {
   }
 
   if (!docker.containers || docker.containers.length === 0) {
-    section.append(el("p", { class: "cp-muted-small", text: t("host.no_containers_reported") }));
+    section.append(compactInventoryEmpty(t("host.no_containers_reported")));
     return section;
   }
 
-  const tableWrap = el("div", { class: "cp-table-wrap" });
-  const table = el("table", { class: "cp-table" });
+  const tableWrap = el("div", { class: "cp-table-wrap", attrs: { tabindex: "0", role: "region", "aria-label": t("host.docker_containers") } });
+  const table = el("table", { class: "cp-table cp-detail-container-table" });
   const thead = el("thead");
   thead.append(
     el("tr", { children: [t("host.col_name"), t("host.col_compose"), t("host.col_image"), t("host.col_state"), t("host.col_health"), t("host.col_ports"), t("host.col_status")].map((tx) => el("th", { text: tx })) }),
@@ -425,7 +468,7 @@ function containerRow(c) {
   const portsCell = el("td");
   const portsWrap = el("div", { class: "cp-services-port-chips" });
   for (const p of c.ports || []) {
-    portsWrap.append(el("span", { class: "cp-chip cp-chip-other cp-services-port-chip", text: formatPublishedPort(p) }));
+    portsWrap.append(el("span", { class: "cp-chip cp-chip-other cp-services-port-chip cp-tabular", text: formatPublishedPort(p) }));
   }
   if ((c.ports || []).length === 0) portsWrap.append(el("span", { class: "cp-muted-small", text: "—" }));
   portsCell.append(portsWrap);
@@ -435,8 +478,8 @@ function containerRow(c) {
       el("td", { text: c.name }),
       el("td", { text: compose || "—" }),
       el("td", { text: c.image }),
-      el("td", { children: [el("span", { class: `cp-chip ${isRunning ? "cp-chip-ok" : "cp-chip-other"}`, text: c.state })] }),
-      el("td", { text: health || "—" }),
+      el("td", { class: "cp-detail-short-cell", children: [el("span", { class: `cp-chip ${isRunning ? "cp-chip-ok" : "cp-chip-other"}`, text: c.state })] }),
+      el("td", { class: "cp-detail-short-cell", text: health || "—" }),
       portsCell,
       el("td", { text: c.status }),
     ],
@@ -448,11 +491,11 @@ function renderPortsSection(ports) {
   section.append(el("h3", { class: "cp-services-section-title", text: t("host.listening_ports") }));
 
   if (!ports || ports.length === 0) {
-    section.append(el("p", { class: "cp-muted-small", text: t("host.no_listening_ports_reported") }));
+    section.append(compactInventoryEmpty(t("host.no_listening_ports_reported")));
     return section;
   }
 
-  const tableWrap = el("div", { class: "cp-table-wrap" });
+  const tableWrap = el("div", { class: "cp-table-wrap", attrs: { tabindex: "0", role: "region", "aria-label": t("host.listening_ports") } });
   const table = el("table", { class: "cp-table" });
   const thead = el("thead");
   thead.append(el("tr", { children: [t("host.col_proto"), t("host.col_address"), t("host.col_process"), t("host.col_container")].map((tx) => el("th", { text: tx })) }));
@@ -462,7 +505,7 @@ function renderPortsSection(ports) {
     tbody.append(
       el("tr", {
         children: [
-          el("td", { text: p.proto.toUpperCase() }),
+          el("td", { class: "cp-detail-short-cell", text: p.proto.toUpperCase() }),
           el("td", { children: [el("span", { class: "cp-tabular", text: formatListeningAddress(p) })] }),
           el("td", { text: processLabel(p) }),
           el("td", { text: p.container_id ? p.container_id.slice(0, 12) : "—" }),
@@ -476,12 +519,16 @@ function renderPortsSection(ports) {
   return section;
 }
 
-function renderDisksTable(host, disks) {
+export function renderDisksTable(host, disks) {
   clearChildren(host);
-  if (!disks || disks.length === 0) return;
-  const card = el("div", { class: "cp-card" });
-  card.append(el("h2", { text: t("host.disks_title") }));
-  const tableWrap = el("div", { class: "cp-table-wrap" });
+  const card = el("section", { class: "cp-card cp-detail-disks", attrs: { "aria-labelledby": "cp-detail-disks-heading" } });
+  card.append(el("h2", { class: "cp-card-title", attrs: { id: "cp-detail-disks-heading" }, text: t("host.disks_title") }));
+  if (!disks || disks.length === 0) {
+    card.append(compactInventoryEmpty(t("host.no_disks_reported")));
+    host.append(card);
+    return;
+  }
+  const tableWrap = el("div", { class: "cp-table-wrap", attrs: { tabindex: "0", role: "region", "aria-label": t("host.disks_title") } });
   const table = el("table", { class: "cp-table" });
   const thead = el("thead");
   thead.append(
@@ -498,9 +545,9 @@ function renderDisksTable(host, disks) {
           el("td", { text: d.mountpoint }),
           el("td", { text: d.device }),
           el("td", { text: d.fstype }),
-          el("td", { text: formatBytes(d.used_bytes) }),
-          el("td", { text: formatBytes(d.total_bytes) }),
-          el("td", { text: `${d.used_percent.toFixed(1)}%` }),
+          el("td", { class: "cp-tabular", text: detailReading(d.used_bytes, formatBytes) }),
+          el("td", { class: "cp-tabular", text: detailReading(d.total_bytes, formatBytes) }),
+          el("td", { class: "cp-tabular", text: detailReading(d.used_percent, (value) => `${value.toFixed(1)}%`) }),
         ],
       }),
     );
@@ -511,6 +558,12 @@ function renderDisksTable(host, disks) {
   host.append(card);
 }
 
+function compactInventoryEmpty(message) {
+  const empty = el("div", { class: "cp-detail-compact-empty" });
+  empty.append(icon("circleAlert"), el("p", { class: "cp-muted-small", text: message }));
+  return empty;
+}
+
 /**
  * renderHostCharts builds the full metric chart grid for a host's
  * Series and returns the created ChartHandle instances so the caller
@@ -518,7 +571,7 @@ function renderDisksTable(host, disks) {
  * synced cursor (uPlot's `cursor.sync`) so hovering one highlights the
  * same timestamp across all of them.
  */
-function renderHostCharts(host, series) {
+export function renderHostCharts(host, series) {
   clearChildren(host);
   const charts = [];
   const syncKey = "cp-host-charts";
@@ -531,7 +584,7 @@ function renderHostCharts(host, series) {
       description: t("host.chart_cpu_description"),
       series: [{ label: t("host.chart_series_cpu"), color: SERIES_COLORS.cpu }],
       values: [series.cpu],
-      summary: t("host.chart_cpu_summary", { value: lastOrZero(series.cpu).toFixed(1) }),
+      summary: t("host.chart_cpu_summary", { value: latestReading(series.cpu, (value) => value.toFixed(1)) }),
       valueFormatter: percentFormatter,
       yAxisFormatter: percentFormatter,
     },
@@ -540,7 +593,7 @@ function renderHostCharts(host, series) {
       description: t("host.chart_memory_description"),
       series: [{ label: t("host.chart_series_memory"), color: SERIES_COLORS.mem }],
       values: [series.mem],
-      summary: t("host.chart_memory_summary", { value: lastOrZero(series.mem).toFixed(1) }),
+      summary: t("host.chart_memory_summary", { value: latestReading(series.mem, (value) => value.toFixed(1)) }),
       valueFormatter: percentFormatter,
       yAxisFormatter: percentFormatter,
     },
@@ -549,7 +602,7 @@ function renderHostCharts(host, series) {
       description: t("host.chart_disk_description"),
       series: [{ label: t("host.chart_series_disk"), color: SERIES_COLORS.disk }],
       values: [series.disk],
-      summary: t("host.chart_disk_summary", { value: lastOrZero(series.disk).toFixed(1) }),
+      summary: t("host.chart_disk_summary", { value: latestReading(series.disk, (value) => value.toFixed(1)) }),
       valueFormatter: percentFormatter,
       yAxisFormatter: percentFormatter,
     },
@@ -561,7 +614,7 @@ function renderHostCharts(host, series) {
         { label: t("host.chart_series_tx"), color: SERIES_COLORS.netTx },
       ],
       values: [series.net_rx, series.net_tx],
-      summary: t("host.chart_bandwidth_summary", { rx: formatBytes(lastOrZero(series.net_rx)), tx: formatBytes(lastOrZero(series.net_tx)) }),
+      summary: t("host.chart_bandwidth_summary", { rx: latestReading(series.net_rx, formatBytes), tx: latestReading(series.net_tx, formatBytes) }),
       valueFormatter: bitrateFormatter,
       yAxisFormatter: bitrateFormatter,
     },
@@ -573,7 +626,7 @@ function renderHostCharts(host, series) {
         { label: t("host.chart_series_write"), color: SERIES_COLORS.diskWrite },
       ],
       values: [series.disk_read, series.disk_write],
-      summary: t("host.chart_disk_io_summary", { read: formatBytes(lastOrZero(series.disk_read)), write: formatBytes(lastOrZero(series.disk_write)) }),
+      summary: t("host.chart_disk_io_summary", { read: latestReading(series.disk_read, formatBytes), write: latestReading(series.disk_write, formatBytes) }),
       valueFormatter: bitrateFormatter,
       yAxisFormatter: bitrateFormatter,
     },
@@ -582,20 +635,21 @@ function renderHostCharts(host, series) {
       description: t("host.chart_load_description"),
       series: [{ label: t("host.chart_series_load1"), color: SERIES_COLORS.load1 }],
       values: [series.load1],
-      summary: t("host.chart_load_summary", { value: formatLoad(lastOrZero(series.load1)) }),
+      summary: t("host.chart_load_summary", { value: latestReading(series.load1, formatLoad) }),
       valueFormatter: loadFormatter,
       yAxisFormatter: loadFormatter,
     },
   ];
 
-  for (const spec of specs) {
-    const card = el("div", { class: "cp-card cp-chart-card" });
+  for (const [index, spec] of specs.entries()) {
+    const headingID = `cp-detail-chart-${index}`;
+    const card = el("section", { class: "cp-card cp-chart-card", attrs: { "aria-labelledby": headingID } });
     const titleRow = el("div", { class: "cp-chart-card-head" });
-    titleRow.append(el("h2", { text: spec.title }));
+    titleRow.append(el("h2", { attrs: { id: headingID }, text: spec.title }));
     titleRow.append(el("p", { class: "cp-muted-small", text: spec.description }));
     card.append(titleRow);
-    if (series.ts.length === 0) {
-      card.append(el("p", { class: "cp-muted-small", text: t("host.no_data_for_range") }));
+    if (series.ts.length === 0 || !spec.values.some((values) => values?.some(isMeasurement))) {
+      card.append(el("div", { class: "cp-detail-chart-empty", children: [icon("activity"), el("p", { text: t("host.no_data_for_range") })] }));
       host.append(card);
       continue;
     }
@@ -604,7 +658,7 @@ function renderHostCharts(host, series) {
       attrs: { role: "img", "aria-label": spec.summary },
     });
     card.append(chartWrap);
-    card.append(el("p", { class: "cp-sr-only-summary", text: spec.summary }));
+    card.append(el("p", { class: "cp-detail-chart-summary", text: spec.summary }));
     host.append(card);
 
     const chart = createTimeSeriesChart(chartWrap, {
@@ -621,9 +675,9 @@ function renderHostCharts(host, series) {
   return charts;
 }
 
-function lastOrZero(arr) {
-  if (!arr || arr.length === 0) return 0;
-  return arr[arr.length - 1];
+function latestReading(arr, formatter) {
+  // A missing latest point is unknown, not a measured zero or an older point.
+  return detailReading(arr?.[arr.length - 1], formatter);
 }
 
 function describeError(err) {

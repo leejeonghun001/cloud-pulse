@@ -4,6 +4,8 @@
 // bare keys, mirroring i18n.test.mjs's own setup pattern.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { setCatalogs } from "../assets/js/core/i18n.js";
 import {
   capabilityLabel,
@@ -44,6 +46,62 @@ const SAMPLE = {
   },
 };
 setCatalogs({ en: SAMPLE, ko: SAMPLE });
+
+class Node {
+  constructor(tag, opts = {}) { this.tag = tag; this.children = []; this.textContent = opts.text || ""; }
+  append(...children) { this.children.push(...children); }
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+test("Rollout attaches its page heading before the initial requests settle", async () => {
+  const source = readFileSync(new URL("../assets/js/pages/rollout.js", import.meta.url), "utf8")
+    .replace(/^import[\s\S]*?;\n/gm, "")
+    .replace(/^export\s+/gm, "");
+  const versions = deferred(), hosts = deferred(), batches = deferred();
+  const mount = runInNewContext(`${source}\nmountRolloutPage`, {
+    AbortController,
+    clearTimeout,
+    setTimeout,
+    Date,
+    el: (tag, opts) => new Node(tag, opts),
+    clearChildren: (node) => { node.children = []; },
+    emptyState: () => new Node("empty"),
+    errorBanner: () => new Node("error"),
+    icon: () => new Node("icon"),
+    showToast() {},
+    selectField: () => ({ node: new Node("field"), select: { addEventListener() {} } }),
+    createDialog() {},
+    buildDialogActions() {},
+    t: (key) => key,
+    formatRelativeTimeFromUnixSeconds() {},
+    getFleetVersions: () => versions.promise,
+    getHosts: () => hosts.promise,
+    getUpdateBatches: () => batches.promise,
+    getUpdateJobs() {},
+    createUpdateBatch() {},
+    retryUpdateJob() {},
+    cancelUpdateBatch() {},
+    ApiError: class extends Error {},
+  });
+  const container = new Node("main");
+  const page = mount(container, { announce() {} });
+  const pending = page.refresh();
+
+  assert.equal(container.children[0].tag, "div");
+  assert.equal(container.children[0].children[0].tag, "h1");
+  assert.equal(container.children[0].children[0].textContent, "rollout.title");
+
+  versions.resolve({});
+  hosts.resolve({ hosts: [] });
+  batches.resolve({ batches: [] });
+  await pending;
+  page.teardown();
+});
 
 test("capabilityLabel: known values map to labels", () => {
   assert.equal(capabilityLabel("capable"), "Capable");

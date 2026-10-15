@@ -86,6 +86,24 @@ const (
 	MaxInventoryContainers = 500
 )
 
+// InventoryCounts is the per-host summary of an Inventory snapshot
+// shown in fleet listings.
+type InventoryCounts struct {
+	ContainersRunning int
+	ListeningPorts    int
+}
+
+// Counts summarizes inv for fleet listings.
+func (inv Inventory) Counts() InventoryCounts {
+	c := InventoryCounts{ListeningPorts: len(inv.Ports)}
+	for _, ct := range inv.Docker.Containers {
+		if ct.State == "running" {
+			c.ContainersRunning++
+		}
+	}
+	return c
+}
+
 // Inventory is a host's point-in-time snapshot of listening ports and
 // Docker containers, collected by the agent every 60s (internal/agent's
 // collection interval, independent of the sample interval) and attached

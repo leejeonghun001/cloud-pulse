@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "review": {
+    "method": "source-context-review",
+    "date": "2026-10-07",
+    "scope": "synthetic historical fixtures only"
+  },
+  "fixtures": [
+    {
+      "commit": "c1b68548698799251fee9e7d68faa4d76a3edb58",
+      "path": "scripts/capture-screenshots-lib.mjs",
+      "line": 155,
+      "rule_id": "internal.host_ip",
+      "line_sha256": "e7b4261debd0b841cfa5bfd97ba4c760ec1b13986a64f1a96f6db1b5524912e5",
+      "reason": "Pure IPv4 marker-boundary documentation example, not an operational endpoint."
+    },
+    {
+      "commit": "1138ce2ca0b78cb6824d63ff0dc82592f6e906cc",
+      "path": "scripts/tests/test_prepublish_check.py",
+      "line": 257,
+      "rule_id": "internal.home_path",
+      "line_sha256": "180e9294f97e8be185322660be2ae899d5d570e72aa77d3f115af33e64955f03",
+      "reason": "Synthetic Linux home-path detector fixture."
+    },
+    {
+      "commit": "1138ce2ca0b78cb6824d63ff0dc82592f6e906cc",
+      "path": "scripts/tests/test_prepublish_check.py",
+      "line": 264,
+      "rule_id": "internal.home_path",
+      "line_sha256": "ad9b179ea39949a6db19d0374073178de9ecc5e103a7037a798531acfcc8bb36",
+      "reason": "Synthetic macOS home-path detector fixture."
+    },
+    {
+      "commit": "1138ce2ca0b78cb6824d63ff0dc82592f6e906cc",
+      "path": "scripts/tests/test_prepublish_check.py",
+      "line": 265,
+      "rule_id": "internal.home_path",
+      "line_sha256": "22d8d03345f68d70cf90dc03d49f0d3ba4dffc01838c6fb14b33852b6094a74a",
+      "reason": "Synthetic Windows home-path detector fixture."
+    },
+    {
+      "commit": "d71d3c4fa7657a961122638cdc7d4441cda094b1",
+      "path": "internal/agent/inventory_test.go",
+      "line": 41,
+      "rule_id": "internal.host_ip",
+      "line_sha256": "3a03519d241b5db1a2ca1cd9fb58bf1acc29d563efe494dadd60775e1e7a1dab",
+      "reason": "Injected non-listening TCP record in pure inventory test; no socket connection."
+    },
+    {
+      "commit": "d71d3c4fa7657a961122638cdc7d4441cda094b1",
+      "path": "internal/agent/inventory_test.go",
+      "line": 46,
+      "rule_id": "internal.host_ip",
+      "line_sha256": "27d41db64e354349a18302f7468377f200f71921cde9bf5d9a054b6734d7b8df",
+      "reason": "Injected connected-UDP record in pure inventory test; no socket connection."
+    },
+    {
+      "commit": "84476e973ab540a366fd853d32665641fdcbd92d",
+      "path": "web/test/settings-network-helpers.test.mjs",
+      "line": 31,
+      "rule_id": "internal.host_ip",
+      "line_sha256": "7335b690fac9b78e99c93a035645f40f094f049b052a230222c276ea0af69fd1",
+      "reason": "Deterministic negative IPv4 multicast-boundary test input."
+    },
+    {
+      "commit": "19732e07f2292060a9517d82d6393385c00483dd",
+      "path": "internal/hub/ratelimit_test.go",
+      "line": 154,
+      "rule_id": "internal.host_ip",
+      "line_sha256": "17e4b7831c058a0001a2e6c1d4c68485c571e2fc4a5e1e37a16e0c6d19916cc4",
+      "reason": "Fake rate-limiter client before global lockout expiry; no network request."
+    },
+    {
+      "commit": "19732e07f2292060a9517d82d6393385c00483dd",
+      "path": "internal/hub/ratelimit_test.go",
+      "line": 163,
+      "rule_id": "internal.host_ip",
+      "line_sha256": "ff5fe58482b3bd830c21f5d7d656d5697f2c250600dd95def0d41d74c763c5f1",
+      "reason": "Same fake rate-limiter client after expiry; no network request."
+    }
+  ]
+}

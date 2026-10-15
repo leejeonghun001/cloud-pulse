@@ -1,0 +1,355 @@
+{
+  "bomFormat": "CycloneDX",
+  "components": [
+    {
+      "bom-ref": "file:web/assets/js/ui/icons.js",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "79d49f5c0e2f9b235608c4b6d056c19a403ce1c635758be9644d175851e0187c"
+        }
+      ],
+      "name": "icons.js",
+      "properties": [
+        {
+          "name": "inventory:relationship-scope",
+          "value": "Contains hand-transcribed Lucide SVG child-element data plus local helper; hash covers whole file"
+        },
+        {
+          "name": "source:path",
+          "value": "web/assets/js/ui/icons.js"
+        }
+      ],
+      "type": "file"
+    },
+    {
+      "bom-ref": "file:web/assets/vendor/inter/LICENSE",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3b0a5fca3d17942cde889069889dedbbbd075e9b599968c82a95f4d944e9b345"
+        }
+      ],
+      "name": "LICENSE",
+      "properties": [
+        {
+          "name": "source:path",
+          "value": "web/assets/vendor/inter/LICENSE"
+        }
+      ],
+      "type": "file"
+    },
+    {
+      "bom-ref": "file:web/assets/vendor/inter/README.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "de1b7ed2eef2cce0e5748e9423139e8e2f257a0c0b7f852b03071788923a0f3d"
+        }
+      ],
+      "name": "README.md",
+      "properties": [
+        {
+          "name": "source:path",
+          "value": "web/assets/vendor/inter/README.md"
+        }
+      ],
+      "type": "file"
+    },
+    {
+      "bom-ref": "file:web/assets/vendor/inter/inter-latin-wght-normal.woff2",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3100e775e8616cd2611beecfa23a4263d7037586789b43f035236a2e6fbd4c62"
+        }
+      ],
+      "name": "inter-latin-wght-normal.woff2",
+      "properties": [
+        {
+          "name": "source:path",
+          "value": "web/assets/vendor/inter/inter-latin-wght-normal.woff2"
+        }
+      ],
+      "type": "file"
+    },
+    {
+      "bom-ref": "file:web/assets/vendor/lucide/LICENSE",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "c337a9bf0e91e7b70692a4d4e43684187536308882f0b185a9c6fc2f967878db"
+        }
+      ],
+      "name": "LICENSE",
+      "properties": [
+        {
+          "name": "source:path",
+          "value": "web/assets/vendor/lucide/LICENSE"
+        }
+      ],
+      "type": "file"
+    },
+    {
+      "bom-ref": "file:web/assets/vendor/lucide/README.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "0ca4e59e3d525dd136b56266da0876cee77651ebfd884455e8998ec91263fecf"
+        }
+      ],
+      "name": "README.md",
+      "properties": [
+        {
+          "name": "source:path",
+          "value": "web/assets/vendor/lucide/README.md"
+        }
+      ],
+      "type": "file"
+    },
+    {
+      "bom-ref": "file:web/assets/vendor/uplot/LICENSE",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "8f989229699b4fe2f1a0432d0e9edc338a8a911e250e2d1b01ecd770a5f5b1bd"
+        }
+      ],
+      "name": "LICENSE",
+      "properties": [
+        {
+          "name": "source:path",
+          "value": "web/assets/vendor/uplot/LICENSE"
+        }
+      ],
+      "type": "file"
+    },
+    {
+      "bom-ref": "file:web/assets/vendor/uplot/README.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "aee2d5f414f2eed43923c7488d433fa2393243f1a481fd3bdcf52f83ba77f3d7"
+        }
+      ],
+      "name": "README.md",
+      "properties": [
+        {
+          "name": "source:path",
+          "value": "web/assets/vendor/uplot/README.md"
+        }
+      ],
+      "type": "file"
+    },
+    {
+      "bom-ref": "file:web/assets/vendor/uplot/uPlot.esm.js",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "5dd9b3281aa64b461b42d9945f6adb2649d346502b12281a9ae0d46599a80eba"
+        }
+      ],
+      "name": "uPlot.esm.js",
+      "properties": [
+        {
+          "name": "source:path",
+          "value": "web/assets/vendor/uplot/uPlot.esm.js"
+        }
+      ],
+      "type": "file"
+    },
+    {
+      "bom-ref": "file:web/assets/vendor/uplot/uPlot.min.css",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "df630c6a8d6f8eeaff264b50f73ce5b114f646ffd9a0bb74f049b0a00135fa04"
+        }
+      ],
+      "name": "uPlot.min.css",
+      "properties": [
+        {
+          "name": "source:path",
+          "value": "web/assets/vendor/uplot/uPlot.min.css"
+        }
+      ],
+      "type": "file"
+    },
+    {
+      "bom-ref": "library:lucide-icon-path-data",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ],
+      "name": "Lucide icon path data",
+      "properties": [
+        {
+          "name": "vendor:license-evidence",
+          "value": "web/assets/vendor/lucide/README.md; web/assets/vendor/lucide/LICENSE"
+        },
+        {
+          "name": "vendor:source-evidence",
+          "value": "web/assets/vendor/lucide/README.md"
+        },
+        {
+          "name": "vendor:upstream-branch",
+          "value": "main (README claim; not a pinned revision)"
+        },
+        {
+          "name": "vendor:upstream-commit-status",
+          "value": "unknown: no commit is recorded in the vendoring README"
+        },
+        {
+          "name": "vendor:upstream-url",
+          "value": "https://github.com/lucide-icons/lucide"
+        },
+        {
+          "name": "vendor:vendored-content",
+          "value": "Raw SVG child-element data hand-transcribed into icons.js, mixed with a local SVG helper"
+        },
+        {
+          "name": "vendor:version-status",
+          "value": "unknown: no version is recorded in the vendoring README"
+        }
+      ],
+      "type": "library"
+    },
+    {
+      "bom-ref": "library:npm:@fontsource-variable/inter@5.2.8",
+      "licenses": [
+        {
+          "license": {
+            "id": "OFL-1.1"
+          }
+        }
+      ],
+      "name": "Inter (variable, Latin subset)",
+      "properties": [
+        {
+          "name": "vendor:license-evidence",
+          "value": "web/assets/vendor/inter/README.md; web/assets/vendor/inter/LICENSE"
+        },
+        {
+          "name": "vendor:registry-integrity-claim",
+          "value": "sha512-kOfP2D+ykbcX/P3IFnokOhVRNoTozo5/JxhAIVYLpea/UBmCQ/YWPBfWIDuBImXX/15KH+eKh4xpEUyS2sQQGQ=="
+        },
+        {
+          "name": "vendor:registry-tarball",
+          "value": "https://registry.npmjs.org/@fontsource-variable/inter/-/inter-5.2.8.tgz"
+        },
+        {
+          "name": "vendor:source-evidence",
+          "value": "web/assets/vendor/inter/README.md"
+        },
+        {
+          "name": "vendor:upstream-url",
+          "value": "https://github.com/rsms/inter"
+        }
+      ],
+      "purl": "pkg:npm/%40fontsource-variable/inter@5.2.8",
+      "type": "library",
+      "version": "5.2.8"
+    },
+    {
+      "bom-ref": "library:npm:uplot@1.6.32",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "uPlot",
+      "properties": [
+        {
+          "name": "vendor:integrity-claim:sha1",
+          "value": "c800a63b432bad692d6d746f44f0882aa73a49ae (historical README claim made before vendoring; archive not independently verified by this inventory)"
+        },
+        {
+          "name": "vendor:integrity-claim:sha512",
+          "value": "sha512-KIMVnG68zvu5XXUbC4LQEPnhwOxBuLyW1AHtpm6IKTXImkbLgkMy+jabjLgSLMasNuGGzQm/ep3tOkyTxpiQIw== (historical README claim made before vendoring; archive not independently verified by this inventory)"
+        },
+        {
+          "name": "vendor:license-evidence",
+          "value": "web/assets/vendor/uplot/README.md; web/assets/vendor/uplot/LICENSE"
+        },
+        {
+          "name": "vendor:registry-metadata-url",
+          "value": "https://registry.npmjs.org/uplot/1.6.32"
+        },
+        {
+          "name": "vendor:source-evidence",
+          "value": "web/assets/vendor/uplot/README.md"
+        },
+        {
+          "name": "vendor:source-url",
+          "value": "https://registry.npmjs.org/uplot/-/uplot-1.6.32.tgz"
+        }
+      ],
+      "purl": "pkg:npm/uplot@1.6.32",
+      "type": "library",
+      "version": "1.6.32"
+    }
+  ],
+  "dependencies": [
+    {
+      "dependsOn": [
+        "library:lucide-icon-path-data",
+        "library:npm:@fontsource-variable/inter@5.2.8",
+        "library:npm:uplot@1.6.32"
+      ],
+      "ref": "application:cloud-pulse"
+    },
+    {
+      "dependsOn": [
+        "file:web/assets/js/ui/icons.js",
+        "file:web/assets/vendor/lucide/LICENSE",
+        "file:web/assets/vendor/lucide/README.md"
+      ],
+      "ref": "library:lucide-icon-path-data"
+    },
+    {
+      "dependsOn": [
+        "file:web/assets/vendor/inter/LICENSE",
+        "file:web/assets/vendor/inter/README.md",
+        "file:web/assets/vendor/inter/inter-latin-wght-normal.woff2"
+      ],
+      "ref": "library:npm:@fontsource-variable/inter@5.2.8"
+    },
+    {
+      "dependsOn": [
+        "file:web/assets/vendor/uplot/LICENSE",
+        "file:web/assets/vendor/uplot/README.md",
+        "file:web/assets/vendor/uplot/uPlot.esm.js",
+        "file:web/assets/vendor/uplot/uPlot.min.css"
+      ],
+      "ref": "library:npm:uplot@1.6.32"
+    }
+  ],
+  "metadata": {
+    "component": {
+      "bom-ref": "application:cloud-pulse",
+      "name": "cloud-pulse",
+      "properties": [
+        {
+          "name": "inventory:excluded",
+          "value": "Authoritative npm dependency graph, transitive dependencies, and build/test dependencies"
+        },
+        {
+          "name": "inventory:scope",
+          "value": "Source-bound browser vendor inventory only"
+        },
+        {
+          "name": "security:assessment",
+          "value": "No vulnerability analysis performed"
+        }
+      ],
+      "type": "application"
+    }
+  },
+  "specVersion": "1.6",
+  "version": 1
+}

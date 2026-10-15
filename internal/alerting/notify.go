@@ -128,19 +128,21 @@ type deliveryWorkerOptions struct {
 	Timeout   time.Duration
 	// Diagnose optionally classifies a failed delivery's error into a
 	// models.DiagnosisCode; see Options.Diagnose's doc comment.
-	Diagnose func(error) *models.DiagnosisCode
+	Diagnose      func(error) *models.DiagnosisCode
+	SafeErrorText func(models.NotifyChannel, error) string
 }
 
 // deliveryWorker asynchronously sends notifications queued by the
 // engine, retrying transient failures with backoff and recording every
 // attempt's outcome onto the originating AlertEvent.
 type deliveryWorker struct {
-	store    Store
-	sender   SenderFactory
-	clock    func() time.Time
-	logger   *slog.Logger
-	timeout  time.Duration
-	diagnose func(error) *models.DiagnosisCode
+	store         Store
+	sender        SenderFactory
+	clock         func() time.Time
+	logger        *slog.Logger
+	timeout       time.Duration
+	diagnose      func(error) *models.DiagnosisCode
+	safeErrorText func(models.NotifyChannel, error) string
 
 	queue chan deliveryJob
 	wg    sync.WaitGroup
@@ -172,14 +174,15 @@ func newDeliveryWorker(opts deliveryWorkerOptions) *deliveryWorker {
 	}
 
 	w := &deliveryWorker{
-		store:    opts.Store,
-		sender:   opts.Sender,
-		clock:    clock,
-		logger:   logger,
-		timeout:  timeout,
-		diagnose: opts.Diagnose,
-		queue:    make(chan deliveryJob, queueSize),
-		closed:   make(chan struct{}),
+		store:         opts.Store,
+		sender:        opts.Sender,
+		clock:         clock,
+		logger:        logger,
+		timeout:       timeout,
+		diagnose:      opts.Diagnose,
+		safeErrorText: opts.SafeErrorText,
+		queue:         make(chan deliveryJob, queueSize),
+		closed:        make(chan struct{}),
 		afterFunc: func(d time.Duration) <-chan time.Time {
 			return time.After(d)
 		},
@@ -327,7 +330,7 @@ func (w *deliveryWorker) recordDelivery(job deliveryJob, sendErr error, duration
 		DurationMS:  duration.Milliseconds(),
 	}
 	if !ok {
-		d.Error = sendErr.Error()
+		d.Error = w.errorText(job.channel, sendErr)
 		if w.diagnose != nil {
 			d.Diagnosis = w.diagnose(sendErr)
 		}
@@ -354,11 +357,18 @@ func (w *deliveryWorker) recordDelivery(job deliveryJob, sendErr error, duration
 	// further locking.
 	current, err := w.store.GetAlertEvent(ctx, job.event.ID)
 	if err != nil {
-		w.logger.Error("alerting: re-fetch event before recording delivery failed; appending to stale snapshot", "event_id", job.event.ID, "error", err)
+		w.logger.Error("alerting: re-fetch event before recording delivery failed; appending to stale snapshot", "event_id", job.event.ID, "error", w.errorText(job.channel, err))
 		current = job.event
 	}
 	current.Deliveries = append(append([]models.Delivery{}, current.Deliveries...), d)
 	if err := w.store.UpdateAlertEvent(ctx, current); err != nil {
-		w.logger.Error("alerting: record delivery result failed", "event_id", job.event.ID, "error", err)
+		w.logger.Error("alerting: record delivery result failed", "event_id", job.event.ID, "error", w.errorText(job.channel, err))
 	}
+}
+
+func (w *deliveryWorker) errorText(ch models.NotifyChannel, err error) string {
+	if w.safeErrorText != nil {
+		return w.safeErrorText(ch, err)
+	}
+	return "notification delivery failed"
 }

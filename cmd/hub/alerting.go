@@ -134,6 +134,7 @@ func buildAlerting(store alerting.Store, logger *slog.Logger) (*alerting.Engine,
 		SenderFactory: senderFactory,
 		Logger:        logger,
 		Diagnose:      diagnoseDelivery,
+		SafeErrorText: notify.SafeErrorText,
 		Language:      notifyLanguageFrom(store),
 	})
 	return engine, hub.WrapAlertEngine(engine), hub.WrapNotifySenderFactory(senderFactory)

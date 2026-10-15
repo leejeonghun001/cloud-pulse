@@ -12,7 +12,7 @@ import (
 // ListAlertRules returns every configured alert rule, sorted by id.
 func (db *DB) ListAlertRules(ctx context.Context) ([]models.AlertRule, error) {
 	rows, err := db.sql.QueryContext(ctx, `
-		SELECT id, name, enabled, metric, host_id, operator, threshold,
+		SELECT id, name, enabled, metric, severity, host_id, operator, threshold,
 		       duration_sec, cooldown_sec, notify_resolved, channel_ids,
 		       created_at, updated_at
 		FROM alert_rules ORDER BY id
@@ -39,7 +39,7 @@ func (db *DB) ListAlertRules(ctx context.Context) ([]models.AlertRule, error) {
 // GetAlertRule returns one alert rule by id, or models.ErrNotFound.
 func (db *DB) GetAlertRule(ctx context.Context, id int64) (models.AlertRule, error) {
 	row := db.sql.QueryRowContext(ctx, `
-		SELECT id, name, enabled, metric, host_id, operator, threshold,
+		SELECT id, name, enabled, metric, severity, host_id, operator, threshold,
 		       duration_sec, cooldown_sec, notify_resolved, channel_ids,
 		       created_at, updated_at
 		FROM alert_rules WHERE id = ?
@@ -57,6 +57,9 @@ func (db *DB) GetAlertRule(ctx context.Context, id int64) (models.AlertRule, err
 // CreateAlertRule inserts r (ignoring r.ID) and returns the row with its
 // assigned ID and CreatedAt/UpdatedAt populated.
 func (db *DB) CreateAlertRule(ctx context.Context, r models.AlertRule) (models.AlertRule, error) {
+	if r.Severity == "" {
+		r.Severity = models.DefaultAlertSeverity(r.Metric)
+	}
 	channelIDsJSON, err := marshalChannelIDs(r.ChannelIDs)
 	if err != nil {
 		return models.AlertRule{}, fmt.Errorf("storage: create alert rule: %w", err)
@@ -64,11 +67,11 @@ func (db *DB) CreateAlertRule(ctx context.Context, r models.AlertRule) (models.A
 
 	now := time.Now().Unix()
 	res, err := db.sql.ExecContext(ctx, `
-		INSERT INTO alert_rules (name, enabled, metric, host_id, operator, threshold,
+		INSERT INTO alert_rules (name, enabled, metric, severity, host_id, operator, threshold,
 		                         duration_sec, cooldown_sec, notify_resolved, channel_ids,
 		                         created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, r.Name, r.Enabled, string(r.Metric), r.HostID, string(r.Operator), r.Threshold,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, r.Name, r.Enabled, string(r.Metric), string(r.Severity), r.HostID, string(r.Operator), r.Threshold,
 		r.DurationSec, r.CooldownSec, r.NotifyResolved, channelIDsJSON, now, now)
 	if err != nil {
 		return models.AlertRule{}, fmt.Errorf("storage: create alert rule: %w", err)
@@ -90,6 +93,9 @@ func (db *DB) CreateAlertRule(ctx context.Context, r models.AlertRule) (models.A
 // (UpdatedAt refreshed to now), or returns models.ErrNotFound if no rule
 // with that ID exists.
 func (db *DB) UpdateAlertRule(ctx context.Context, r models.AlertRule) (models.AlertRule, error) {
+	if r.Severity == "" {
+		r.Severity = models.DefaultAlertSeverity(r.Metric)
+	}
 	channelIDsJSON, err := marshalChannelIDs(r.ChannelIDs)
 	if err != nil {
 		return models.AlertRule{}, fmt.Errorf("storage: update alert rule: %w", err)
@@ -98,11 +104,11 @@ func (db *DB) UpdateAlertRule(ctx context.Context, r models.AlertRule) (models.A
 	now := time.Now().Unix()
 	res, err := db.sql.ExecContext(ctx, `
 		UPDATE alert_rules SET
-			name = ?, enabled = ?, metric = ?, host_id = ?, operator = ?, threshold = ?,
+			name = ?, enabled = ?, metric = ?, severity = ?, host_id = ?, operator = ?, threshold = ?,
 			duration_sec = ?, cooldown_sec = ?, notify_resolved = ?, channel_ids = ?,
 			updated_at = ?
 		WHERE id = ?
-	`, r.Name, r.Enabled, string(r.Metric), r.HostID, string(r.Operator), r.Threshold,
+	`, r.Name, r.Enabled, string(r.Metric), string(r.Severity), r.HostID, string(r.Operator), r.Threshold,
 		r.DurationSec, r.CooldownSec, r.NotifyResolved, channelIDsJSON, now, r.ID)
 	if err != nil {
 		return models.AlertRule{}, fmt.Errorf("storage: update alert rule: %w", err)
@@ -135,15 +141,16 @@ func (db *DB) DeleteAlertRule(ctx context.Context, id int64) error {
 // or *sql.Rows.Scan) into a models.AlertRule.
 func scanAlertRule(scan func(dest ...any) error) (models.AlertRule, error) {
 	var r models.AlertRule
-	var metric, operator, channelIDsJSON string
+	var metric, severity, operator, channelIDsJSON string
 	if err := scan(
-		&r.ID, &r.Name, &r.Enabled, &metric, &r.HostID, &operator, &r.Threshold,
+		&r.ID, &r.Name, &r.Enabled, &metric, &severity, &r.HostID, &operator, &r.Threshold,
 		&r.DurationSec, &r.CooldownSec, &r.NotifyResolved, &channelIDsJSON,
 		&r.CreatedAt, &r.UpdatedAt,
 	); err != nil {
 		return models.AlertRule{}, err
 	}
 	r.Metric = models.AlertMetric(metric)
+	r.Severity = models.AlertSeverity(severity)
 	r.Operator = models.AlertOperator(operator)
 	ids, err := unmarshalChannelIDs(channelIDsJSON)
 	if err != nil {

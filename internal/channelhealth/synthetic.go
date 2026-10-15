@@ -3,8 +3,8 @@
 // path as `cloud-pulse-hub notify verify` (see cmd/hub/notifyverifyrun.go
 // and scripts/verify-notify.py, which this deliberately mirrors rather
 // than reimplements), attempting a read-back + cleanup delete where the
-// platform's API allows it (Discord, Telegram), and reporting
-// accepted/verified/failed for platforms that don't (WhatsApp, webhook).
+// platform's API allows it (Discord read-back; Discord/Telegram delete),
+// and reporting accepted/verified/failed without assuming delivery proof.
 package channelhealth
 
 import (
@@ -38,13 +38,18 @@ const synthenticHTTPClientTimeout = 30 * time.Second
 // call within one synthetic test run.
 const defaultAttemptTimeout = 20 * time.Second
 
+const defaultRunTimeout = 20 * time.Second
+
 // RunOptions configures RunSyntheticTest. A zero-value RunOptions uses
-// defaultSenderFactory and defaultAttemptTimeout.
+// defaultSenderFactory and 20s whole-run/per-call timeouts.
 type RunOptions struct {
 	SenderFactory SenderFactory
 	// Timeout bounds each individual send/read-back/delete call. <= 0
 	// uses defaultAttemptTimeout.
 	Timeout time.Duration
+	// RunTimeout bounds the WHOLE run, including send/read-back/delete;
+	// <= 0 uses 20s. Every per-call timeout also inherits this deadline.
+	RunTimeout time.Duration
 }
 
 // syntheticMessageTitle/Text are the fixed test message content every
@@ -59,16 +64,21 @@ const (
 
 // RunSyntheticTest sends one synthetic test message to ch, following
 // the exact same accepted -> read-back -> cleanup sequence as `notify
-// verify` (cmd/hub/notifyverifyrun.go's runOneNotifyVerify): Discord and
-// Telegram get a read-back confirmation and a best-effort delete;
+// verify` (cmd/hub/notifyverifyrun.go's runOneNotifyVerify): Discord gets
+// read-back confirmation; Discord and Telegram get a best-effort delete;
 // WhatsApp and webhook channels are reported "accepted" once the
 // platform's API returns success, with no read-back/delete attempted
 // (see internal/notify/verify.go's package doc comment on why those
 // platforms have no such capability). The returned models.
-// SyntheticResult never carries a secret: Detail is always built from
-// notify.DiagnoseError's already-redacted output or this file's own
-// static strings.
+// SyntheticResult's error-derived Detail uses channel-aware redaction;
+// success details are static. WhatsApp attaches only a generated demo PNG.
 func RunSyntheticTest(ctx context.Context, ch models.NotifyChannel, opts RunOptions) models.SyntheticResult {
+	runTimeout := opts.RunTimeout
+	if runTimeout <= 0 {
+		runTimeout = defaultRunTimeout
+	}
+	ctx, runCancel := context.WithTimeout(ctx, runTimeout)
+	defer runCancel()
 	factory := opts.SenderFactory
 	if factory == nil {
 		factory = defaultSenderFactory
@@ -84,9 +94,9 @@ func RunSyntheticTest(ctx context.Context, ch models.NotifyChannel, opts RunOpti
 	sender, err := factory(ch, client)
 	if err != nil {
 		result.Outcome = models.SyntheticFailed
-		diag := notify.DiagnoseError(err)
+		diag := notify.DiagnoseChannelError(ch, err)
 		result.Diagnosis = diag.Code
-		result.Detail = diag.Title
+		result.Detail = "build sender failed: " + notify.SafeErrorText(ch, err)
 		return result
 	}
 
@@ -94,6 +104,20 @@ func RunSyntheticTest(ctx context.Context, ch models.NotifyChannel, opts RunOpti
 		Title:    syntheticMessageTitle,
 		Text:     syntheticMessageText,
 		Severity: notify.SeverityInfo,
+	}
+	if ch.Type == models.NotifyChannelWhatsApp {
+		msg.Image, err = notify.GeneratedTestChartPNG()
+		if err != nil {
+			result.Outcome = models.SyntheticFailed
+			result.Detail = "could not render connectivity demo chart"
+			return result
+		}
+		msg.ImageName = "connectivity-demo.png"
+	}
+	if sender == nil {
+		result.Outcome = models.SyntheticFailed
+		result.Detail = "notification sender unavailable"
+		return result
 	}
 
 	sendCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -108,9 +132,9 @@ func RunSyntheticTest(ctx context.Context, ch models.NotifyChannel, opts RunOpti
 	}
 	if err != nil {
 		result.Outcome = models.SyntheticFailed
-		diag := notify.DiagnoseError(err)
+		diag := notify.DiagnoseChannelError(ch, err)
 		result.Diagnosis = diag.Code
-		result.Detail = diag.Title
+		result.Detail = "send failed: " + diag.Title + "; " + diag.Detail
 		return result
 	}
 
@@ -123,19 +147,20 @@ func RunSyntheticTest(ctx context.Context, ch models.NotifyChannel, opts RunOpti
 		readCancel()
 		if err != nil {
 			result.Outcome = models.SyntheticFailed
-			diag := notify.DiagnoseError(err)
+			diag := notify.DiagnoseChannelError(ch, err)
 			result.Diagnosis = diag.Code
-			result.Detail = "read-back failed: " + diag.Title
-			return result
+			result.Detail = "read-back failed: " + diag.Title + "; " + diag.Detail
+		} else {
+			result.Outcome = models.SyntheticVerified
+			result.Detail = "verified via read-back"
 		}
-		result.Outcome = models.SyntheticVerified
-		result.Detail = "verified via read-back"
 	}
 
 	// Cleanup (best-effort delete) is always attempted for every
 	// verified/accepted run when the platform supports it — unlike
 	// `notify verify`'s opt-in --cleanup flag, the weekly synthetic
-	// test always cleans up after itself (SPEC-v0.8 §3-2: "가능하면
+	// test always attempts cleanup after a successful send, even if read-back
+	// failed (SPEC-v0.8 §3-2: "가능하면
 	// read-back 후 --cleanup 방식으로 삭제한다"), since there is no
 	// interactive operator here to decide otherwise and leaving a
 	// week's worth of test messages behind in a real Discord/Telegram
@@ -150,7 +175,7 @@ func RunSyntheticTest(ctx context.Context, ch models.NotifyChannel, opts RunOpti
 		delErr := deleter.Delete(delCtx, ref)
 		delCancel()
 		if delErr != nil {
-			result.Detail += fmt.Sprintf("; cleanup failed: %s", notify.DiagnoseError(delErr).Title)
+			result.Detail += fmt.Sprintf("; cleanup failed: %s", notify.SafeErrorText(ch, delErr))
 		} else {
 			result.Detail += "; cleaned up"
 		}

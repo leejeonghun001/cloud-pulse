@@ -7,6 +7,14 @@
 @source "../index.html";
 @source "../assets/js/**/*.js";
 
+/* Tokens, shared component families, shell, then page-specific styles.
+   Pages may scope a modifier; do not redefine another family's base class. */
+
+@import "./tokens.css";
+@import "./components/typography.css";
+@import "./components/card.css";
+@import "./components/status.css";
+@import "./components/meter.css";
 @import "./base.css";
 @import "./pages/auth.css";
 @import "./pages/overview.css";
@@ -18,23 +26,13 @@
 @import "./pages/rollout.css";
 @import "./pages/settings-billing.css";
 @import "./pages/settings-storage.css";
+@import "./pages/compare.css";
 
-/* ------------------------------------------------------------------ */
-/* Legacy dashboard component classes (ported as-is from v0.3.2).      */
-/* Used by js/pages/settings/*.js and other not-yet-redesigned pieces  */
-/* until their own redesign stages replace them. Kept here rather than */
-/* in base.css's design-system layer so it's obvious this block is     */
-/* transitional. Classes owned by the overview/host redesign (host    */
-/* cards, chart grid, egress/bucket sections, stat pairs, etc.) were   */
-/* removed from here — they're defined in pages/overview.css and      */
-/* pages/host.css now, which load earlier in this file's @import      */
-/* order; a duplicate definition here would win the cascade (loaded    */
-/* later) and silently override the redesign's rules.                  */
-/* ------------------------------------------------------------------ */
+/* Compatibility classes still emitted by existing page modules. */
 
 @layer components {
   .cp-summary-strip {
-    @apply grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-4;
+    @apply grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] rounded-[var(--radius-cp-lg)] border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-4;
   }
 
   .cp-summary-item {
@@ -42,11 +40,11 @@
   }
 
   .cp-summary-value {
-    @apply text-xl font-semibold text-[rgb(var(--text))] tabular-nums;
+    @apply text-[length:var(--text-cp-xl)] leading-[length:var(--leading-cp-xl)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))] tabular-nums;
   }
 
   .cp-summary-label {
-    @apply text-xs text-[rgb(var(--muted))] uppercase tracking-wide;
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))] uppercase tracking-[length:var(--tracking-cp-wide)];
   }
 
   .cp-refresh-row {
@@ -54,19 +52,19 @@
   }
 
   .cp-refresh-label {
-    @apply text-sm text-[rgb(var(--muted))];
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--muted))];
   }
 
   .cp-refresh-indicator {
-    @apply text-xs text-[rgb(var(--muted))];
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))];
   }
 
   .cp-btn-secondary {
-    @apply text-sm;
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)];
   }
 
   .cp-btn-range[aria-pressed="true"] {
-    @apply bg-cp-accent border-cp-accent-strong text-white;
+    @apply bg-cp-accent border-cp-accent-strong text-[rgb(var(--text-inverse))];
   }
 
   .cp-btn-group {
@@ -74,15 +72,11 @@
   }
 
   .cp-btn-secondary-active {
-    @apply bg-cp-accent border-cp-accent-strong text-white;
-  }
-
-  .cp-egress-row-head a {
-    @apply text-sm font-medium text-[rgb(var(--link))] hover:underline;
+    @apply bg-cp-accent border-cp-accent-strong text-[rgb(var(--text-inverse))];
   }
 
   .cp-host-detail-meta {
-    @apply grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 text-sm;
+    @apply grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)];
   }
 
   .cp-host-detail-meta-pair {
@@ -90,7 +84,7 @@
   }
 
   .cp-host-detail-meta dt {
-    @apply text-[rgb(var(--muted))] text-xs uppercase tracking-wide;
+    @apply text-[rgb(var(--muted))] text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] uppercase tracking-[length:var(--tracking-cp-wide)];
   }
 
   .cp-host-detail-meta dd {
@@ -114,7 +108,7 @@
   }
 
   .cp-install-fallback {
-    @apply w-full font-mono text-xs mt-2;
+    @apply w-full font-mono text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] mt-2;
   }
 
   .cp-admin-disabled {
@@ -122,11 +116,11 @@
   }
 
   .cp-admin-disabled h3 {
-    @apply text-sm font-semibold text-[rgb(var(--text))] mt-2;
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))] mt-2;
   }
 
   .cp-admin-disabled-steps {
-    @apply list-decimal list-inside text-sm text-[rgb(var(--text))] flex flex-col gap-1 pl-1;
+    @apply list-decimal list-inside text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--text))] flex flex-col gap-1 pl-1;
   }
 
   .cp-limits-actions {
@@ -142,7 +136,7 @@
   }
 
   .cp-update-banner {
-    @apply flex flex-col gap-3 rounded-xl border border-cp-accent/40 bg-cp-accent/10 p-4 sm:flex-row sm:items-center sm:justify-between;
+    @apply flex flex-col gap-3 rounded-[var(--radius-cp-lg)] border border-[rgb(var(--accent)/0.4)] bg-[rgb(var(--accent)/0.1)] p-4 sm:flex-row sm:items-center sm:justify-between;
   }
 
   .cp-update-banner-text {
@@ -150,7 +144,7 @@
   }
 
   .cp-update-banner-headline {
-    @apply text-sm font-medium text-[rgb(var(--text))];
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-medium)] text-[rgb(var(--text))];
   }
 
   .cp-update-banner-code-row {

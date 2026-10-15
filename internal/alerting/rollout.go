@@ -256,6 +256,7 @@ func (e *Engine) notifyUpdateBatchOnce(ctx context.Context, now time.Time, rule 
 		HostID:    scopeID,
 		Hostname:  outcome.BatchID,
 		Metric:    models.AlertMetricUpdateBatchFailed,
+		Severity:  ruleSeverity(rule),
 		State:     models.AlertEventFiring,
 		Value:     float64(outcome.Failed),
 		StartedAt: now.Unix(),
@@ -270,6 +271,7 @@ func (e *Engine) notifyUpdateBatchOnce(ctx context.Context, now time.Time, rule 
 	}
 
 	msg := buildUpdateBatchMessage(e.notifyLanguage(ctx), rule, outcome)
+	msg.Severity = severityFor(rule)
 	if img := renderUpdateBatchChart(outcome); img != nil {
 		msg.Image = img
 		msg.ImageName = chartImageName

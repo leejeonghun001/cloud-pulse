@@ -2,13 +2,13 @@
 // billing cards (MTD/forecast/status, with the last-successful-fetch
 // freshness note per SPEC §1 개선 a) plus a per-host cost table
 // combining cloud billing and estimated network egress cost.
-import { el, clearChildren, emptyState, errorBanner, providerBadge } from "../ui/components.js";
+import { el, clearChildren, emptyState, errorBanner, errorState, providerBadge, skeletonCards } from "../ui/components.js";
 import { icon } from "../ui/icons.js";
 import { showToast } from "../ui/toast.js";
 import { formatDuration } from "../core/format.js";
 import { getBilling, refreshBilling, ApiError, RateLimitError, localizeApiError } from "../core/api.js";
 import { formatUSD } from "../core/currency.js";
-import { freshnessViewModel, lastKnownCostViewModel, hostCostDisplayAmounts } from "../core/billing-view.js";
+import { freshnessViewModel, hostCostDisplayAmounts } from "../core/billing-view.js";
 import { t } from "../core/i18n.js";
 
 /** localUtcOffsetMinutes returns the browser's current UTC offset in
@@ -44,29 +44,45 @@ const PROVIDER_NAMES = { aws: "AWS", oci: "OCI" };
  */
 export function mountCostsPage(container, { announce }) {
   const controller = new AbortController();
+  let generation = 0;
 
   async function refresh() {
+    const current = ++generation;
     clearChildren(container);
     const root = el("div", { class: "cp-costs-page" });
-    root.append(el("h1", { class: "cp-page-title", text: t("costs.page_title") }));
-    root.append(
+    const header = el("header", { class: "cp-costs-header" });
+    header.append(el("h1", { class: "cp-page-title", text: t("costs.page_title") }));
+    header.append(
       el("p", {
         class: "cp-page-subtitle",
         text: t("costs.page_subtitle"),
       }),
     );
+    root.append(header);
+    const content = el("div", { class: "cp-costs-content", attrs: { "aria-busy": "true" } });
+    content.append(skeletonCards(2), el("span", { class: "sr-only", attrs: { role: "status" }, text: t("costs.loading") }));
+    root.append(content);
+    container.append(root);
 
     let view;
     try {
       view = await getBilling(controller.signal);
     } catch (err) {
-      if (err?.name === "AbortError") return;
-      root.append(errorBanner(describeError(err)));
-      container.append(root);
+      if (err?.name === "AbortError" || controller.signal.aborted || current !== generation) return;
+      clearChildren(content);
+      content.setAttribute("aria-busy", "false");
+      content.append(errorState({
+        title: t("costs.page_title"),
+        message: t("costs.load_failed", { reason: describeError(err) }),
+        onRetry: refresh,
+      }));
       return;
     }
+    if (controller.signal.aborted || current !== generation) return;
+    clearChildren(content);
+    content.setAttribute("aria-busy", "false");
 
-    root.append(
+    content.append(
       providerCardsSection({
         snapshots: view.snapshots || [],
         intervalSeconds: view.interval_seconds || 0,
@@ -75,8 +91,7 @@ export function mountCostsPage(container, { announce }) {
         onRefreshed: refresh,
       }),
     );
-    root.append(hostCostTable(view.hosts || [], view.display_currency));
-    container.append(root);
+    content.append(hostCostTable(view.hosts || [], view.display_currency, view.snapshots || []));
   }
 
   function teardown() {
@@ -92,9 +107,12 @@ export function mountCostsPage(container, { announce }) {
  * disabled) as an explanatory empty state.
  */
 function providerCardsSection({ snapshots, intervalSeconds, signal, announce, onRefreshed }) {
-  const section = el("section", { class: "cp-section", attrs: { "aria-labelledby": "cp-costs-providers-heading" } });
-  const head = el("div", { class: "cp-metric-head" });
-  head.append(el("h2", { id: "cp-costs-providers-heading", text: t("costs.cloud_billing_title") }));
+  const section = el("section", { class: "cp-section cp-costs-providers", attrs: { "aria-labelledby": "cp-costs-providers-heading" } });
+  const head = el("div", { class: "cp-costs-section-head" });
+  const title = el("div");
+  title.append(el("h2", { attrs: { id: "cp-costs-providers-heading" }, text: t("costs.cloud_billing_title") }));
+  title.append(el("p", { class: "cp-muted-small", text: t("costs.provider_currency_note") }));
+  head.append(title);
 
   const refreshBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button" } });
   refreshBtn.append(icon("refreshCw"), el("span", { text: t("costs.refresh_now") }));
@@ -104,6 +122,7 @@ function providerCardsSection({ snapshots, intervalSeconds, signal, announce, on
       await refreshBilling(signal);
       announce?.(t("costs.billing_refreshed"));
       await onRefreshed();
+      document.getElementById("cp-costs-refresh")?.focus();
     } catch (err) {
       if (err?.name === "AbortError") return;
       if (err instanceof RateLimitError) {
@@ -118,6 +137,7 @@ function providerCardsSection({ snapshots, intervalSeconds, signal, announce, on
       refreshBtn.disabled = false;
     }
   });
+  refreshBtn.setAttribute("id", "cp-costs-refresh");
   head.append(refreshBtn);
   section.append(head);
 
@@ -129,15 +149,29 @@ function providerCardsSection({ snapshots, intervalSeconds, signal, announce, on
         iconName: "cloud",
       }),
     );
+    section.append(el("a", { class: "cp-btn cp-btn-secondary", text: t("costs.billing_settings"), attrs: { href: "#/settings/billing" } }));
     return section;
   }
 
   const grid = el("div", { class: "cp-costs-provider-grid" });
   for (const snap of snapshots) {
-    grid.append(providerCard(snap, intervalSeconds));
+    grid.append(isProviderUnconfigured(snap) ? providerSetupRow(snap) : providerCard(snap, intervalSeconds));
   }
   section.append(grid);
   return section;
+}
+
+function isProviderUnconfigured(snap) {
+  return snap.status === "not_installed" || snap.status === "not_configured";
+}
+
+/** A missing optional billing integration is setup guidance, not an error card. */
+function providerSetupRow(snap) {
+  const provider = PROVIDER_NAMES[snap.provider] || snap.provider.toUpperCase();
+  const row = el("div", { class: "cp-costs-provider-setup" });
+  row.append(el("span", { class: "cp-muted-small", text: t("costs.provider_not_setup", { provider }) }));
+  row.append(el("a", { class: "cp-back-link", attrs: { href: "#/settings/billing" }, text: t("costs.how_to_enable") }));
+  return row;
 }
 
 /**
@@ -150,31 +184,35 @@ function providerCardsSection({ snapshots, intervalSeconds, signal, announce, on
  */
 function providerCard(snap, intervalSeconds) {
   const card = el("div", { class: "cp-card cp-costs-provider-card" });
-  const head = el("div", { class: "cp-metric-head" });
+  const head = el("div", { class: "cp-costs-section-head" });
   head.append(el("h3", { class: "cp-card-title", text: PROVIDER_NAMES[snap.provider] || snap.provider.toUpperCase() }));
   head.append(statusBadge(snap.status, snap.stale));
   card.append(head);
 
-  if (snap.status === "ok") {
-    card.append(costLine(t("costs.mtd"), snap.mtd_cost, snap.currency));
-    card.append(costLine(t("costs.forecast"), snap.forecast_cost, snap.currency));
+  const notes = el("div", { class: "cp-costs-provider-notes" });
+  if (snap.status === "ok" || snap.last_success_at > 0) {
+    if (snap.status !== "ok") {
+      card.append(el("p", { class: "cp-muted-small", text: snap.status_detail || t("costs.not_connected") }));
+      card.append(el("p", { class: "cp-costs-last-known cp-muted-small", text: t("costs.last_known_note") }));
+    }
+    const metrics = el("dl", { class: "cp-costs-provider-metrics" });
+    metrics.append(costLine(t("costs.mtd_actual"), snap.mtd_cost, snap.currency));
+    metrics.append(costLine(t("costs.month_end_forecast"), snap.forecast_cost, snap.currency));
+    card.append(metrics);
     if (snap.forecast_method === "linear") {
-      card.append(el("p", { class: "cp-muted-small", text: t("costs.forecast_linear_note") }));
+      notes.append(el("p", { class: "cp-muted-small", text: t("costs.forecast_linear_note") }));
     }
     if (snap.account_level) {
-      card.append(el("p", { class: "cp-muted-small", text: t("costs.account_level_note") }));
+      notes.append(el("p", { class: "cp-muted-small", text: t("costs.account_level_note") }));
     }
   } else {
     card.append(el("p", { class: "cp-muted-small", text: snap.status_detail || t("costs.not_connected") }));
-    const lastKnown = lastKnownCostViewModel(snap);
-    if (lastKnown) {
-      card.append(el("p", { class: "cp-muted-small cp-costs-last-known", text: lastKnown.mtdLabel }));
-      card.append(el("p", { class: "cp-muted-small cp-costs-last-known", text: lastKnown.forecastLabel }));
-    }
+    card.append(el("p", { class: "cp-muted-small", text: t("costs.amounts_unavailable") }));
   }
 
-  card.append(freshnessNote(snap, intervalSeconds));
-  card.append(el("p", { class: "cp-muted-small", text: t("costs.excl_tax") }));
+  notes.append(freshnessNote(snap, intervalSeconds));
+  notes.append(el("p", { class: "cp-muted-small", text: t("costs.excl_tax") }));
+  card.append(notes);
   return card;
 }
 
@@ -213,9 +251,9 @@ function freshnessNote(snap, intervalSeconds) {
 
 /** costLine builds a labeled monetary value row for a provider card. */
 function costLine(label, amount, currency) {
-  const row = el("div", { class: "cp-metric-head" });
-  row.append(el("span", { class: "cp-metric-label", text: label }));
-  row.append(el("span", { class: "cp-metric-value", text: formatUSD(amount, currency, { taxNote: false }) }));
+  const row = el("div", { class: "cp-costs-provider-metric" });
+  row.append(el("dt", { class: "cp-muted-small", text: label }));
+  row.append(el("dd", { class: "cp-costs-provider-value", text: hasAmount(amount) ? formatUSD(amount, currency, { taxNote: false }) : t("costs.unavailable") }));
   return row;
 }
 
@@ -229,60 +267,107 @@ function costLine(label, amount, currency) {
  * @param {Object} displayCurrency models.DisplayCurrencySettings
  * @returns {HTMLElement}
  */
-function hostCostTable(hosts, displayCurrency) {
-  const section = el("section", { class: "cp-section", attrs: { "aria-labelledby": "cp-costs-hosts-heading" } });
-  section.append(el("h2", { id: "cp-costs-hosts-heading", text: t("costs.per_host_costs_title") }));
+function hostCostTable(hosts, displayCurrency, snapshots) {
+  const section = el("section", { class: "cp-section cp-costs-hosts", attrs: { "aria-labelledby": "cp-costs-hosts-heading" } });
+  section.append(el("h2", { attrs: { id: "cp-costs-hosts-heading" }, text: t("costs.per_host_costs_title") }));
+  section.append(el("p", { class: "cp-muted-small", text: t("costs.host_costs_note") }));
+  if (displayCurrency?.currency === "KRW") {
+    section.append(el("p", { class: "cp-muted-small", text: t("costs.manual_conversion_note") }));
+  }
 
   if (hosts.length === 0) {
     section.append(el("p", { class: "cp-muted", text: t("costs.no_hosts_reporting_yet") }));
     return section;
   }
 
-  const table = el("table", { class: "cp-table" });
-  const thead = el("thead");
-  const headRow = el("tr");
-  for (const label of [t("costs.col_host"), t("costs.col_provider"), t("costs.col_cloud_mtd_forecast"), t("costs.col_network_estimate"), t("costs.col_total_mtd_forecast")]) {
-    headRow.append(el("th", { text: label }));
+  const table = el("table", { class: "cp-table cp-costs-table", attrs: { role: "table", "aria-labelledby": "cp-costs-hosts-heading" } });
+  const thead = el("thead", { attrs: { role: "rowgroup" } });
+  const headRow = el("tr", { attrs: { role: "row" } });
+  for (const label of [t("costs.col_host"), t("costs.col_cloud_charges"), t("costs.col_network_estimate"), t("costs.col_cost_projection")]) {
+    headRow.append(el("th", { text: label, attrs: { scope: "col", role: "columnheader" } }));
   }
   thead.append(headRow);
   table.append(thead);
 
-  const tbody = el("tbody");
+  const tbody = el("tbody", { attrs: { role: "rowgroup" } });
   for (const h of hosts) {
-    tbody.append(hostCostRow(h, displayCurrency));
+    tbody.append(hostCostRow(h, displayCurrency, snapshots.find((s) => s.provider === h.provider)));
   }
   table.append(tbody);
-  const tableWrap = el("div", { class: "cp-table-wrap" });
+  const tableWrap = el("div", { class: "cp-table-wrap cp-costs-table-wrap" });
   tableWrap.append(table);
   section.append(tableWrap);
   section.append(el("p", { class: "cp-muted-small", text: t("costs.all_amounts_excl_tax") }));
   return section;
 }
 
-function hostCostRow(h, displayCurrency) {
-  const row = el("tr");
-  row.append(el("td", { children: [el("a", { class: "cp-table-link", text: h.hostname, attrs: { href: `#/host/${encodeURIComponent(h.host_id)}` } })] }));
-  row.append(el("td", { children: h.provider ? [providerBadge(h.provider)] : [el("span", { class: "cp-muted-small", text: "—" })] }));
+function hostCostRow(h, displayCurrency, snapshot) {
+  const row = el("tr", { attrs: { role: "row" } });
+  const host = el("th", { class: "cp-costs-host-cell", attrs: { scope: "row", role: "rowheader" } });
+  host.append(el("a", { class: "cp-table-link", text: h.hostname, attrs: { href: `#/host/${encodeURIComponent(h.host_id)}` } }));
+  if (h.provider) host.append(providerBadge(h.provider));
+  row.append(host);
 
   const amounts = hostCostDisplayAmounts(h, displayCurrency);
 
-  let cloudCell;
+  const cloudCell = costCell(t("costs.col_cloud_charges"));
   if (!h.provider) {
-    cloudCell = el("span", { class: "cp-muted-small", text: t("costs.not_connected") });
-  } else if (h.matched) {
-    cloudCell = el("span", { text: `${amounts.cloudMTD} / ${amounts.cloudForecast}` });
+    cloudCell.append(el("span", { class: "cp-muted-small", text: t("costs.not_connected") }));
+  } else if (h.matched || snapshot?.account_level) {
+    if (!h.matched) cloudCell.append(el("span", { class: "cp-muted-small cp-costs-scope-note", text: t("costs.account_total_only") }));
+    if (snapshot?.status !== "ok" && !snapshot?.last_success_at && !h.matched) {
+      cloudCell.append(el("span", { class: "cp-muted-small", text: t("costs.amounts_unavailable") }));
+    } else {
+      cloudCell.append(amountPair(h.cloud_mtd, amounts.cloudMTD, h.cloud_forecast, amounts.cloudForecast));
+    }
+    if (snapshot?.stale) cloudCell.append(el("p", { class: "cp-muted-small cp-costs-source-note", text: t("costs.stale_data") }));
+    if (snapshot && snapshot.status !== "ok") cloudCell.append(el("p", { class: "cp-muted-small cp-costs-source-note", text: t("costs.last_known_note") }));
   } else {
-    cloudCell = el("span", { class: "cp-muted-small", text: t("costs.account_total_only") });
+    cloudCell.append(el("span", { class: "cp-muted-small", text: t("costs.resource_unavailable") }));
   }
-  row.append(el("td", { children: [cloudCell] }));
-
-  row.append(
-    el("td", {
-      text: amounts.networkMTD ? `${amounts.networkMTD} / ${amounts.networkForecast}` : t("costs.no_plan"),
-    }),
-  );
-  row.append(el("td", { text: `${amounts.totalMTD} / ${amounts.totalForecast}` }));
+  row.append(cloudCell);
+  const network = costCell(t("costs.col_network_estimate"));
+  if (amounts.networkMTD !== null) network.append(amountPair(h.network_estimate.mtd, amounts.networkMTD, h.network_estimate.projected, amounts.networkForecast));
+  else network.append(el("span", { class: "cp-muted-small", text: t("costs.no_plan") }));
+  row.append(network);
+  const total = costCell(t("costs.col_cost_projection"), "cp-costs-total-cell");
+  total.append(amountPair(h.total_mtd, amounts.totalMTD, h.total_forecast, amounts.totalForecast));
+  if (!h.matched && (snapshot?.account_level || h.cloud_mtd !== 0 && hasAmount(h.cloud_mtd))) {
+    total.append(el("span", { class: "cp-muted-small cp-costs-scope-note", text: t("costs.account_projection_note") }));
+  } else if (!h.matched && !h.network_estimate?.plan_id) {
+    total.append(el("span", { class: "cp-muted-small cp-costs-scope-note", text: t("costs.incomplete_total_note") }));
+  }
+  if (snapshot?.stale) total.append(el("p", { class: "cp-muted-small cp-costs-source-note", text: t("costs.stale_data") }));
+  row.append(total);
   return row;
+}
+
+function hasAmount(amount) {
+  return amount !== null && amount !== undefined && Number.isFinite(Number(amount));
+}
+
+function costCell(label, extraClass = "") {
+  const cell = el("td", { class: extraClass, attrs: { role: "cell" } });
+  cell.append(el("span", { class: "cp-costs-mobile-label", text: label, attrs: { "aria-hidden": "true" } }));
+  return cell;
+}
+
+/** Keep the existing formatter's amount, USD original, manual rate and date
+ * exactly intact; only separate its primary value from its supporting text. */
+function amountPair(mtd, mtdText, forecast, forecastText) {
+  const pair = el("dl", { class: "cp-costs-amount-pair" });
+  for (const [label, raw, formatted] of [[t("costs.mtd"), mtd, mtdText], [t("costs.forecast"), forecast, forecastText]]) {
+    const item = el("div", { class: "cp-costs-amount-item" });
+    item.append(el("dt", { text: label }));
+    const value = el("dd");
+    const text = hasAmount(raw) ? formatted : t("costs.unavailable");
+    const detailAt = text.indexOf(" (");
+    value.append(el("span", { class: "cp-costs-amount", text: detailAt < 0 ? text : text.slice(0, detailAt) }));
+    if (detailAt >= 0) value.append(el("span", { class: "cp-costs-conversion", text: text.slice(detailAt) }));
+    item.append(value);
+    pair.append(item);
+  }
+  return pair;
 }
 
 function describeError(err) {

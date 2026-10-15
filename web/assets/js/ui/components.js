@@ -461,10 +461,13 @@ export function agentUpdatePanel(update) {
  * @param {string} opts.message
  * @param {string} [opts.code]
  * @param {string} [opts.iconName] optional icon name shown above the title
+ * @param {{label:string,onClick?:() => void|Promise<void>,href?:string,iconName?:string}} [opts.action]
+ * @param {HTMLElement|string} [opts.secondary] quiet supporting content
+ * @param {boolean} [opts.compact] uses the compact, section-aligned treatment
  * @returns {HTMLElement}
  */
-export function emptyState({ title, message, code, iconName }) {
-  const wrap = el("div", { class: "cp-empty-state" });
+export function emptyState({ title, message, code, iconName, action, secondary, compact = false }) {
+  const wrap = el("div", { class: `cp-empty-state${compact ? " cp-empty-state-compact" : ""}` });
   if (iconName) {
     const iconWrap = el("div", { class: "cp-muted" });
     const ic = icon(iconName);
@@ -473,13 +476,96 @@ export function emptyState({ title, message, code, iconName }) {
     wrap.append(iconWrap);
   }
   wrap.append(el("h3", { text: title }));
-  wrap.append(el("p", { text: message }));
+  if (message) wrap.append(el("p", { text: message }));
   if (code) {
     const pre = el("pre", { class: "cp-code-block" });
     pre.append(el("code", { text: code }));
     wrap.append(pre);
   }
+  if (action) {
+    const actionNode = el(action.href ? "a" : "button", {
+      class: "cp-btn cp-btn-secondary cp-empty-state-action",
+      attrs: action.href ? { href: action.href } : { type: "button" },
+    });
+    if (action.iconName) actionNode.append(icon(action.iconName));
+    actionNode.append(el("span", { text: action.label }));
+    if (action.onClick) actionNode.addEventListener("click", action.onClick);
+    wrap.append(actionNode);
+  }
+  if (secondary) wrap.append(typeof secondary === "string" ? el("p", { class: "cp-muted-small", text: secondary }) : secondary);
   return wrap;
+}
+
+/**
+ * errorState provides a recoverable failure surface. Its retry button remains
+ * focused after completion, so keyboard users do not lose their place.
+ */
+export function errorState({ title, message, onRetry }) {
+  const wrap = el("div", { class: "cp-error-state", attrs: { role: "alert" } });
+  const copy = el("div", { class: "cp-error-state-copy" });
+  copy.append(el("h3", { text: title }));
+  if (message) copy.append(el("p", { text: message }));
+  wrap.append(copy);
+  if (onRetry) {
+    const retry = /** @type {HTMLButtonElement} */ (el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: t("common.retry") }));
+    retry.addEventListener("click", async () => {
+      if (retry.disabled) return;
+      retry.disabled = true;
+      retry.textContent = t("state.retrying");
+      try { await onRetry(); }
+      finally {
+        if (retry.isConnected) {
+          retry.disabled = false;
+          retry.textContent = t("common.retry");
+          retry.focus({ preventScroll: true });
+        } else {
+          // The page re-rendered (e.g. refresh() cleared its container):
+          // land on a fresh Retry if it failed again, else on <main>, never
+          // on <body>.
+          const doc = globalThis.document;
+          const next = doc?.body?.querySelector?.(".cp-error-state")?.querySelector("button") || doc?.getElementById?.("cp-main");
+          next?.focus({ preventScroll: true });
+        }
+      }
+    });
+    wrap.append(retry);
+  }
+  return wrap;
+}
+
+function skeletonStatus() {
+  return el("span", { class: "sr-only", attrs: { role: "status" }, text: t("common.loading") });
+}
+
+/** Static tonal loading lines with an accessible loading announcement. */
+export function skeletonLines(n = 3) {
+  const wrap = el("div", { class: "cp-loading-skeleton cp-skeleton-lines", attrs: { "aria-hidden": "true" } });
+  for (let index = 0; index < n; index += 1) wrap.append(el("span", { class: "cp-skeleton-block" }));
+  const host = el("div", { class: "cp-loading-state" });
+  host.append(wrap, skeletonStatus());
+  return host;
+}
+
+/** A row of neutral card placeholders. */
+export function skeletonCards(n = 3) {
+  const wrap = el("div", { class: "cp-loading-skeleton cp-skeleton-cards", attrs: { "aria-hidden": "true" } });
+  for (let index = 0; index < n; index += 1) wrap.append(el("div", { class: "cp-skeleton-card" }));
+  const host = el("div", { class: "cp-loading-state" });
+  host.append(wrap, skeletonStatus());
+  return host;
+}
+
+/** A neutral table silhouette; it deliberately contains no fabricated data. */
+export function skeletonTable(rows = 4, cols = 4) {
+  const wrap = el("div", { class: "cp-loading-skeleton cp-skeleton-table", attrs: { "aria-hidden": "true" } });
+  for (let row = 0; row < rows; row += 1) {
+    const line = el("div", { class: "cp-skeleton-table-row" });
+    for (let col = 0; col < cols; col += 1) line.append(el("span", { class: "cp-skeleton-block" }));
+    wrap.append(line);
+  }
+  const host = el("div", { class: "cp-loading-state" });
+  host.append(wrap, skeletonStatus());
+  return host;
 }
 
 /**

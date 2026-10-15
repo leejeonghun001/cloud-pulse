@@ -59,13 +59,14 @@ import ipaddress
 import json
 import math
 import re
+import shutil
 import struct
 import subprocess
 import sys
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, Iterator, NoReturn
+from typing import Callable, Iterable, Iterator, Mapping, NoReturn
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -80,6 +81,19 @@ _ORCHESTRATOR_DIR_NAME = "." + "cloud-pulse-orchestrator"
 MAX_BLOB_BYTES = 5 * 1024 * 1024  # 5 MiB
 
 REQUIRED_GITIGNORE_ENTRIES = ("data/", "dist/", "bin/", "*.db")
+
+# This appendix is informational only: it checks PATH presence and never
+# executes these optional tools or infers their compatibility.
+OPTIONAL_CLI_TOOLS = (
+    "docker",
+    "docker-compose",
+    "wine",
+    "qemu-aarch64",
+    "qemu-x86_64",
+    "firefox",
+    "actionlint",
+)
+_OPTIONAL_CLI_STATES = frozenset({"found", "not found", "not checked", "unknown"})
 
 # Extensions that, if a tracked file's content sniffs as a native
 # binary executable, are hygiene failures (a script with an executable
@@ -315,7 +329,7 @@ class Finding:
     description: str
     location: str  # "tree:<path>:<line>" or "history:<commit>:<path>"
     detail: str  # secret-free description, may mention classification
-    severity: str = "fail"  # "fail" | "warn"
+    severity: str = "fail"  # fail, warn, or accepted_fixture
     baseline_key: str | None = None  # only set for findings hashed for baseline
 
 
@@ -700,6 +714,8 @@ _ADDED_LINE_RE = re.compile(r"^\+(?!\+\+)(.*)$")
 
 def iter_history_added_lines(repo_root: Path) -> Iterator[tuple[str, str, int, str]]:
     """Streams added lines with commit, path, and their real new-file line number."""
+    if find_repo_root(repo_root).resolve() != repo_root.resolve():
+        raise RuntimeError("history scan requires the exact repository root")
     proc = subprocess.Popen(
         ["git", "log", "-p", "--all", "--no-color", "--unified=0"],
         cwd=repo_root,
@@ -741,15 +757,224 @@ def iter_history_added_lines(repo_root: Path) -> Iterator[tuple[str, str, int, s
                 new_line_no += 1
     finally:
         proc.stdout.close()
-        proc.wait()
+        returncode = proc.wait()
+        if returncode != 0:
+            raise RuntimeError("git history enumeration failed")
 
 
-def scan_history(repo_root: Path, markers: Iterable[Marker | str]) -> list[Finding]:
+class ReviewedHistoricalFixtures:
+    """Fail-closed, exact-identity review of synthetic historical findings."""
+
+    RULE_IDS = frozenset({"internal.host_ip", "internal.home_path"})
+    REVIEW_FIELDS = frozenset({"method", "date", "scope"})
+    FIXTURE_FIELDS = frozenset(
+        {"commit", "path", "line", "rule_id", "line_sha256", "reason"}
+    )
+    MAX_MANIFEST_BYTES = 1024 * 1024
+    MAX_FIXTURES = 1000
+    MAX_TARGET_BYTES = 4 * 1024 * 1024
+    MAX_TOTAL_CACHED_TARGET_BYTES = 16 * 1024 * 1024
+    MAX_REASON_LENGTH = 240
+
+    def __init__(self, fixtures: list[dict[str, object]]) -> None:
+        self.fixtures = fixtures
+        self._by_identity = {
+            (f["commit"], f["path"], f["line"], f["rule_id"]): f
+            for f in fixtures
+        }
+        self._by_location: dict[tuple[str, str, int], list[dict[str, object]]] = {}
+        for fixture in fixtures:
+            location = (fixture["commit"], fixture["path"], fixture["line"])
+            self._by_location.setdefault(location, []).append(fixture)
+        self._matches = {identity: 0 for identity in self._by_identity}
+
+    @staticmethod
+    def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON object key")
+            result[key] = value
+        return result
+
+    @staticmethod
+    def _valid_iso_date(value: object) -> bool:
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
+            return False
+        year, month, day = (int(part) for part in value.split("-"))
+        if year < 1 or month < 1 or month > 12:
+            return False
+        leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+        month_days = (31, 29 if leap else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+        return 1 <= day <= month_days[month - 1]
+
+    @staticmethod
+    def _read_target_blob(repo_root: Path, object_spec: str) -> bytes:
+        return subprocess.run(
+            ["git", "cat-file", "blob", object_spec],
+            cwd=repo_root,
+            env=_git_env(),
+            capture_output=True,
+            check=True,
+        ).stdout
+
+    @classmethod
+    def load(
+        cls, repo_root: Path, manifest_path: Path | None = None
+    ) -> ReviewedHistoricalFixtures | None:
+        explicit_path = manifest_path is not None
+        path = manifest_path or (repo_root / ".prepublish-historical-fixtures.json")
+        if path.is_symlink():
+            raise ValueError("historical fixture manifest must not be a symlink")
+        if not path.exists():
+            if explicit_path:
+                raise ValueError("explicit historical fixture manifest is missing")
+            return None
+        if not path.is_file():
+            raise ValueError("historical fixture manifest must be a regular file")
+        if path.stat().st_size > cls.MAX_MANIFEST_BYTES:
+            raise ValueError("historical fixture manifest exceeds its size limit")
+        raw = path.read_bytes()
+        data = json.loads(raw.decode("utf-8"), object_pairs_hook=cls._unique_object)
+        if not isinstance(data, dict) or set(data) != {
+            "schema_version", "review", "fixtures"
+        }:
+            raise ValueError("invalid historical fixture manifest schema")
+        if type(data["schema_version"]) is not int or data["schema_version"] != 1:
+            raise ValueError("unsupported historical fixture schema version")
+        review = data["review"]
+        if not isinstance(review, dict) or set(review) != cls.REVIEW_FIELDS:
+            raise ValueError("invalid historical fixture review provenance")
+        if (
+            review["method"] != "source-context-review"
+            or review["scope"] != "synthetic historical fixtures only"
+            or not cls._valid_iso_date(review["date"])
+        ):
+            raise ValueError("invalid historical fixture review provenance")
+        fixtures = data["fixtures"]
+        if not isinstance(fixtures, list) or len(fixtures) > cls.MAX_FIXTURES:
+            raise ValueError("invalid historical fixture entries")
+        checked: list[dict[str, object]] = []
+        identities: set[tuple[str, str, int, str]] = set()
+        for item in fixtures:
+            if not isinstance(item, dict) or set(item) != cls.FIXTURE_FIELDS:
+                raise ValueError("invalid historical fixture entry schema")
+            commit, path_value, line = item["commit"], item["path"], item["line"]
+            rule_id, line_hash, reason = item["rule_id"], item["line_sha256"], item["reason"]
+            if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+                raise ValueError("invalid historical fixture commit identity")
+            if (
+                not isinstance(path_value, str)
+                or not path_value
+                or len(path_value) > 1024
+                or path_value.startswith("/")
+                or "\\" in path_value
+                or "\x00" in path_value
+                or re.match(r"^[A-Za-z]:", path_value)
+                or any(ord(char) < 32 for char in path_value)
+                or any(part in {"", ".", ".."} for part in path_value.split("/"))
+            ):
+                raise ValueError("unsafe historical fixture path")
+            if type(line) is not int or line < 1:
+                raise ValueError("invalid historical fixture line")
+            if not isinstance(rule_id, str) or rule_id not in cls.RULE_IDS:
+                raise ValueError("historical fixture rule is not eligible")
+            if not isinstance(line_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", line_hash):
+                raise ValueError("invalid historical fixture line hash")
+            if (
+                not isinstance(reason, str)
+                or len(reason) > cls.MAX_REASON_LENGTH
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 .,;:()'/-]{0,239}", reason)
+            ):
+                raise ValueError("unsafe historical fixture review reason")
+            identity = (commit, path_value, line, rule_id)
+            if identity in identities:
+                raise ValueError("duplicate or conflicting historical fixture identity")
+            identities.add(identity)
+            checked.append(dict(item))
+
+        reachable = set(_git(repo_root, "rev-list", "--all").splitlines())
+        blob_cache: dict[tuple[str, str], bytes] = {}
+        cached_target_bytes = 0
+        for item in checked:
+            commit, path_value = item["commit"], item["path"]
+            if commit not in reachable:
+                raise ValueError("historical fixture target is stale or unreachable")
+            target = (commit, path_value)
+            if target not in blob_cache:
+                object_spec = f"{commit}:{path_value}"
+                if _git(repo_root, "cat-file", "-t", object_spec).strip() != "blob":
+                    raise ValueError("historical fixture target is not a regular blob")
+                size_text = _git(repo_root, "cat-file", "-s", object_spec).strip()
+                if not size_text.isdecimal():
+                    raise ValueError("historical fixture target exceeds its size limit")
+                object_size = int(size_text)
+                if (
+                    object_size > cls.MAX_TARGET_BYTES
+                    or cached_target_bytes + object_size > cls.MAX_TOTAL_CACHED_TARGET_BYTES
+                ):
+                    raise ValueError("historical fixture target exceeds its size limit")
+                blob = cls._read_target_blob(repo_root, object_spec)
+                if len(blob) != object_size:
+                    raise ValueError("historical fixture target size changed")
+                cached_target_bytes += len(blob)
+                blob_cache[target] = blob
+            lines = blob_cache[target].split(b"\n")
+            line_index = item["line"] - 1
+            if line_index >= len(lines):
+                raise ValueError("historical fixture target line does not exist")
+            target_line = lines[line_index]
+            if target_line.endswith(b"\r"):
+                target_line = target_line[:-1]
+            if hashlib.sha256(target_line).hexdigest() != item["line_sha256"]:
+                raise ValueError("historical fixture target line does not match its hash")
+            decoded_line = target_line.decode("utf-8")
+            eligible = [
+                finding for finding in scan_line(
+                    decoded_line, "historical-fixture-validation", item["line"],
+                    [], path_value, commit,
+                )
+                if finding.rule_id in cls.RULE_IDS and finding.severity == "fail"
+            ]
+            if len(eligible) != 1 or eligible[0].rule_id != item["rule_id"]:
+                raise ValueError("historical fixture line is not one eligible finding")
+        return cls(checked)
+
+    def apply(
+        self, commit: str, path: str, line: int, raw_line: str, findings: list[Finding]
+    ) -> None:
+        for fixture in self._by_location.get((commit, path, line), []):
+            if hashlib.sha256(raw_line.encode("utf-8")).hexdigest() != fixture["line_sha256"]:
+                raise ValueError("historical fixture scan line does not match its reviewed hash")
+        for finding in findings:
+            if finding.rule_id not in self.RULE_IDS or finding.severity != "fail":
+                continue
+            identity = (commit, path, line, finding.rule_id)
+            fixture = self._by_identity.get(identity)
+            if fixture is not None:
+                self._matches[identity] += 1
+                finding.severity = "accepted_fixture"
+                finding.detail = fixture["reason"]
+
+    def finish(self) -> None:
+        if any(count != 1 for count in self._matches.values()):
+            raise ValueError("each reviewed historical fixture must match exactly once")
+
+
+def scan_history(
+    repo_root: Path, markers: Iterable[Marker | str],
+    reviewed: ReviewedHistoricalFixtures | None = None,
+) -> list[Finding]:
     findings: list[Finding] = []
     for commit, path, lineno, line in iter_history_added_lines(repo_root):
         location_prefix = f"history:{commit[:12]}:{path}"
-        findings.extend(scan_line(line, location_prefix, lineno, markers, path, commit))
+        detected = scan_line(line, location_prefix, lineno, markers, path, commit)
+        if reviewed is not None:
+            reviewed.apply(commit, path, lineno, line, detected)
+        findings.extend(detected)
     findings.extend(scan_history_large_and_binary_blobs(repo_root))
+    if reviewed is not None:
+        reviewed.finish()
     return findings
 
 
@@ -1093,7 +1318,7 @@ def classify_with_baseline(
 ) -> list[Finding]:
     classified: list[Finding] = []
     for f in findings:
-        if is_history and baseline.contains(f):
+        if is_history and f.severity != "accepted_fixture" and baseline.contains(f):
             f.severity = "warn"
         classified.append(f)
     return classified
@@ -1105,7 +1330,8 @@ def classify_with_baseline(
 
 
 def render_markdown_report(
-    tree_findings: list[Finding], history_findings: list[Finding]
+    tree_findings: list[Finding], history_findings: list[Finding],
+    history_skipped: bool = False,
 ) -> str:
     lines: list[str] = ["# prepublish-check report", ""]
 
@@ -1127,17 +1353,42 @@ def render_markdown_report(
         lines.append("")
 
     _section("Tree findings", tree_findings)
-    _section("History findings", history_findings)
+    unresolved = [f for f in history_findings if f.severity != "accepted_fixture"]
+    accepted = [f for f in history_findings if f.severity == "accepted_fixture"]
+    if history_skipped:
+        lines.extend([
+            "## Unresolved history findings", "",
+            "History scan skipped; this report makes no zero-history claim.", "",
+        ])
+    else:
+        _section("Unresolved history findings", unresolved)
+    lines.extend(["## Accepted historical fixtures", ""])
+    if history_skipped:
+        lines.extend(["History scan skipped; fixture match counts were not adjudicated.", ""])
+    elif not accepted:
+        lines.extend(["No accepted historical fixtures.", ""])
+    else:
+        lines.extend([
+            f"{len(accepted)} exact reviewed fixture finding(s).", "",
+            "| Status | Rule | Location | Reviewed reason |",
+            "|---|---|---|---|",
+        ])
+        for f in accepted:
+            lines.append(f"| accepted_fixture | {f.rule_id} | `{f.location}` | {f.detail} |")
+        lines.append("")
     return "\n".join(lines)
 
 
 def render_summary(tree_findings: list[Finding], history_findings: list[Finding]) -> str:
     tree_fail = sum(1 for f in tree_findings if f.severity == "fail")
-    hist_fail = sum(1 for f in history_findings if f.severity == "fail")
-    hist_warn = sum(1 for f in history_findings if f.severity == "warn")
+    unresolved = [f for f in history_findings if f.severity != "accepted_fixture"]
+    hist_fail = sum(1 for f in unresolved if f.severity == "fail")
+    hist_warn = sum(1 for f in unresolved if f.severity == "warn")
+    accepted_count = sum(1 for f in history_findings if f.severity == "accepted_fixture")
     return (
         f"prepublish-check: tree findings={len(tree_findings)} (fail={tree_fail}); "
-        f"history findings={len(history_findings)} (fail={hist_fail}, warn={hist_warn})"
+        f"history findings={len(unresolved)} (fail={hist_fail}, warn={hist_warn}); "
+        f"accepted_fixture_count={accepted_count}; detector matches={len(history_findings)}"
     )
 
 
@@ -1189,14 +1440,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="skip invoking scripts/check-docs.py as part of hygiene checks",
     )
     parser.add_argument("--repo-root", type=Path, default=None, help="repository root (default: autodetect)")
+    parser.add_argument(
+        "--historical-fixtures", type=Path, default=None,
+        help="reviewed exact historical fixture manifest (default: repository manifest if present)",
+    )
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def _main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     repo_root = args.repo_root or find_repo_root(Path.cwd())
+    if find_repo_root(repo_root).resolve() != repo_root.resolve():
+        raise ValueError("scan requires the exact repository root")
     baseline_path = args.baseline or (repo_root / ".prepublish-baseline.json")
     markers = load_markers(repo_root)
+    reviewed = ReviewedHistoricalFixtures.load(repo_root, args.historical_fixtures)
 
     tree_findings: list[Finding] = []
     history_findings: list[Finding] = []
@@ -1206,7 +1464,7 @@ def main(argv: list[str] | None = None) -> int:
         tree_findings.extend(run_hygiene_checks(repo_root, skip_check_docs=args.skip_check_docs))
 
     if not args.tree_only:
-        history_findings = scan_history(repo_root, markers)
+        history_findings = scan_history(repo_root, markers, reviewed)
 
     baseline = Baseline.load(baseline_path)
 
@@ -1225,13 +1483,19 @@ def main(argv: list[str] | None = None) -> int:
     history_findings = classify_with_baseline(history_findings, baseline, is_history=True)
 
     if args.report:
-        args.report.write_text(render_markdown_report(tree_findings, history_findings), encoding="utf-8")
+        args.report.write_text(
+            render_markdown_report(tree_findings, history_findings, history_skipped=args.tree_only),
+            encoding="utf-8",
+        )
 
-    print(render_summary(tree_findings, history_findings))
+    summary = render_summary(tree_findings, history_findings)
+    if args.tree_only:
+        summary += "; history scan=skipped (not a zero-findings claim)"
+    print(summary)
     for f in tree_findings:
         print(f"  FAIL  tree    {f.rule_id:45s} {f.location}  {f.detail}")
     for f in history_findings:
-        tag = "FAIL" if f.severity == "fail" else "warn"
+        tag = "ACCEPT" if f.severity == "accepted_fixture" else "FAIL" if f.severity == "fail" else "warn"
         print(f"  {tag}  history {f.rule_id:45s} {f.location}  {f.detail}")
 
     any_tree_fail = any(f.severity == "fail" for f in tree_findings)
@@ -1239,6 +1503,14 @@ def main(argv: list[str] | None = None) -> int:
     if any_tree_fail or any_history_fail:
         return 1
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        return _main(argv)
+    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError):
+        print("prepublish-check: fatal error (validation or scan failed)", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

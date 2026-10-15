@@ -59,6 +59,44 @@ export function isThresholdlessMetric(metric) {
   return metric === "host_down" || metric === "agent_outdated" || metric === "update_batch_failed";
 }
 
+/**
+ * defaultRuleSeverity returns the severity selected for a new rule when the
+ * editor has not been explicitly changed. Host-down and failed update batch
+ * alerts have always been notified as critical; every other metric starts as
+ * a warning.
+ * @param {string} metric
+ * @returns {"warning"|"critical"}
+ */
+export function defaultRuleSeverity(metric) {
+  return metric === "host_down" || metric === "update_batch_failed" ? "critical" : "warning";
+}
+
+/**
+ * eventSeverity is the one compatibility boundary for alert-event severity.
+ * Older hubs did not include the snapshot field, so preserve their historical
+ * host-down behavior while treating every other missing/unknown value as a
+ * warning.
+ * @param {Object} event
+ * @returns {"warning"|"critical"}
+ */
+export function eventSeverity(event) {
+  if (event?.severity === "critical") return "critical";
+  if (event?.severity === "warning") return "warning";
+  return defaultRuleSeverity(event?.metric);
+}
+
+/**
+ * setDraftMetric keeps an untouched editor severity coupled to its metric.
+ * Once the severity selector is changed, later metric changes retain that
+ * deliberate choice.
+ * @param {{metric: string, severity: "warning"|"critical", severityTouched: boolean}} draft
+ * @param {string} metric
+ */
+export function setDraftMetric(draft, metric) {
+  draft.metric = metric;
+  if (!draft.severityTouched) draft.severity = defaultRuleSeverity(metric);
+}
+
 /** OPERATORS lists every models.AlertOperator value with a display
  * label; a getter for the same reason as METRICS' label above. */
 export const OPERATORS = [
@@ -115,6 +153,23 @@ export function formatThreshold(metric, threshold) {
   if (unit === "% of quota") return t("alerts.threshold_pct_of_quota", { value: numText });
   if (unit === "%") return t("alerts.threshold_pct", { value: numText });
   return numText;
+}
+
+/**
+ * formatMetricValue renders an observed alert value with only the unit the
+ * metric definition guarantees. Threshold prose ("of limit" / "of quota")
+ * belongs to the rule threshold, not the reading itself. Unknown metrics
+ * deliberately retain their bare numeric value rather than receiving a
+ * guessed unit.
+ * @param {string} metric
+ * @param {number} value
+ * @returns {string}
+ */
+export function formatMetricValue(metric, value) {
+  const num = Number.isFinite(value) ? value.toFixed(1) : "–";
+  if (num === "–") return num;
+  const unit = metricByValue(metric)?.unit;
+  return unit?.startsWith("%") ? `${num}%` : num;
 }
 
 /**

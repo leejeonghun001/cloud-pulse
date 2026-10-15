@@ -7,12 +7,13 @@
 import { el, clearChildren } from "./components.js";
 import { icon } from "./icons.js";
 import { createDropdown, dropdownItem, dropdownSeparator } from "./dropdown.js";
-import { createDialog, buildDialogActions } from "./dialog.js";
+import { createDialog, buildDialogActions, createShortcutsDialog } from "./dialog.js";
 import { createPalette } from "./palette.js";
 import { getStoredTheme, setStoredTheme, applyTheme, cycleTheme } from "../core/theme.js";
-import { registerGlobalShortcuts } from "../core/shortcuts.js";
+import { registerShellShortcuts } from "./shortcuts.js";
 import { logout } from "../core/api.js";
 import { clearSessionToken } from "../core/auth.js";
+import { eventSeverity } from "../core/alerts.js";
 import { t } from "../core/i18n.js";
 import { showToast } from "./toast.js";
 
@@ -23,7 +24,8 @@ import { showToast } from "./toast.js";
  * @param {() => void} opts.onSignOut called after a successful (or
  *   best-effort) logout, before navigating to #/login.
  * @param {() => Array<import('./palette.js').PaletteItem>} opts.getPaletteItems
- * @param {() => void} opts.onAddAgent opens the "Add agent" install dialog
+ * @param {(opener: HTMLElement) => void} opts.onAddAgent opens the "Add agent" install dialog
+ * @param {(route: string) => void} opts.onNavigate requests a hash-route navigation
  * @returns {{
  *   mainEl: HTMLElement,
  *   bannerHost: HTMLElement,
@@ -31,9 +33,11 @@ import { showToast } from "./toast.js";
  *   setUsername: (name: string) => void,
  *   setNavVisible: (visible: boolean) => void,
  *   setActiveAlerts: (events: Array) => void,
+ *   setActiveRoute: (route: string) => void,
+ *   openShortcuts: () => void,
  * }}
  */
-export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
+export function mountShell({ onSignOut, getPaletteItems, onAddAgent, onNavigate = (route) => { globalThis.location.hash = route; } }) {
   const app = el("div", { class: "cp-app" });
 
   const header = el("header", { class: "cp-shell-header" });
@@ -42,6 +46,18 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
   const brand = el("a", { class: "cp-navbar-brand", attrs: { href: "#/" } });
   brand.append(icon("activity"), el("span", { class: "cp-navbar-wordmark", text: "cloud-pulse" }));
   navbar.append(brand);
+
+  const primaryNav = el("div", { class: "cp-primary-nav", attrs: { "aria-label": t("nav.primary") } });
+  const primaryNavLinks = PRIMARY_NAV.map((item) => {
+    const link = el("a", {
+      class: "cp-primary-nav-link",
+      attrs: { href: item.route },
+      text: t(item.labelKey),
+    });
+    primaryNav.append(link);
+    return { ...item, link };
+  });
+  navbar.append(primaryNav);
 
   const searchBtn = el("button", {
     class: "cp-navbar-search",
@@ -135,7 +151,7 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
     attrs: { type: "button" },
   });
   addAgentBtn.append(icon("plus"), el("span", { text: t("nav.add_agent") }));
-  addAgentBtn.addEventListener("click", () => onAddAgent());
+  addAgentBtn.addEventListener("click", () => onAddAgent(addAgentBtn));
   actions.append(addAgentBtn);
 
   // Mobile overflow menu (< 640px, SPEC-v0.7 §5): consolidates Theme,
@@ -154,11 +170,22 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
     trigger: overflowBtn,
     buildMenu: () => {
       const frag = document.createDocumentFragment();
+      const activeKey = activePrimaryNavKey(globalThis.location.hash);
+      for (const item of PRIMARY_NAV) {
+        const menuItem = dropdownItem({
+          label: t(item.labelKey),
+          icon: icon(item.iconName),
+          onClick: () => onNavigate(item.route),
+        });
+        if (item.key === activeKey) menuItem.setAttribute("aria-current", "page");
+        frag.append(menuItem);
+      }
       frag.append(
+        dropdownSeparator(),
         dropdownItem({
           label: t("nav.add_agent"),
           icon: icon("plus"),
-          onClick: () => onAddAgent(),
+          onClick: () => onAddAgent(overflowBtn),
         }),
         dropdownItem({
           label: t("nav.toggle_theme"),
@@ -199,8 +226,13 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
 
   // Command palette
   const palette = createPalette(getPaletteItems);
+  const shortcuts = createShortcutsDialog(t);
   searchBtn.addEventListener("click", () => palette.open());
-  registerGlobalShortcuts(() => palette.open());
+  registerShellShortcuts({
+    openPalette: () => palette.open(),
+    openShortcuts: () => shortcuts.open(),
+    navigate: onNavigate,
+  });
 
   // React to system theme changes / re-render the toggle icon on
   // programmatic theme changes triggered elsewhere.
@@ -215,6 +247,16 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
     footer.style.display = visible ? "" : "none";
   }
 
+  function setActiveRoute(route) {
+    const activeKey = activePrimaryNavKey(route);
+    primaryNavLinks.forEach((item) => {
+      const isActive = item.key === activeKey;
+      item.link.classList.toggle("cp-primary-nav-link-active", isActive);
+      if (isActive) item.link.setAttribute("aria-current", "page");
+      else item.link.removeAttribute("aria-current");
+    });
+  }
+
   /**
    * setActiveAlerts updates the bell badge count and the dropdown's
    * contents from the latest GET /api/v1/alerts/active response. Safe
@@ -225,13 +267,37 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent }) {
   function setActiveAlerts(events) {
     activeAlertEvents = events || [];
     const count = activeAlertEvents.length;
+    const tone = activeAlertEvents.some((event) => eventSeverity(event) === "critical") ? "critical" : "warning";
     bellBadge.hidden = count === 0;
     bellBadge.textContent = count > 99 ? "99+" : String(count);
     bellBtn.setAttribute("aria-label", count > 0 ? t("nav.alerts_firing", { count }) : t("nav.alerts"));
     bellBtn.classList.toggle("cp-navbar-bell-active", count > 0);
+    bellBtn.classList.toggle("cp-navbar-bell-critical", count > 0 && tone === "critical");
+    bellBtn.classList.toggle("cp-navbar-bell-warning", count > 0 && tone === "warning");
+    bellBadge.classList.toggle("cp-navbar-bell-badge-critical", count > 0 && tone === "critical");
+    bellBadge.classList.toggle("cp-navbar-bell-badge-warning", count > 0 && tone === "warning");
   }
 
-  return { mainEl, bannerHost, liveRegionEl, setUsername, setNavVisible, setActiveAlerts };
+  return { mainEl, bannerHost, liveRegionEl, setUsername, setNavVisible, setActiveAlerts, setActiveRoute, openShortcuts: () => shortcuts.open() };
+}
+
+const PRIMARY_NAV = Object.freeze([
+  { key: "overview", labelKey: "nav.overview", route: "#/", iconName: "house" },
+  { key: "alerts", labelKey: "nav.alerts", route: "#/alerts", iconName: "bell" },
+  { key: "costs", labelKey: "nav.costs", route: "#/costs", iconName: "cloud" },
+  { key: "rollout", labelKey: "nav.rollout", route: "#/rollout", iconName: "refreshCw" },
+  { key: "compare", labelKey: "compare.palette_entry", route: "#/compare", iconName: "server" },
+]);
+
+/** Maps a route and its nested route variants to the matching primary link. */
+export function activePrimaryNavKey(route = "") {
+  const path = String(route).split("?", 1)[0];
+  if (path === "#/" || path.startsWith("#/host/")) return "overview";
+  if (path.startsWith("#/alerts")) return "alerts";
+  if (path.startsWith("#/costs")) return "costs";
+  if (path.startsWith("#/rollout") || path.startsWith("#/updates")) return "rollout";
+  if (path.startsWith("#/compare")) return "compare";
+  return null;
 }
 
 /**
@@ -255,7 +321,7 @@ function buildBellMenu(events) {
     frag.append(empty);
   } else {
     for (const ev of events.slice(0, 5)) {
-      const link = el("a", { class: "cp-dropdown-item cp-navbar-bell-item", attrs: { href: `#/host/${encodeURIComponent(ev.host_id)}` } });
+      const link = el("a", { class: `cp-dropdown-item cp-navbar-bell-item cp-navbar-bell-item-${eventSeverity(ev)}`, attrs: { href: `#/host/${encodeURIComponent(ev.host_id)}` } });
       const title = el("span", { class: "cp-navbar-bell-item-title", text: `${ev.rule_name || ev.metric}` });
       const meta = el("span", { class: "cp-navbar-bell-item-meta", text: ev.hostname || ev.host_id });
       link.append(title, meta);
@@ -282,58 +348,140 @@ function buildBellMenu(events) {
  * @param {Array<{os: string, label: string, command: string}>} [installCommands]
  *   Per-OS one-liners (SPEC-v0.7 §1). When present, renders one tab
  *   per OS instead of a single fixed command.
+ * @param {Object} [focusOptions] Optional stable opener and restoration guard
+ *   passed through to createDialog.open for asynchronous enrollment requests.
  */
-export function openAddAgentDialog(installCommand, installCommands) {
-  const { body, open } = createDialog({
+export function openAddAgentDialog(installCommand, installCommands, focusOptions) {
+  const { dialog, body, open, close } = createDialog({
     titleId: "cp-add-agent-title",
     title: t("nav.add_agent_dialog_title"),
-    description: t("nav.add_agent_dialog_description"),
+    description: t("nav.install_intro"),
     wide: true,
   });
+  dialog.classList.add("cp-add-agent-dialog");
 
   const tabs = Array.isArray(installCommands) && installCommands.length > 0
-    ? installCommands
-    : [{ os: "linux", label: "Linux / macOS", command: installCommand }];
+    ? installCommands.map((tab) => ({ ...tab }))
+    : [{ os: "linux", label: t("nav.install_platform_unix_label"), command: installCommand }];
 
+  body.append(el("h3", { class: "cp-card-title", text: t("nav.install_choose_platform") }));
   const tabList = el("div", { class: "cp-btn-group", attrs: { role: "tablist", "aria-label": t("nav.operating_system") } });
-  const pre = el("pre", { class: "cp-code-block cp-code-block-wrap" });
-  const code = el("code", { text: tabs[0].command });
+  const panel = el("section", { class: "cp-install-panel", attrs: { id: "cp-install-panel", role: "tabpanel", "aria-labelledby": "cp-install-platform-0" } });
+  const terminal = el("p", { class: "cp-install-terminal" });
+  const pre = el("pre", { class: "cp-code-block cp-code-block-wrap", attrs: { hidden: "" } });
+  // Credentials never enter the dialog DOM until Show install command.
+  const code = el("code");
   pre.append(code);
-
-  let activeCommand = tabs[0].command;
+  const secretNote = el("p", { class: "cp-muted-small", text: t("nav.install_secret_note") });
+  const fallback = el("textarea", { class: "cp-input cp-install-fallback", attrs: { readonly: "", rows: "4", hidden: "", "aria-label": t("nav.install_command_label") } });
+  const status = el("p", { class: "cp-muted-small", attrs: { role: "status", "aria-live": "polite" } });
+  const reveal = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button", id: "cp-install-reveal", "aria-expanded": "false", "aria-controls": "cp-install-code" }, text: t("nav.install_show_command") });
+  pre.setAttribute("id", "cp-install-code");
+  const copyBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button", disabled: "" }, text: t("nav.copy_command") });
+  const hide = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button", hidden: "" }, text: t("nav.install_hide_command") });
+  let selected = 0;
+  let revealed = false;
+  let closed = false;
+  let copyRequest = 0;
+  const commandAvailable = () => typeof tabs[selected].command === "string" && tabs[selected].command.length > 0;
+  function hideCommand() {
+    revealed = false;
+    copyRequest++;
+    code.textContent = "";
+    fallback.value = "";
+    fallback.hidden = true;
+    pre.hidden = true;
+    hide.hidden = true;
+    copyBtn.disabled = true;
+    reveal.hidden = false;
+    reveal.setAttribute("aria-expanded", "false");
+  }
+  function renderPlatform() {
+    const os = tabs[selected].os;
+    terminal.textContent = t(os === "windows" ? "nav.install_terminal_windows" : os === "darwin" ? "nav.install_terminal_macos" : os === "linux" ? "nav.install_terminal_linux" : "nav.install_terminal_other");
+    panel.setAttribute("aria-labelledby", `cp-install-platform-${selected}`);
+    status.textContent = commandAvailable() ? "" : t("nav.install_command_unavailable");
+    reveal.disabled = !commandAvailable();
+  }
   const tabButtons = tabs.map((tab, index) =>
     el("button", {
       class: `cp-btn cp-btn-secondary${index === 0 ? " cp-btn-secondary-active" : ""}`,
-      attrs: { type: "button", role: "tab", "aria-selected": index === 0 ? "true" : "false" },
+      attrs: { id: `cp-install-platform-${index}`, type: "button", role: "tab", "aria-selected": index === 0 ? "true" : "false", "aria-controls": "cp-install-panel", tabindex: index === 0 ? "0" : "-1" },
       text: tab.label,
     }),
   );
+  function selectPlatform(index) {
+    selected = index;
+    // A platform change requires a fresh reveal and clears any stale copy
+    // status. No command is rebuilt or guessed in the browser.
+    hideCommand();
+    renderPlatform();
+    tabButtons.forEach((button, i) => {
+      button.classList.toggle("cp-btn-secondary-active", i === index);
+      button.setAttribute("aria-selected", i === index ? "true" : "false");
+      button.setAttribute("tabindex", i === index ? "0" : "-1");
+    });
+  }
   tabButtons.forEach((btn, index) => {
-    btn.addEventListener("click", () => {
-      activeCommand = tabs[index].command;
-      code.textContent = activeCommand;
-      tabButtons.forEach((b, i) => {
-        b.classList.toggle("cp-btn-secondary-active", i === index);
-        b.setAttribute("aria-selected", i === index ? "true" : "false");
-      });
+    btn.addEventListener("click", () => selectPlatform(index));
+    btn.addEventListener("keydown", (event) => {
+      const next = event.key === "ArrowRight" ? (index + 1) % tabs.length : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : null;
+      if (next === null) return;
+      event.preventDefault();
+      selectPlatform(next);
+      tabButtons[next].focus();
     });
     tabList.append(btn);
   });
-
-  if (tabs.length > 1) {
-    body.append(tabList);
-  }
-  body.append(pre);
-
-  const copyBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" }, text: t("nav.copy_command") });
+  reveal.addEventListener("click", () => {
+    if (closed || !commandAvailable()) return;
+    revealed = true;
+    code.textContent = tabs[selected].command;
+    pre.hidden = false;
+    hide.hidden = false;
+    copyBtn.disabled = false;
+    reveal.hidden = true;
+    reveal.setAttribute("aria-expanded", "true");
+    status.textContent = t("nav.install_command_shown");
+    copyBtn.focus({ preventScroll: true });
+  });
+  hide.addEventListener("click", () => { hideCommand(); status.textContent = t("nav.install_command_hidden"); reveal.focus({ preventScroll: true }); });
   copyBtn.addEventListener("click", async () => {
+    if (closed || !revealed || copyBtn.disabled) return;
+    const request = ++copyRequest;
+    const command = tabs[selected].command;
+    copyBtn.disabled = true;
     try {
-      await globalThis.navigator.clipboard.writeText(activeCommand);
-      showToast({ message: t("nav.install_command_copied"), variant: "success" });
+      await globalThis.navigator.clipboard.writeText(command);
+      if (!closed && request === copyRequest) status.textContent = t("nav.install_command_copied");
     } catch {
-      showToast({ message: t("nav.copy_failed_manual"), variant: "error" });
+      if (!closed && request === copyRequest) {
+        fallback.value = command;
+        fallback.hidden = false;
+        fallback.focus({ preventScroll: true });
+        fallback.select();
+        status.textContent = t("nav.copy_failed_manual");
+      }
+    } finally {
+      if (!closed && request === copyRequest) copyBtn.disabled = !revealed;
     }
   });
-  body.append(buildDialogActions([copyBtn]));
-  open();
+  const commandActions = el("div", { class: "cp-install-command-actions" });
+  commandActions.append(reveal, copyBtn, hide);
+  panel.append(terminal, secretNote, pre, commandActions, fallback, status);
+  body.append(tabList, panel);
+  const waiting = el("div", { class: "cp-install-report-note" });
+  waiting.append(icon("activity"), el("div", { children: [el("h3", { class: "cp-card-title", text: t("nav.install_first_report_title") }), el("p", { class: "cp-muted-small", text: t("nav.install_first_report_description") })] }));
+  body.append(waiting, el("a", { class: "cp-back-link", attrs: { href: "https://github.com/leejeonghun001/cloud-pulse/blob/main/docs/install.md", target: "_blank", rel: "noopener noreferrer" }, text: t("nav.install_full_guide") }));
+  const done = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: t("nav.install_close") });
+  done.addEventListener("click", () => close());
+  body.append(buildDialogActions([done]));
+  dialog.addEventListener("close", () => {
+    closed = true;
+    hideCommand();
+    for (const tab of tabs) tab.command = "";
+    dialog.remove();
+  });
+  renderPlatform();
+  open(focusOptions);
 }

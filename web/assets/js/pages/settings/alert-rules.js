@@ -31,8 +31,10 @@ import {
   validateRuleForm,
   durationSecFromParts,
   bestDurationParts,
+  defaultRuleSeverity,
   isStorageScopedMetric,
   isThresholdlessMetric,
+  setDraftMetric,
 } from "../../core/alerts.js";
 import { t } from "../../core/i18n.js";
 
@@ -41,6 +43,59 @@ const DURATION_UNITS = [
   { value: "minutes", get label() { return t("alert_rules.unit_minutes"); } },
   { value: "hours", get label() { return t("alert_rules.unit_hours"); } },
 ];
+
+const SEVERITY_OPTIONS = [
+  { value: "warning", get label() { return t("alert_rules.severity_warning"); } },
+  { value: "critical", get label() { return t("alert_rules.severity_critical"); } },
+];
+
+/** Returns a rule's displayed severity, including old-rule compatibility. */
+export function ruleSeverity(rule) {
+  return rule?.severity === "critical" ? "critical" : rule?.severity === "warning" ? "warning" : defaultRuleSeverity(rule?.metric);
+}
+
+/** Builds the persisted request shape from the editor draft. */
+export function rulePayload(draft) {
+  const durationSec = durationSecFromParts(draft.durationValue, draft.durationUnit);
+  const cooldownSec = durationSecFromParts(draft.cooldownValue, draft.cooldownUnit);
+  return {
+    name: draft.name,
+    enabled: draft.enabled,
+    metric: draft.metric,
+    host_id: draft.hostID,
+    operator: draft.operator,
+    threshold: isThresholdlessMetric(draft.metric) ? 0 : draft.threshold,
+    duration_sec: durationSec,
+    cooldown_sec: cooldownSec,
+    severity: draft.severity,
+    notify_resolved: draft.notifyResolved,
+    channel_ids: draft.channelIDs,
+  };
+}
+
+/** Builds the editable state for a new or existing rule. */
+export function ruleEditorDraft(rule) {
+  const isEdit = Boolean(rule);
+  const initialDuration = bestDurationParts(rule?.duration_sec ?? 0);
+  const initialCooldown = bestDurationParts(rule?.cooldown_sec ?? DEFAULT_COOLDOWN_SEC);
+  return {
+    name: rule?.name || "",
+    enabled: rule?.enabled ?? true,
+    metric: rule?.metric || "cpu",
+    severity: ruleSeverity(rule || { metric: "cpu" }),
+    // Preserve an existing rule's deliberate severity when its metric changes.
+    severityTouched: isEdit,
+    hostID: rule?.host_id || "",
+    operator: rule?.operator || ">",
+    threshold: rule?.threshold ?? 90,
+    durationValue: initialDuration.value,
+    durationUnit: initialDuration.unit,
+    cooldownValue: initialCooldown.value,
+    cooldownUnit: initialCooldown.unit,
+    notifyResolved: rule?.notify_resolved ?? false,
+    channelIDs: rule?.channel_ids ? [...rule.channel_ids] : [],
+  };
+}
 
 /**
  * mountAlertRulesSection renders the Alert rules section into
@@ -115,22 +170,24 @@ function rulesCard({ rules, channels, hosts, storageAccounts, signal, announce, 
   return card;
 }
 
-function ruleRow({ rule, channels, hosts, storageAccounts, hostnameByID, channelNameByID, storageAccountNameByID, signal, announce, onChanged }) {
+export function ruleRow({ rule, channels, hosts, storageAccounts, hostnameByID, channelNameByID, storageAccountNameByID, signal, announce, onChanged }) {
   const row = el("li", { class: "cp-rule-row" });
   const top = el("div", { class: "cp-rule-row-top" });
   top.append(statusDot(rule.enabled ? "up" : "down"));
   top.append(el("span", { class: "cp-rule-row-name", text: rule.name }));
+  const severity = ruleSeverity(rule);
+  top.append(el("span", { class: `cp-chip cp-rule-severity cp-chip-${severity}`, text: t(`alert_rules.severity_${severity}`) }));
   top.append(el("span", { class: `cp-chip ${rule.enabled ? "cp-chip-ok" : "cp-chip-other"}`, text: rule.enabled ? t("alert_rules.enabled") : t("alert_rules.disabled") }));
   row.append(top);
 
   row.append(el("p", { class: "cp-muted-small", text: ruleSummarySentence(rule, { hostnameByID, channelNameByID, storageAccountNameByID }) }));
 
   const actions = el("div", { class: "cp-rule-row-actions" });
-  const editBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button" } });
+  const editBtn = el("button", { class: "cp-btn cp-btn-ghost cp-btn-sm", attrs: { type: "button" } });
   editBtn.append(icon("pencil"), el("span", { text: t("common.edit") }));
   editBtn.addEventListener("click", () => openRuleDialog({ rule, channels, hosts, storageAccounts, signal, announce, onChanged }));
 
-  const deleteBtn = el("button", { class: "cp-btn cp-btn-danger cp-btn-sm", attrs: { type: "button" } });
+  const deleteBtn = el("button", { class: "cp-btn cp-btn-ghost cp-btn-danger-ghost cp-btn-sm", attrs: { type: "button" } });
   deleteBtn.append(icon("trash"), el("span", { text: t("common.delete") }));
   deleteBtn.addEventListener("click", async () => {
     if (!globalThis.confirm(t("alert_rules.confirm_delete", { name: rule.name }))) return;
@@ -169,23 +226,7 @@ function openRuleDialog({ rule, channels, hosts, storageAccounts = [], signal, a
     wide: true,
   });
 
-  const initialDuration = bestDurationParts(rule?.duration_sec ?? 0);
-  const initialCooldown = bestDurationParts(rule?.cooldown_sec ?? DEFAULT_COOLDOWN_SEC);
-
-  const draft = {
-    name: rule?.name || "",
-    enabled: rule?.enabled ?? true,
-    metric: rule?.metric || "cpu",
-    hostID: rule?.host_id || "",
-    operator: rule?.operator || ">",
-    threshold: rule?.threshold ?? 90,
-    durationValue: initialDuration.value,
-    durationUnit: initialDuration.unit,
-    cooldownValue: initialCooldown.value,
-    cooldownUnit: initialCooldown.unit,
-    notifyResolved: rule?.notify_resolved ?? false,
-    channelIDs: rule?.channel_ids ? [...rule.channel_ids] : [],
-  };
+  const draft = ruleEditorDraft(rule);
 
   const hostnameByID = (id) => hosts.find((h) => h.id === id)?.hostname;
   const storageAccountNameByID = (id) => storageAccounts.find((a) => a.id === id)?.name;
@@ -204,13 +245,13 @@ function openRuleDialog({ rule, channels, hosts, storageAccounts = [], signal, a
         const parts = bestDurationParts(preset.rule.duration_sec);
         Object.assign(draft, {
           name: preset.rule.name,
-          metric: preset.rule.metric,
           hostID: preset.rule.host_id,
           operator: preset.rule.operator,
           threshold: preset.rule.threshold,
           durationValue: parts.value,
           durationUnit: parts.unit,
         });
+        setDraftMetric(draft, preset.rule.metric);
         rerenderForm();
       });
       presetRow.append(btn);
@@ -289,18 +330,7 @@ function openRuleDialog({ rule, channels, hosts, storageAccounts = [], signal, a
       return;
     }
 
-    const payload = {
-      name: draft.name,
-      enabled: draft.enabled,
-      metric: draft.metric,
-      host_id: draft.hostID,
-      operator: draft.operator,
-      threshold: isThresholdlessMetric(draft.metric) ? 0 : draft.threshold,
-      duration_sec: durationSec,
-      cooldown_sec: cooldownSec,
-      notify_resolved: draft.notifyResolved,
-      channel_ids: draft.channelIDs,
-    };
+    const payload = rulePayload(draft);
 
     saveBtn.disabled = true;
     try {
@@ -358,7 +388,7 @@ function buildRuleForm(draft, hosts, storageAccounts, channels, onChange, onFull
     value: draft.metric,
   });
   metricSelect.addEventListener("change", () => {
-    draft.metric = metricSelect.value;
+    setDraftMetric(draft, metricSelect.value);
     draft.hostID = "";
     onFullChange();
   });
@@ -380,6 +410,20 @@ function buildRuleForm(draft, hosts, storageAccounts, channels, onChange, onFull
   });
   row1.append(hostNode);
   frag.append(row1);
+
+  const { node: severityNode, select: severitySelect } = selectField({
+    id: "cp-rule-severity",
+    label: t("alert_rules.severity_label"),
+    options: SEVERITY_OPTIONS,
+    value: draft.severity,
+  });
+  severitySelect.addEventListener("change", () => {
+    draft.severity = severitySelect.value;
+    draft.severityTouched = true;
+    onChange();
+  });
+  severityNode.classList.add("cp-rule-severity-field");
+  frag.append(severityNode);
 
   const row2 = el("div", { class: "cp-rule-form-row" });
   const { node: opNode, select: opSelect } = selectField({

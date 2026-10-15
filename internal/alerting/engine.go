@@ -84,6 +84,10 @@ type Options struct {
 	// simply leaves Delivery.Diagnosis unset; delivery/error recording
 	// otherwise behaves identically.
 	Diagnose func(error) *models.DiagnosisCode
+	// SafeErrorText formats errors for logs/persistence without secrets. nil
+	// records a fixed failure message, NEVER the raw sender error. Diagnosis
+	// and retries always receive the original error.
+	SafeErrorText func(models.NotifyChannel, error) string
 	// Language returns the language notification text is written in
 	// (the hub's notify_language setting, SPEC-v0.8 §3-3). It is read
 	// for every notification so a settings change applies immediately.
@@ -112,13 +116,14 @@ func New(opts Options) *Engine {
 		language: opts.Language,
 	}
 	e.delivery = newDeliveryWorker(deliveryWorkerOptions{
-		Store:     opts.Store,
-		Sender:    opts.SenderFactory,
-		Clock:     clock,
-		Logger:    logger,
-		QueueSize: opts.QueueSize,
-		Timeout:   opts.DeliveryTimeout,
-		Diagnose:  opts.Diagnose,
+		Store:         opts.Store,
+		Sender:        opts.SenderFactory,
+		Clock:         clock,
+		Logger:        logger,
+		QueueSize:     opts.QueueSize,
+		Timeout:       opts.DeliveryTimeout,
+		Diagnose:      opts.Diagnose,
+		SafeErrorText: opts.SafeErrorText,
 	})
 	return e
 }

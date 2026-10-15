@@ -3,6 +3,26 @@ package models
 // AlertMetric identifies the metric an alert rule evaluates.
 type AlertMetric string
 
+// AlertSeverity identifies the urgency assigned to an alert rule and
+// snapshotted onto each event when it fires.
+type AlertSeverity string
+
+// Supported alert rule and event severities.
+const (
+	AlertSeverityWarning  AlertSeverity = "warning"
+	AlertSeverityCritical AlertSeverity = "critical"
+)
+
+// DefaultAlertSeverity returns the severity used when a rule request omits
+// severity. Host-down and failed-update-batch alerts were historically
+// delivered as critical; all other metrics were delivered as warnings.
+func DefaultAlertSeverity(metric AlertMetric) AlertSeverity {
+	if metric == AlertMetricHostDown || metric == AlertMetricUpdateBatchFailed {
+		return AlertSeverityCritical
+	}
+	return AlertSeverityWarning
+}
+
 // Supported alert metrics.
 const (
 	AlertMetricCPU          AlertMetric = "cpu"
@@ -100,6 +120,9 @@ type AlertRule struct {
 	Name    string      `json:"name"`
 	Enabled bool        `json:"enabled"`
 	Metric  AlertMetric `json:"metric"`
+	// Severity controls the urgency of firing notifications. Events retain a
+	// snapshot of this value, so later rule edits do not rewrite history.
+	Severity AlertSeverity `json:"severity"`
 	// HostID scopes the rule to one host; "" applies it to all hosts.
 	// For Metric == AlertMetricStorageUsagePct specifically, this field
 	// is repurposed to hold a storage account's ID (formatted as a
@@ -221,12 +244,14 @@ type Delivery struct {
 // AlertEvent is one firing/resolved occurrence of an AlertRule against a
 // specific host, together with every delivery attempt made for it.
 type AlertEvent struct {
-	ID        int64           `json:"id"`
-	RuleID    int64           `json:"rule_id"`
-	RuleName  string          `json:"rule_name"`
-	HostID    string          `json:"host_id"`
-	Hostname  string          `json:"hostname"`
-	Metric    AlertMetric     `json:"metric"`
+	ID       int64       `json:"id"`
+	RuleID   int64       `json:"rule_id"`
+	RuleName string      `json:"rule_name"`
+	HostID   string      `json:"host_id"`
+	Hostname string      `json:"hostname"`
+	Metric   AlertMetric `json:"metric"`
+	// Severity is the rule severity when this event fired.
+	Severity  AlertSeverity   `json:"severity"`
 	State     AlertEventState `json:"state"`
 	Value     float64         `json:"value"`
 	Threshold float64         `json:"threshold"`

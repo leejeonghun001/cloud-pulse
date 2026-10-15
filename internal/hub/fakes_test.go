@@ -709,6 +709,16 @@ func (f *fakeStore) GetHostInventory(_ context.Context, hostID string) (models.I
 	return inv, nil
 }
 
+func (f *fakeStore) ListHostInventoryCounts(_ context.Context) (map[string]models.InventoryCounts, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]models.InventoryCounts, len(f.inventories))
+	for id, inv := range f.inventories {
+		out[id] = inv.Counts()
+	}
+	return out, nil
+}
+
 func (f *fakeStore) SetHostInventory(_ context.Context, hostID string, inv models.Inventory) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

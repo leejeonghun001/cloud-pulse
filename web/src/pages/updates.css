@@ -19,11 +19,11 @@
   }
 
   .cp-updates-job-row {
-    @apply flex items-center gap-3 rounded-lg border border-[rgb(var(--border))] p-3 flex-wrap text-sm;
+    @apply flex items-center gap-3 rounded-[var(--radius-cp-md)] border border-[rgb(var(--border))] p-3 flex-wrap text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)];
   }
 
   .cp-updates-job-host {
-    @apply font-medium text-[rgb(var(--text))];
+    @apply font-[weight:var(--weight-cp-medium)] text-[rgb(var(--text))];
   }
 
   .cp-updates-job-reason {

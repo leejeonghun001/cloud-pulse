@@ -74,6 +74,7 @@ export function mountChannelHealthTab(container, { announce } = {}) {
     }
 
     container.append(el("p", { class: "cp-muted-small", text: t("health.page_description") }));
+    container.append(el("p", { class: "cp-notify-source-note", text: t("settings.notifications.health_evidence_note") }));
 
     if (report.banner_needed && report.banner_channel_names?.length) {
       container.append(bannerNotice(report.banner_channel_names));
@@ -132,6 +133,10 @@ function channelHealthCard({ channelHealth, signal, announce, onChanged }) {
     }),
   );
   card.append(head);
+  const last = channelHealth.last_synthetic;
+  card.append(el("p", { class: "cp-muted-small", text: last
+    ? t("settings.notifications.last_synthetic_evidence", { outcome: t(OUTCOME_LABEL_KEY[last.outcome] || "health.synthetic_result_none"), when: formatWhen(last.started_at) })
+    : t("settings.notifications.health_no_synthetic") }));
 
   card.append(statsRow(t("health.stats_7d_title"), channelHealth.stats_7d));
   card.append(statsRow(t("health.stats_30d_title"), channelHealth.stats_30d));

@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"net/http"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,7 +41,7 @@ func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, info)
 }
 
-// handleStatic serves the embedded web assets from s.assets for
+// handleStatic serves the embedded web assets from s.static for
 // non-API paths. Requests under "/api/" that reach this fallback (no
 // other route matched) get a JSON 404, since http.ServeMux would
 // otherwise route them here as the least-specific match. When assets is
@@ -54,19 +54,43 @@ func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
 // /assets/ or with an extension still 404, so a broken script or image
 // reference never receives HTML.
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
-	if strings.HasPrefix(r.URL.Path, "/api/") || s.assets == nil {
+	if strings.HasPrefix(r.URL.Path, "/api/") || s.static == nil {
 		writeJSON(w, http.StatusNotFound, models.APIError{Error: "not found", Code: "not_found"})
 		return
 	}
-	// Embedded assets have neither modification times nor ETags. Require
-	// browsers to revalidate them so an upgraded hub immediately serves the
-	// replacement dashboard instead of a stale cached bundle.
-	w.Header().Set("Cache-Control", "no-cache")
-	if isSPARoute(r.URL.Path) && !assetExists(s.assets, r.URL.Path) {
-		http.ServeFileFS(w, r, s.assets, "index.html")
+
+	name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
+	if name == "" || (isSPARoute(r.URL.Path) && s.static.files[name].plain == nil) {
+		name = "index.html"
+	}
+	asset, ok := s.static.files[name]
+	if !ok {
+		http.NotFound(w, r)
 		return
 	}
-	http.FileServerFS(s.assets).ServeHTTP(w, r)
+
+	// Require revalidation so an upgraded hub immediately replaces its
+	// dashboard bundle, while ETags avoid transferring unchanged content.
+	h := w.Header()
+	h.Set("Cache-Control", "no-cache")
+	h.Set("Content-Type", asset.contentType)
+	addVary(h, "Accept-Encoding")
+	body, etag := asset.plain, asset.etag
+	if len(asset.gzip) != 0 && acceptsGzip(r.Header.Get("Accept-Encoding")) {
+		body, etag = asset.gzip, asset.gzipETag
+		h.Set("Content-Encoding", "gzip")
+	}
+	h.Set("ETag", etag)
+	if etagMatches(r.Header.Get("If-None-Match"), etag) {
+		h.Del("Content-Length")
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	h.Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(http.StatusOK)
+	if r.Method != http.MethodHead {
+		_, _ = w.Write(body) // response write failure means the peer went away
+	}
 }
 
 // isSPARoute reports whether urlPath may be a client-side dashboard
@@ -78,17 +102,6 @@ func isSPARoute(urlPath string) bool {
 	}
 	clean := path.Clean(urlPath)
 	return !strings.Contains(path.Base(clean), ".")
-}
-
-// assetExists reports whether urlPath names a file or directory in
-// assets.
-func assetExists(assets fs.FS, urlPath string) bool {
-	name := strings.TrimPrefix(path.Clean(urlPath), "/")
-	if name == "" {
-		return true
-	}
-	_, err := fs.Stat(assets, name)
-	return err == nil
 }
 
 // handleIngest processes an agent report: POST /api/v1/agent/report.
@@ -207,12 +220,24 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	}
 	limitsByHost := indexLimitsByHost(limits)
 
+	inventories, err := s.store.ListHostInventoryCounts(ctx)
+	if err != nil {
+		// Inventory counters are optional summary fields: hosts whose
+		// snapshot could not be read are listed without them (inventories
+		// is nil only when the query itself failed).
+		s.logger.Error("list host inventories failed", "error", err)
+	}
+
 	costByProvider, networkEstimator := s.hostCostInputs(ctx)
 
 	summaries := make([]models.HostSummary, 0, len(records))
 	for _, rec := range records {
 		tx, rx := egressByHost[rec.Info.ID].TxBytes, egressByHost[rec.Info.ID].RxBytes
-		summary := s.buildHostSummary(ctx, rec, limitsByHost[rec.Info.ID], tx, rx, now, s.opts.OfflineAfter)
+		var inv *models.InventoryCounts
+		if counts, ok := inventories[rec.Info.ID]; ok {
+			inv = &counts
+		}
+		summary := s.buildHostSummary(rec, limitsByHost[rec.Info.ID], tx, rx, now, s.opts.OfflineAfter, inv)
 		s.attachHostCost(&summary, costByProvider, networkEstimator)
 		summaries = append(summaries, summary)
 	}
@@ -259,7 +284,14 @@ func (s *Server) handleGetHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	summary := s.buildHostSummary(ctx, rec, limits, tx, rx, now, s.opts.OfflineAfter)
+	var inv *models.InventoryCounts
+	if stored, err := s.store.GetHostInventory(ctx, id); err == nil {
+		counts := stored.Counts()
+		inv = &counts
+	} else if !isNotFound(err) {
+		s.logger.Error("get host inventory for summary failed", "host_id", id, "error", err)
+	}
+	summary := s.buildHostSummary(rec, limits, tx, rx, now, s.opts.OfflineAfter, inv)
 	costByProvider, networkEstimator := s.hostCostInputs(ctx)
 	s.attachHostCost(&summary, costByProvider, networkEstimator)
 	writeJSON(w, http.StatusOK, summary)
@@ -487,9 +519,10 @@ func (s *Server) currentMonthEgress(ctx context.Context, hostID string, now time
 // current-month tx/rx byte totals and hub-side limit overrides,
 // resolving effective outbound/inbound limits via
 // models.EffectiveLimits, the available agent update (if any) via
-// s.agentUpdateFor, and the container/listening-port counters (if any
-// inventory has ever been reported) via s.store.GetHostInventory.
-func (s *Server) buildHostSummary(ctx context.Context, rec models.HostRecord, limits models.HostLimits, tx, rx uint64, now time.Time, offlineAfter time.Duration) models.HostSummary {
+// s.agentUpdateFor, and the container/listening-port counters from inv
+// (nil when the host has never reported an inventory). Callers load
+// inventories themselves so the fleet listing can batch them.
+func (s *Server) buildHostSummary(rec models.HostRecord, limits models.HostLimits, tx, rx uint64, now time.Time, offlineAfter time.Duration, inv *models.InventoryCounts) models.HostSummary {
 	status := models.HostDown
 	if now.Sub(time.Unix(rec.LastSeen, 0)) <= offlineAfter {
 		status = models.HostUp
@@ -510,18 +543,10 @@ func (s *Server) buildHostSummary(ctx context.Context, rec models.HostRecord, li
 		Update:   s.agentUpdateFor(rec.Info),
 	}
 
-	if inv, err := s.store.GetHostInventory(ctx, rec.Info.ID); err == nil {
-		containers := 0
-		for _, c := range inv.Docker.Containers {
-			if c.State == "running" {
-				containers++
-			}
-		}
-		ports := len(inv.Ports)
+	if inv != nil {
+		containers, ports := inv.ContainersRunning, inv.ListeningPorts
 		summary.ContainersRunning = &containers
 		summary.ListeningPorts = &ports
-	} else if !isNotFound(err) {
-		s.logger.Error("get host inventory for summary failed", "host_id", rec.Info.ID, "error", err)
 	}
 
 	return summary

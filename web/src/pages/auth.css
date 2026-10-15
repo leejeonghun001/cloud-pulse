@@ -7,7 +7,7 @@
   }
 
   .cp-auth-card {
-    @apply w-full max-w-sm rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-6 sm:p-8 shadow-lg flex flex-col gap-5;
+    @apply w-full max-w-sm rounded-[var(--radius-cp-lg)] border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-6 sm:p-8 shadow-[var(--elevation-cp-2)] flex flex-col gap-5;
   }
 
   .cp-auth-brand {
@@ -19,7 +19,7 @@
   }
 
   .cp-auth-brand h1 {
-    @apply text-lg font-semibold text-[rgb(var(--text))];
+    @apply text-[length:var(--text-cp-lg)] leading-[length:var(--leading-cp-lg)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))];
   }
 
   .cp-auth-form {
@@ -35,20 +35,21 @@
   }
 
   .cp-auth-footer {
-    @apply text-center text-xs text-[rgb(var(--muted))];
+    @apply text-center text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))];
   }
 
   .cp-spinner {
-    @apply inline-block h-4 w-4 rounded-full border-2 border-white/40 border-t-white animate-spin;
+    @apply inline-block h-4 w-4 rounded-[var(--radius-cp-full)] border-2 border-[rgb(var(--text-inverse)/0.4)] border-t-[rgb(var(--text-inverse))] animate-spin;
+    animation-duration: var(--motion-duration-cp-spin);
   }
 
   .cp-spinner-dark {
-    @apply border-[rgb(var(--muted))]/30 border-t-[rgb(var(--text))];
+    @apply border-[rgb(var(--muted)/0.3)] border-t-[rgb(var(--text))];
   }
 
   /* Password requirement checklist */
   .cp-pw-checklist {
-    @apply flex flex-col gap-1 text-xs;
+    @apply flex flex-col gap-1 text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)];
   }
 
   .cp-pw-checklist-item {
@@ -60,7 +61,7 @@
   }
 
   .cp-pw-checklist-item[data-met="true"] {
-    @apply text-emerald-700 dark:text-cp-ok;
+    @apply text-[rgb(var(--status-ok-fg-soft))];
   }
 
   /* Password strength meter */
@@ -73,7 +74,9 @@
   }
 
   .cp-pw-strength-seg {
-    @apply flex-1 rounded-full bg-[rgb(var(--muted-surface))] transition-colors;
+    @apply flex-1 rounded-[var(--radius-cp-full)] bg-[rgb(var(--muted-surface))] transition-colors;
+    transition-duration: var(--motion-duration-cp-fast);
+    transition-timing-function: var(--motion-ease);
   }
 
   .cp-pw-strength-seg[data-active="true"][data-level="weak"] {
@@ -93,6 +96,6 @@
   }
 
   .cp-pw-strength-label {
-    @apply text-xs text-[rgb(var(--muted))];
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))];
   }
 }

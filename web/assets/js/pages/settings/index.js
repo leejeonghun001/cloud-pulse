@@ -82,6 +82,11 @@ export function resolveSection(sectionParam) {
   return SECTIONS.some((s) => s.id === sectionParam) ? sectionParam : DEFAULT_SECTION;
 }
 
+/** Keeps the active item visible in the horizontally scrollable mobile tab row. */
+export function scrollActiveSettingsTab(activeLink) {
+  activeLink?.scrollIntoView?.({ inline: "center", block: "nearest" });
+}
+
 /**
  * mountSettingsPage renders the Settings page shell (header + sidebar +
  * active section) into container.
@@ -107,6 +112,7 @@ export function mountSettingsPage(container, { announce, section, focusHostID, o
   const layout = el("div", { class: "cp-settings-layout" });
   const nav = el("nav", { class: "cp-settings-nav", attrs: { "aria-label": t("settings.sections_aria_label") } });
   const list = el("ul", { class: "cp-settings-nav-list", attrs: { role: "list" } });
+  let activeLink = null;
 
   for (const s of SECTIONS) {
     const li = el("li");
@@ -114,6 +120,7 @@ export function mountSettingsPage(container, { announce, section, focusHostID, o
       class: `cp-settings-nav-link${s.id === activeID ? " cp-settings-nav-link-active" : ""}`,
       attrs: { href: `#/settings/${s.id}`, ...(s.id === activeID ? { "aria-current": "page" } : {}) },
     });
+    if (s.id === activeID) activeLink = link;
     link.append(icon(s.iconName), el("span", { text: s.label }));
     if (onNavigateSection) {
       link.addEventListener("click", (ev) => {
@@ -131,6 +138,11 @@ export function mountSettingsPage(container, { announce, section, focusHostID, o
   layout.append(contentHost);
   root.append(layout);
   container.append(root);
+
+  // On narrow screens the section nav is horizontally scrollable. Centering
+  // the current item on each mount prevents a deep-linked active section from
+  // being rendered beyond the visible row.
+  scrollActiveSettingsTab(activeLink);
 
   const activeDef = SECTIONS.find((s) => s.id === activeID);
   const handle = activeDef.mount(contentHost, { announce, focusHostID });

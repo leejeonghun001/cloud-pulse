@@ -92,46 +92,54 @@ action only.
 
 ## Regenerating documentation screenshots
 
-All `docs/screenshots/*.png` images are reproducible from demo data —
-never from this machine's real hosts. "Reproducible" means layout,
-labels and text render identically run to run; screens showing live
-metrics also embed time-relative labels and sine-phase chart data, so
-their pixels vary with when the seed ran (dataless screens such as the
-login page come out byte-identical). The capture tool runs headless
-Firefox via WebDriver BiDi and scrubs any configured local markers
-(real hostname/IPs, supplied only via `--markers-file` or
-`CP_PREPUBLISH_MARKERS`) from the DOM before every shot, then strips
-all PNG metadata chunks. Its `capture-report.json` output is local
-bookkeeping, not documentation — do not commit it.
+Use an owned sandbox with a fresh repository-local, git-ignored data directory,
+dummy credentials and an unused loopback test port, never a live hub or its
+data. Set its password via `reset-password --password-stdin` **before** starting
+it, then seed only demo data with `scripts/demo-seed.py`. Keep temporary files,
+browser profiles and captures in private repository-local scratch; stop only
+processes you started. Time-relative labels and demo charts vary between runs;
+pixel-identical recaptures are not promised.
+
+`scripts/capture-screenshots.mjs` supports a reviewed shots JSON plan,
+a password file, an output directory, and per-shot `lang`, theme and viewport settings.
+Capture into private scratch first, not directly into `docs/screenshots`.
+Do **not** blindly run the default plan: its legacy `diagnosis` actions click
+**Send test**. Remove send/save/refresh actions and never configure real
+notification destinations or cloud credentials for documentation capture.
+Interactive notification and billing examples require browser responses stubbed
+**before dispatch**, with unmatched writes/outbound requests denied; ordinary
+demo seeding does not reproduce those states. Do not run installers, reveal or
+copy tokens, upload files, or access original photos during capture.
+
+The eight refreshed images have these specific fixture boundaries:
+
+| Image | Caption / evidence boundary |
+|---|---|
+| `overview.png`, `ko/ko-overview.png` | Isolated demo fleet; not live measurements or provider truth. |
+| `host-detail.png` | Demo host metrics and inventory, not a real host observation. |
+| `alerts.png` | Historical alert-event fixtures, not real incidents or proof of delivery. |
+| `mobile-overview.png` | Browser-only empty host-list GET over seeded data; the backend is not entirely empty. |
+| `add-agent.png` | Masked install guide; no command or token exposed or executed. |
+| `notifications.png` | Browser-stubbed test acceptance; no send/delivery verification, recorded health unchanged. |
+| `costs.png` | Illustrative billing fixtures, not actual provider charges or live billing. |
+
+Earlier images, including `mobile.png`, were not refreshed with this set.
+Review every intended public image for visible secrets and personal markers;
+DOM scrubbing and PNG metadata stripping are not a visual privacy signoff.
+Publish only approved unchanged capture bytes after hash/PNG metadata checks.
+Local capture reports are bookkeeping, not portable GitHub evidence; keep them
+untracked. Run the repository checks after documentation changes:
 
 ```bash
-# 1. Sandbox hub on a test port (never :8090)
-CP_AGENT_TOKEN=test-agent-token-0123456789 \
-CP_UI_TOKEN=test-ui-token-0123456789 \
-cloud-pulse-hub -listen 127.0.0.1:18090 -data-dir /tmp/cp-shots &
-
-# 2. Admin password + demo data (keepalive holds hosts "up" during capture)
-printf '%s' 'A-Temporary-Password' | cloud-pulse-hub reset-password \
-  --data-dir /tmp/cp-shots --password-stdin
-python3 scripts/demo-seed.py --hub http://127.0.0.1:18090 \
-  --token test-agent-token-0123456789 --ui-token test-ui-token-0123456789 \
-  --live 240 &
-
-# 3. English set (scripts/capture-screenshots.json)
-node scripts/capture-screenshots.mjs --hub http://127.0.0.1:18090 \
-  --password-file /tmp/pw.txt --out docs/screenshots
-
-# 4. Korean set (SPEC-v0.8 §3-3: representative screens for human
-#    review; reviewed with each release, see docs/configuration.md)
-node scripts/capture-screenshots.mjs --hub http://127.0.0.1:18090 \
-  --password-file /tmp/pw.txt --out docs/screenshots/ko \
-  --shots scripts/capture-screenshots-ko.json
+CGO_ENABLED=0 go test ./...
+npm test
+node scripts/check-i18n.mjs --json
+python3 scripts/check-docs.py --check-flags
+python3 scripts/prepublish-check.py
+git diff --check
 ```
 
-A per-shot `"lang"` field overrides `--lang`, so one shots file can
-mix languages. After regenerating, run
-`python3 scripts/prepublish-check.py` — tree findings (including PNG
-metadata and personal markers) are hard failures.
+Tree findings (including PNG metadata and personal markers) are hard failures.
 
 ## Public-repository final check (`scripts/prepublish-check.py`)
 
@@ -170,6 +178,102 @@ python3 scripts/prepublish-check.py
   or arbitrary strings. The scanner reports a marker number and a
   redacted match length only; it never prints the marker value.
 
+## Reviewed historical detector fixtures
+
+`prepublish-check` accepts only exact, source-context-reviewed synthetic
+historical `internal.host_ip` or `internal.home_path` findings listed in
+`.prepublish-historical-fixtures.json`. Each entry binds a full commit,
+repository-relative path, line, rule, and SHA-256 of that historical UTF-8
+line (excluding its newline), with bounded plain-text rationale. The manifest
+must not store matched values or matched-value hashes. Schema, provenance,
+reachability and line content are validated; every entry must match exactly
+once during a full history scan. This does not exempt a file, line, test,
+current-tree finding, secret, local marker, or hygiene finding.
+
+`history findings=0` means zero unresolved historical findings, not zero
+detector matches. Accepted fixtures remain visible and separately counted;
+the current manifest accounts for nine reviewed findings. The existing
+`.prepublish-baseline.json` policy and D-084 are unchanged: known historical
+disclosures still warn, and new findings still fail. A baseline cannot rescue
+invalid fixture metadata or turn an accepted fixture into a warning.
+Tree-only runs validate fixture targets but explicitly skip full-history
+match-count validation and make no zero-history claim.
+
+## Dashboard design system
+
+Phase 1 establishes shared styling; it does not rearrange the server grid,
+host detail, or Activity. API bindings, counts, and chart samples remain owned
+by the existing page modules. Never add invented measurements to fill a UI.
+
+- `web/src/tokens.css` owns visual colors, type sizes/leading, weights,
+  tracking, radii, elevation, motion, and focus. Page layout geometry remains
+  local. Dark surfaces are neutral; accent blue identifies interaction,
+  while status hues identify health.
+- Complete `--color-cp-*` values are used as `var(--color-cp-*)` for opaque
+  CSS colors. For translucency, use semantic triplets such as
+  `rgb(var(--status-ok) / 0.15)` or `rgb(var(--accent) / 0.1)`.
+  Never wrap a hex token in `rgb()`. Shared status styles avoid `color-mix()`
+  so existing computed-color checks can measure them.
+- `components/typography.css`, `card.css`, `status.css`, and `meter.css`
+  each own their shared classes. Pages may add scoped modifiers, not another
+  base definition. Keep legacy names (`cp-dot-up/down`, `cp-chip-other`)
+  until their callers migrate.
+  Card titles remain 16px; body/helper type remains 14px/12px. Named sizes
+  require explicit leading. Legacy badges/chips intentionally inherit their
+  context's line height to preserve table and toolbar density.
+- Base and stat cards share border, fill, radius, and elevation. Compact and
+  stacked cards are opt-in. Dots are 10px (large: 12px); tracks are 6px
+  (large: 8px). Unknown states use hollow dots or empty/striped frames, not
+  a fabricated zero. Status meaning must also appear in text or an icon.
+- Body/secondary text, links, status text on supported 10–20% tints, and
+  white text on opaque badges are tested at 4.5:1 in both themes. Chart series
+  and focus rings are tested at 3:1 against the four named surfaces. These
+  are token/component checks, not a claim that every dashboard state is
+  fully audited. Decorative borders, grid lines, distribution segments,
+  bright dots, and usage fills are not covered by that contrast guarantee;
+  the latter require adjacent labels/values.
+- Chart tokens remain complete six-digit hex strings for the existing
+  canvas alpha-fill code. `SERIES_COLORS` keeps enumerable, read-only
+  properties with dynamic getters. Existing chart recreation on theme change
+  picks up new colors; it does not change data inputs or chart lifecycle.
+- Use keyboard-visible focus, gate decorative hover effects to hover-capable
+  devices, and use shared motion tokens. Reduced motion globally collapses
+  transitions and prevents repeating pulses. Preserve Korean labels through
+  wrapping in shared card/meter components rather than truncation.
+
+Run `make css` after source changes; `web/assets/app.css` is generated.
+Run `make test-js` for syntax and source regressions. The isolated
+`scripts/check-design-system.mjs` gallery provides browser evidence without
+API data or authentication. It covers compact/stacked cards, legacy and large
+status indicators, badges/chips, empty meters, long English/Korean labels,
+isolated form controls, and selected-navigation pointer hover. Its controls
+do not submit or save anything. Screenshots capture the whole document.
+Run it on an unused loopback test port (default `18090`; `8090` is refused).
+All reports, screenshots, Firefox profiles and browser temporary files stay
+under repository-local `.verification/phase1`; locally exclude
+`/.verification/` in `.git/info/exclude` without replacing existing entries.
+Use `TMPDIR="$PWD/.verification/phase1/tmp"` for verification commands.
+Live deployment and authenticated page audits are separate maintainer tasks,
+not part of this styling check. Token tests and gallery evidence do not certify
+every production dashboard state.
+
+The overview grid uses `pages/hostgrid.js` for its card composition while
+sharing the table's existing filtering, sort accessors and persisted view.
+Grid sort controls use that same sort state. Cards are single native links,
+not nested action menus. Resource percentages, capacities, byte rates, load,
+uptime and monthly traffic come directly from `HostSummary`; missing numeric
+fields stay unknown and offline samples are labeled as last reported.
+Progress tracks are bounded, with original exceeded usage retained in text
+and `aria-valuetext`. Do not add decorative trend data to these cards.
+
+Alerts → Activity is the existing alert-event history, not admin audit data.
+Its date groups use each occurrence's `started_at` in the browser's local
+timezone and preserve API order/cursors. A resolved occurrence shows its
+actual resolution time; it is not duplicated into an invented event. State,
+rule/host snapshots, value/threshold and delivery outcomes remain grounded
+in the existing API. There is no inferred severity or new mute/host-filter
+control. Refresh reloads the newest page; Load more follows the API cursor.
+
 ## Release checklist
 
 1. Confirm CI is green on the release branch (all jobs, including
@@ -184,3 +288,15 @@ python3 scripts/prepublish-check.py
 6. Rehearse the upgrade path from the previous release in a sandbox
    before announcing (`scripts/hub-upgrade-check.sh` / SPEC upgrade
    kit), not against a live production hub.
+
+## Static quality-matrix workflow check
+
+Run `python3 scripts/check-quality-matrix.py` to check the supported static
+profile of `.github/workflows/quality-matrix.yml`: manual dispatch, read-only
+contents permission, CGO-disabled Go builds for the six declared targets,
+native Go vet/tests, and Node 22/npm tests. It uses installed PyYAML's
+`BaseLoader`; if PyYAML is unavailable the command fails clearly rather than
+skipping validation. Duplicate mappings, merges, explicit tags, and unsupported
+workflow shapes are rejected. This is not actionlint or complete GitHub
+expression validation; it does not check action-version availability and does
+not execute workflow jobs, builds, or native-platform tests.

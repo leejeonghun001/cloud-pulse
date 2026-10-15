@@ -5,13 +5,10 @@
 // routes, internal/alerting's delivery worker) own presenting or
 // persisting the result.
 //
-// Every Diagnosis produced here is built exclusively from platform-
-// controlled response text (Discord's "message", Telegram's
-// "description", WhatsApp's "error.message"/"error_data.details") or
-// from this file's own static guidance strings — never from a
-// channel's configured secret (bot token, webhook token, access
-// token, phone number). See redactSecretsInText for the defense-in-
-// depth belt-and-suspenders pass applied to every Detail string.
+// Error-derived details may contain platform response text, transport URLs,
+// or echoed credentials. DiagnoseError retains the legacy credential-shape
+// sanitizer for classification-only callers. Display/persistence callers
+// must use DiagnoseChannelError for exact configured-value redaction too.
 package notify
 
 import (
@@ -64,6 +61,29 @@ func DiagnoseError(err error) models.Diagnosis {
 	}
 
 	return diagnoseNetworkError(err)
+}
+
+// DiagnoseChannelError classifies the ORIGINAL typed error before sanitizing
+// its display text. Static titles, codes, guidance and documentation links are
+// preserved; only error-derived fields need exact-value channel redaction.
+func DiagnoseChannelError(ch models.NotifyChannel, err error) models.Diagnosis {
+	d := DiagnoseError(err)
+	ch = channelWithErrorURL(ch, err)
+	switch d.Code {
+	case models.DiagnosisTimeout, models.DiagnosisDiscordWebhookGone,
+		models.DiagnosisDiscordUnauthorized, models.DiagnosisTelegramUnauthorized:
+		// These details are entirely static, not derived from err.
+	default:
+		d.Detail = SafeText(ch, d.Detail)
+	}
+	if d.Code == models.DiagnosisPlatformError && err != nil {
+		// The generic platform title can contain statusError.Platform.
+		var status *statusError
+		if errors.As(err, &status) && status.Platform != "discord" && status.Platform != "telegram" && status.Platform != "whatsapp" && status.Platform != "webhook" {
+			d.Title = SafeText(ch, d.Title)
+		}
+	}
+	return d
 }
 
 // diagnoseRateLimited builds the rate_limited Diagnosis for a 429
@@ -417,11 +437,8 @@ func diagnoseWhatsAppStatus(e *statusError) models.Diagnosis {
 // --- Secret-free detail text ---
 
 // secretLikePatterns matches substrings that could leak a credential
-// if a platform ever echoed back part of the request (none of
-// Discord/Telegram/Bot-API/Graph currently do — this is a defense-in-
-// depth pass, not the primary guarantee, which comes from these
-// platforms' own generic error phrasing never including the secret
-// itself):
+// if a platform or transport echoes part of the request. This is a
+// defense-in-depth pass, not a substitute for channel-aware redaction:
 //   - a bot-token shape, "<digits>:<20+ token chars>" (Telegram)
 //   - "Bearer <token>" (Authorization-header style)
 //   - a discord webhook URL's id/token path segment

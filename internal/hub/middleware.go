@@ -1,13 +1,89 @@
 package hub
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/netip"
 	"runtime/debug"
+	"strconv"
+	"strings"
 
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
 )
+
+const minGzipAPIBytes = 1024
+
+// delayedResponseWriter keeps a GET API response in memory until its body is
+// complete, allowing apiGzip to avoid compressing small JSON responses.
+type delayedResponseWriter struct {
+	http.ResponseWriter
+	body        bytes.Buffer
+	status      int
+	wroteHeader bool
+}
+
+func (w *delayedResponseWriter) WriteHeader(status int) {
+	if w.wroteHeader {
+		return
+	}
+	w.status = status
+	w.wroteHeader = true
+}
+
+func (w *delayedResponseWriter) Write(p []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.body.Write(p)
+}
+
+// apiGzip compresses substantial JSON GET responses only. Agent routes use
+// bearer credentials and may be polled by constrained clients, so they remain
+// byte-for-byte untouched. SSE and other streaming responses bypass this
+// buffer because they do not advertise a JSON media type.
+func (s *Server) apiGzip(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The agent-token reveal is excluded as defence in depth: it carries
+		// a secret, and it is tiny, so compression buys nothing there.
+		if r.Method != http.MethodGet || !strings.HasPrefix(r.URL.Path, "/api/v1/") || strings.HasPrefix(r.URL.Path, "/api/v1/agent/") ||
+			r.URL.Path == "/api/v1/settings/agent-token" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		delayed := &delayedResponseWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(delayed, r)
+		body := delayed.body.Bytes()
+		contentType := strings.ToLower(delayed.Header().Get("Content-Type"))
+		if !strings.Contains(contentType, "application/json") || strings.Contains(contentType, "text/event-stream") || delayed.Header().Get("Content-Encoding") != "" {
+			w.WriteHeader(delayed.status)
+			_, _ = w.Write(body) // response write failure means the peer went away
+			return
+		}
+
+		addVary(delayed.Header(), "Accept-Encoding")
+		if len(body) < minGzipAPIBytes || !acceptsGzip(r.Header.Get("Accept-Encoding")) {
+			delayed.Header().Set("Content-Length", strconv.Itoa(len(body)))
+			w.WriteHeader(delayed.status)
+			_, _ = w.Write(body) // response write failure means the peer went away
+			return
+		}
+
+		compressed, err := gzipBytes(body)
+		if err != nil {
+			s.logger.Error("gzip API response", "error", err, "path", r.URL.Path)
+			delayed.Header().Set("Content-Length", strconv.Itoa(len(body)))
+			w.WriteHeader(delayed.status)
+			_, _ = w.Write(body) // response write failure means the peer went away
+			return
+		}
+		delayed.Header().Set("Content-Encoding", "gzip")
+		delayed.Header().Set("Content-Length", strconv.Itoa(len(compressed)))
+		w.WriteHeader(delayed.status)
+		_, _ = w.Write(compressed) // response write failure means the peer went away
+	})
+}
 
 // securityHeaders sets a fixed set of security-related response headers
 // on every response before delegating to next.

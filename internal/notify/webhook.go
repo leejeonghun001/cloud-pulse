@@ -31,7 +31,7 @@ func validateWebhookConfig(cfg map[string]string) map[string]string {
 	requireNonEmpty(errs, cfg, "url")
 	if cfg["url"] != "" {
 		if err := validateGenericWebhookURL(cfg["url"], clientOptions{}); err != nil {
-			errs["url"] = err.Error()
+			errs["url"] = SafeErrorText(models.NotifyChannel{Type: models.NotifyChannelWebhook, Config: cfg}, err)
 		}
 	}
 	return errs

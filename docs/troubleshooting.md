@@ -9,10 +9,24 @@
   `CP_LISTEN` port. `sudo systemctl status cloud-pulse-hub` (Linux) to
   check for a stuck old process; check the Network settings page for a
   stale pending-change listener if you recently edited listen config.
-- **Started but the dashboard shows a blank page**: check the
-  browser's console for a CSP violation — the dashboard requires
-  `script-src 'self'` and no inline scripts; a browser extension or
-  proxy injecting scripts can trip this.
+- **Started but the dashboard is blank or slow**: use the browser's
+  Network panel to separate a failed API response from an asset/render
+  failure; then check Console for JavaScript or CSP errors. The embedded
+  app loads its own assets (no runtime CDN); extensions or proxies that
+  inject scripts can violate `script-src 'self'`.
+
+## No hosts or the dashboard looks empty
+
+- A new data directory starts with no host samples. A host appears after
+  its agent sends a valid report; `cloud-pulse-agent -once` only collects
+  and prints a local sample and does **not** contact the hub.
+- Check that the agent service is running, its `CP_HUB_URL` points at the
+  hub listener, and its `CP_AGENT_TOKEN` matches the hub. Check the agent
+  log for report failures. The dashboard host/list endpoints use a
+  dashboard session or optional `CP_UI_TOKEN`, not the agent token.
+- `GET /healthz` is public liveness only; HTTP 200 does not prove that a
+  report was accepted or that the dashboard has data. See the API
+  authentication classes in [api.md](api.md#authentication).
 
 ## Agent can't reach the hub
 
@@ -20,20 +34,28 @@
   the agent's IP is inside `CP_ALLOWED_CIDRS` (the default allowlist is
   Tailscale/loopback ranges only — a non-Tailscale deployment must
   widen this explicitly, see [security.md](security.md)).
-- Confirm `CP_AGENT_TOKEN` matches the hub's token exactly (a
-  mismatched token returns `401` from `POST /api/v1/agent/report`, not
-  a connection-level error).
+- First check `GET /healthz` at the same host/port from the agent
+  network. It has no auth and checks liveness only; it does not prove the
+  agent route or token works.
+- Agent `POST /api/v1/agent/report` and `GET /api/v1/agent/time` require
+  the hub's `CP_AGENT_TOKEN` as a Bearer token. A mismatch returns 401;
+  a dashboard session or `CP_UI_TOKEN` is not interchangeable. The
+  allowlist checks the socket peer address, not `X-Forwarded-For`.
 - Run `cloud-pulse-agent -once` to collect and print one sample locally
   without needing hub connectivity at all — isolates whether the
   problem is collection or networking.
 
-## Host shows "down" but the agent process is running
+## Host data is stale or marked down
 
-- Check the agent's own logs for report failures (network, auth, or a
-  400 from a malformed sample).
-- `CP_OFFLINE_AFTER` (default `60s`) is how long since the last
-  successful report before the hub marks a host offline — a longer
-  `CP_INTERVAL` than that margin will cause spurious offline flapping.
+- Compare the last successful report with the agent's `CP_INTERVAL`
+  (default `15s`) and the hub's `CP_OFFLINE_AFTER` (default `60s`). A
+  down state means the hub has not received a successful report within
+  that configured window; a running process alone is not a successful
+  report.
+- Check the agent log for a 401 (token/auth), 403 (allowlist), connection
+  failure, or 400 (invalid report), and check the hub log for ingest
+  errors. `GET /api/v1/hosts` requires dashboard auth; do not test it with
+  `CP_AGENT_TOKEN`.
 
 ## Locked out of the dashboard
 
@@ -47,6 +69,33 @@
   auto-revert guards are specifically designed to make this scenario
   rare; reaching it usually means a session expired mid-change or the
   hub was restarted while an untested config was still pending.
+
+## Dashboard/API authentication errors
+
+- **401 on an agent route**: use the configured `CP_AGENT_TOKEN` Bearer
+  credential. **401 on a dashboard API**: sign in for a dashboard session,
+  or use optional `CP_UI_TOKEN` for an API client. These credentials have
+  different purposes; do not substitute one for the other. The UI token
+  grants full API admin access but does not sign in the browser dashboard.
+- **403 `password_change_required`**: a normal session still requires a
+  password change. Complete the first-login flow; until then only
+  `/api/v1/auth/me`, `/api/v1/auth/password`, and `/api/v1/auth/logout`
+  are available to that session. See
+  [security.md](security.md#sign-in-and-accounts).
+
+## Network path differs on mobile or another client
+
+- From the affected device, check the same hub hostname, port, scheme,
+  and VPN/Tailscale route used by the browser. Request `/healthz`; if it
+  cannot connect, check listener binding, DNS, firewall, and
+  `CP_ALLOWED_CIDRS` before investigating rendering.
+- If `/healthz` works but only that browser is blank/slow, inspect its
+  Network and Console panels: distinguish `/assets/...` failures, API
+  status codes, and client-side errors. Compare another browser on the
+  same device/network; a desktop success does not prove the phone uses
+  the same DNS, VPN, or source address.
+- `/healthz` is not an authenticated data/API check. Do not share bearer
+  tokens, reset links, or unredacted request headers in a report.
 
 ## Billing shows "not connected"
 

@@ -5,7 +5,25 @@
 // identical in both places (re-render if the caller can cheaply do so,
 // otherwise reload — see onChange below and each caller's usage).
 import { selectField } from "./select.js";
-import { t, getLangPreference, setLang, htmlLang } from "../core/i18n.js";
+import { t, getLangPreference, setLang, htmlLang, ensureCatalog, resolveLangPreference } from "../core/i18n.js";
+import { showToast } from "./toast.js";
+
+/** Loads a candidate language before committing its saved preference.
+ * @returns {Promise<boolean>} true only after the requested catalog loaded. */
+export async function applyLanguagePreference(pref, {
+  ensure = ensureCatalog,
+  persist = setLang,
+  onFailure = () => showToast({ message: t("errors.generic"), variant: "error" }),
+} = {}) {
+  try {
+    await ensure(resolveLangPreference(pref));
+  } catch {
+    onFailure();
+    return false;
+  }
+  persist(pref);
+  return true;
+}
 
 /**
  * languageSelector builds the labeled language <select>. Calling
@@ -28,9 +46,13 @@ export function languageSelector({ onChange } = {}) {
     value: getLangPreference(),
   });
 
-  select.addEventListener("change", () => {
+  select.addEventListener("change", async () => {
     const pref = /** @type {import('../core/i18n.js').LangPreference} */ (select.value);
-    setLang(pref);
+    const previousPref = getLangPreference();
+    if (!await applyLanguagePreference(pref)) {
+      select.value = previousPref;
+      return;
+    }
     document.documentElement.lang = htmlLang();
     if (onChange) onChange(pref);
   });

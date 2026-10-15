@@ -1,9 +1,5 @@
-/* settings.css — Settings page redesign: sidebar layout + Network
-   section components (adapters, allowlist chips, pending banner,
-   confirm dialog diff). Component classes shared across pages
-   (cp-card, cp-host-detail-meta, cp-settings-row, cp-chip, etc.) live
-   in base.css/input.css's legacy layer; this file owns only what's
-   new for the sidebar + Network UI. */
+/* Settings layout and Network controls. Shared card, status and type
+   styles live in components/; this file owns page-specific modifiers. */
 
 @layer components {
   /* ---------------------------------------------------------------- */
@@ -23,11 +19,21 @@
   }
 
   .cp-settings-nav-link {
-    @apply flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium text-[rgb(var(--muted))] no-underline hover:bg-[rgb(var(--surface-raised))] hover:text-[rgb(var(--text))] transition-colors;
+    @apply flex items-center gap-2 whitespace-nowrap rounded-[var(--radius-cp-md)] px-3 py-2 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-medium)] text-[rgb(var(--muted))] no-underline hover:bg-[rgb(var(--surface-raised))] hover:text-[rgb(var(--text))] transition-colors;
+    transition-duration: var(--motion-duration-cp-fast);
+    transition-timing-function: var(--motion-ease);
   }
 
   .cp-settings-nav-link-active {
-    @apply bg-cp-accent/10 text-[rgb(var(--link))] hover:bg-cp-accent/10 hover:text-[rgb(var(--link))];
+    @apply text-[rgb(var(--link))];
+    background-color: rgb(var(--accent) / 0.1);
+  }
+
+  @media (hover: hover) {
+    .cp-settings-nav-link-active:hover {
+      color: rgb(var(--link));
+      background-color: rgb(var(--accent) / 0.1);
+    }
   }
 
   .cp-settings-content {
@@ -43,11 +49,11 @@
   }
 
   .cp-network-subheading {
-    @apply text-sm font-semibold text-[rgb(var(--text))] mt-2;
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))] mt-2;
   }
 
   .cp-network-all-row {
-    @apply rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] px-3 py-2;
+    @apply rounded-[var(--radius-cp-md)] border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] px-3 py-2;
   }
 
   .cp-network-adapter-list {
@@ -55,7 +61,7 @@
   }
 
   .cp-network-adapter {
-    @apply flex flex-col gap-1.5 rounded-lg border border-[rgb(var(--border))] p-3;
+    @apply flex flex-col gap-1.5 rounded-[var(--radius-cp-md)] border border-[rgb(var(--border))] p-3;
   }
 
   .cp-network-adapter-header {
@@ -63,7 +69,7 @@
   }
 
   .cp-network-adapter-name {
-    @apply text-sm font-semibold text-[rgb(var(--text))];
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))];
   }
 
   .cp-network-kind-loopback {
@@ -71,7 +77,8 @@
   }
 
   .cp-network-kind-tailscale {
-    @apply bg-cp-accent/15 text-[rgb(var(--link))];
+    @apply text-[rgb(var(--link))];
+    background-color: rgb(var(--accent) / 0.15);
   }
 
   .cp-network-kind-virtual {
@@ -79,7 +86,8 @@
   }
 
   .cp-network-kind-physical {
-    @apply bg-cp-ok/15 text-emerald-600 dark:text-emerald-400;
+    background-color: rgb(var(--status-ok) / 0.15);
+    color: rgb(var(--status-ok-fg));
   }
 
   .cp-network-addr-row {
@@ -111,7 +119,7 @@
   }
 
   .cp-network-chip-remove {
-    @apply inline-flex items-center justify-center h-7 w-7 rounded-full text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] hover:bg-[rgb(var(--border))] cursor-pointer;
+    @apply inline-flex items-center justify-center h-7 w-7 rounded-[var(--radius-cp-full)] text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] hover:bg-[rgb(var(--border))] cursor-pointer;
   }
 
   .cp-network-chip-remove .cp-icon {
@@ -123,7 +131,7 @@
   }
 
   .cp-network-warning {
-    @apply text-amber-700 dark:text-cp-warning;
+    @apply text-[rgb(var(--status-warning-fg))];
   }
 
   .cp-network-actions {
@@ -135,7 +143,7 @@
   /* ---------------------------------------------------------------- */
 
   .cp-network-pending-banner {
-    @apply flex items-start gap-3 rounded-xl border border-cp-warning/40 bg-cp-warning/10 p-4;
+    @apply flex items-start gap-3 rounded-[var(--radius-cp-lg)] border border-[rgb(var(--status-warning)/0.4)] bg-[rgb(var(--status-warning)/0.1)] p-4;
   }
 
   .cp-network-pending-body {
@@ -143,15 +151,15 @@
   }
 
   .cp-network-pending-title {
-    @apply text-sm font-semibold text-[rgb(var(--text))];
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))];
   }
 
   .cp-network-pending-countdown {
-    @apply text-sm text-[rgb(var(--text))] tabular-nums;
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--text))] tabular-nums;
   }
 
   .cp-network-pending-urls {
-    @apply flex flex-col gap-1 list-none p-0 m-0 text-sm;
+    @apply flex flex-col gap-1 list-none p-0 m-0 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)];
   }
 
   .cp-network-pending-actions {
@@ -163,11 +171,11 @@
   /* ---------------------------------------------------------------- */
 
   .cp-code-inline {
-    @apply rounded bg-[rgb(var(--muted-surface))] px-1.5 py-0.5 font-mono text-xs text-[rgb(var(--text))];
+    @apply rounded-[var(--radius-cp-xs)] bg-[rgb(var(--muted-surface))] px-1.5 py-0.5 font-mono text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--text))];
   }
 
   .cp-link {
-    @apply text-sm font-medium text-[rgb(var(--link))] hover:underline;
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-medium)] text-[rgb(var(--link))] hover:underline;
   }
 
   .cp-settings-form {

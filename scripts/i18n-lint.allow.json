@@ -6,11 +6,11 @@
       "reason": "The \"cloud-pulse\" wordmark is the product name, kept in every language per CODING_CONVENTIONS.md/DECISIONS_LOG.md (product names/API terms stay in English)."
     },
     {
-      "key": "web/assets/js/ui/shell.js:43:key:text",
+      "key": "web/assets/js/ui/shell.js:47:key:text",
       "reason": "The \"cloud-pulse\" wordmark is the product name, kept in every language per CODING_CONVENTIONS.md/DECISIONS_LOG.md (product names/API terms stay in English)."
     },
     {
-      "key": "web/assets/js/ui/shell.js:53:key:text",
+      "key": "web/assets/js/ui/shell.js:69:key:text",
       "reason": "\"Ctrl K\" is a literal keyboard shortcut label (the physical key combination), not translatable prose; every locale uses the same key names."
     },
     {
@@ -55,4 +55,3 @@
     }
   ]
 }
-

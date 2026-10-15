@@ -1,0 +1,27 @@
+/* Compare view: quiet shared charts and a compact multi-host picker. */
+@layer components {
+  .cp-compare-heading, .cp-compare-summary, .cp-compare-charts { @apply flex flex-col gap-3; }
+  .cp-compare-picker { @apply flex flex-col gap-3 rounded-[var(--radius-cp-lg)] bg-[rgb(var(--surface-sunken))] p-4 sm:p-5; }
+  .cp-compare-section-title { @apply text-[length:var(--text-cp-md)] leading-[length:var(--leading-cp-md)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))]; }
+  .cp-compare-picker-controls { @apply grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_10rem_auto] sm:items-end; }
+  .cp-compare-picker-controls .cp-field { @apply w-full; }
+  .cp-compare-host-list { @apply grid grid-cols-1 gap-1 sm:grid-cols-2; }
+  .cp-compare-host-option { @apply flex min-w-0 items-center gap-2 rounded-[var(--radius-cp-md)] px-2 py-2 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--text))]; }
+  .cp-compare-host-option:hover { background-color: rgb(var(--surface-raised)); }
+  .cp-compare-host-option input { @apply shrink-0; }
+  .cp-compare-host-copy { @apply flex min-w-0 flex-1 flex-col; }
+  .cp-compare-host-name { overflow-wrap: anywhere; }
+  .cp-compare-host-id { overflow-wrap: anywhere; }
+  .cp-compare-host-meta { @apply ml-auto inline-flex shrink-0 items-center gap-1.5; }
+  .cp-compare-notices { @apply flex flex-col gap-2; }
+  .cp-compare-table-wrap { @apply max-w-full overflow-x-auto; }
+  .cp-compare-table { @apply min-w-[46rem]; }
+  .cp-compare-table th, .cp-compare-table td { @apply whitespace-nowrap; }
+  .cp-compare-table .cp-compare-numeric { @apply tabular-nums; }
+  .cp-compare-table tbody th { @apply text-[rgb(var(--text))] font-[weight:var(--weight-cp-medium)]; }
+  .cp-compare-max { @apply font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))]; }
+  .cp-compare-chart-grid { @apply grid grid-cols-1 gap-4 xl:grid-cols-2; }
+  .cp-compare-chart { @apply min-w-0; }
+  .cp-compare-chart h3 { @apply text-[length:var(--text-cp-md)] leading-[length:var(--leading-cp-md)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))]; }
+  @media (max-width: 639px) { .cp-compare-host-list { @apply grid-cols-1; } .cp-compare-chart-grid { @apply grid-cols-1; } }
+}

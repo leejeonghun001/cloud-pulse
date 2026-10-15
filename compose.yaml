@@ -1,0 +1,39 @@
+services:
+  hub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cloud-pulse-hub-local:dev
+    environment:
+      CP_AGENT_TOKEN: ${CP_AGENT_TOKEN:?Set CP_AGENT_TOKEN in .env}
+      CP_LISTEN: ${CP_LISTEN:?Set CP_LISTEN in .env}
+      CP_DATA_DIR: ${CP_DATA_DIR:?Set CP_DATA_DIR in .env}
+      CP_ALLOWED_CIDRS: ${CP_ALLOWED_CIDRS:?Set CP_ALLOWED_CIDRS in .env}
+      CP_UPDATE_CHECK: ${CP_UPDATE_CHECK:?Set CP_UPDATE_CHECK in .env}
+      CP_BILLING: ${CP_BILLING:?Set CP_BILLING in .env}
+    ports:
+      - target: 8090
+        published: "18091"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    volumes:
+      - cloud-pulse-data:/data
+    networks:
+      - specimen
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  cloud-pulse-data:
+
+networks:
+  specimen:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.77.0/24

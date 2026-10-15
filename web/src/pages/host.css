@@ -8,24 +8,130 @@
   /* -------------------------------------------------------------- */
 
   .cp-host-detail-header {
-    @apply gap-3;
+    @apply gap-5;
   }
+
+  .cp-detail-breadcrumb {
+    @apply flex items-center gap-2 min-h-6 -mb-3 text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))];
+  }
+  .cp-detail-breadcrumb a { @apply text-[rgb(var(--link))] hover:underline; }
+  .cp-detail-breadcrumb-current { @apply min-w-0 truncate text-[rgb(var(--text))]; }
+  .cp-detail-breadcrumb-separator { @apply text-[rgb(var(--muted))]; }
 
   .cp-host-detail-top {
     @apply flex flex-wrap items-start justify-between gap-3;
   }
 
   .cp-host-detail-title-group {
-    @apply flex items-center gap-2;
+    @apply flex items-start gap-3 min-w-0 flex-1;
+    flex-basis: 22rem;
   }
 
   .cp-host-detail-controls {
-    @apply flex items-center gap-2 flex-wrap;
+    @apply flex items-end gap-2 flex-wrap;
   }
 
   .cp-host-detail-controls .cp-field {
     @apply w-40;
   }
+
+  .cp-detail-host-mark {
+    @apply flex items-center justify-center h-11 w-11 shrink-0 rounded-[var(--radius-cp-sm)] bg-[rgb(var(--surface-sunken))] text-[rgb(var(--muted))];
+  }
+  .cp-detail-host-mark .cp-icon { @apply w-5 h-5; }
+  .cp-detail-title-copy { @apply flex flex-col gap-2 min-w-0; }
+  @media (max-width: 639px) {
+    /* Put the mark above the copy instead of taking 56px from the hostname. */
+    .cp-host-detail-title-group { @apply flex-col gap-2 w-full; flex-basis: 100%; }
+    .cp-detail-title-copy { @apply w-full; }
+  }
+  .cp-detail-title-copy .cp-page-title { @apply break-keep; overflow-wrap: anywhere; }
+  .cp-detail-identity-badges { @apply flex flex-wrap items-center gap-2; }
+  .cp-detail-update-link {
+    @apply inline-flex items-center min-h-6 text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] font-[weight:var(--weight-cp-medium)] text-[rgb(var(--link))] hover:underline border-0 bg-transparent cursor-pointer text-left;
+    overflow-wrap: anywhere;
+  }
+  .cp-detail-last-seen {
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))];
+  }
+  .cp-detail-meta {
+    @apply grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-7 gap-x-4 gap-y-3 border-t border-[rgb(var(--border))] pt-4;
+  }
+  .cp-detail-meta-pair { @apply min-w-0 flex flex-col gap-1; }
+  .cp-detail-meta-pair dt {
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))];
+  }
+  .cp-detail-meta-pair dd {
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--text))];
+    overflow-wrap: anywhere;
+  }
+  .cp-detail-meta-processor { @apply xl:col-span-2; }
+  .cp-detail-resource-section { @apply flex flex-col gap-3; }
+  .cp-detail-section-head { @apply flex flex-wrap items-center justify-between gap-2; }
+  .cp-detail-section-title {
+    @apply inline-flex flex-wrap items-center gap-2 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-medium)] text-[rgb(var(--text))];
+    overflow-wrap: anywhere;
+  }
+  .cp-detail-resources { @apply grid grid-cols-2 lg:grid-cols-4 gap-3; }
+  .cp-detail-resource {
+    @apply min-w-0 flex flex-col gap-2 rounded-[var(--radius-cp-sm)] bg-[rgb(var(--surface-sunken))] p-3;
+  }
+  .cp-detail-resource h3 {
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] font-[weight:var(--weight-cp-medium)] text-[rgb(var(--muted))];
+    overflow-wrap: anywhere;
+  }
+  .cp-detail-resource-value {
+    @apply text-[length:var(--text-cp-2xl)] leading-[length:var(--leading-cp-tight)] font-[weight:var(--weight-cp-semibold)] tracking-[length:var(--tracking-cp-tight)] text-[rgb(var(--text))] tabular-nums;
+  }
+  .cp-detail-resource-description {
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))] tabular-nums;
+    overflow-wrap: anywhere;
+  }
+  .cp-detail-resource > .cp-bar,
+  .cp-detail-resource > .cp-detail-empty-track { margin-top: auto; }
+  .cp-detail-resource .cp-bar-text,
+  .cp-detail-traffic-direction .cp-bar-text { @apply hidden; }
+  .cp-detail-empty-track { flex: none; height: var(--size-cp-track); }
+  .cp-detail-network-reading { @apply flex flex-col gap-0.5 min-w-0; }
+  .cp-detail-network-reading span {
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))];
+  }
+  .cp-detail-network-reading strong {
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))] tabular-nums;
+    overflow-wrap: anywhere;
+  }
+  .cp-detail-history { @apply flex flex-col gap-3 min-w-0; }
+  .cp-detail-history-notice:empty,
+  .cp-detail-history-range:empty { display: none; }
+  .cp-detail-traffic-grid { @apply grid grid-cols-1 sm:grid-cols-2 gap-4; }
+  .cp-detail-traffic-direction {
+    @apply flex flex-col gap-2.5 min-w-0 rounded-[var(--radius-cp-sm)] bg-[rgb(var(--surface-sunken))] p-3;
+  }
+  .cp-detail-traffic-value { @apply flex flex-wrap items-baseline gap-x-2 gap-y-1 tabular-nums; }
+  .cp-detail-traffic-value strong {
+    @apply text-[length:var(--text-cp-xl)] leading-[length:var(--leading-cp-xl)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))];
+  }
+  .cp-detail-traffic-value span {
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--muted))];
+  }
+  .cp-detail-bar-neutral { background-color: rgb(var(--muted)); }
+  .cp-detail-agent-panel { @apply min-w-0; }
+  .cp-detail-agent-target { scroll-margin-top: 6rem; }
+  .cp-detail-inventory-notice:empty { display: none; }
+  .cp-detail-services .cp-services-section + .cp-services-section { @apply pt-4 border-t border-[rgb(var(--border))]; }
+  .cp-detail-services .cp-services-status-box > .cp-icon { @apply w-5 h-5 shrink-0; }
+  .cp-detail-services .cp-services-status-box > div { @apply min-w-0; }
+  .cp-detail-services .cp-table-wrap { @apply max-w-full; }
+  .cp-detail-services .cp-table { @apply min-w-[36rem]; }
+  /* Docker's seven columns need room; scroll rather than fragmenting short
+     labels or squeezing image names into character-wide columns on tablets. */
+  .cp-detail-services .cp-detail-container-table { min-width: 56rem; }
+  .cp-detail-services .cp-table td { @apply align-top; overflow-wrap: anywhere; max-width: 18rem; }
+  .cp-detail-services .cp-table td .cp-chip { white-space: nowrap; overflow-wrap: normal; }
+  .cp-detail-services .cp-table .cp-detail-short-cell,
+  .cp-detail-services .cp-table th { white-space: nowrap; overflow-wrap: normal; }
+  .cp-detail-disks .cp-table { @apply min-w-[36rem]; }
+  .cp-detail-disks .cp-table td { @apply whitespace-nowrap; }
 
   .cp-layout-toggle {
     @apply shrink-0;
@@ -36,11 +142,11 @@
   }
 
   .cp-host-detail-badge {
-    @apply inline-flex items-center gap-1.5 text-sm text-[rgb(var(--muted))];
+    @apply inline-flex items-center gap-1.5 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--muted))];
   }
 
   .cp-host-detail-badge-status {
-    @apply text-[rgb(var(--text))] font-medium;
+    @apply text-[rgb(var(--text))] font-[weight:var(--weight-cp-medium)];
   }
 
   .cp-host-detail-badge-divider {
@@ -60,11 +166,11 @@
   }
 
   .cp-chart-card {
-    @apply gap-2;
+    @apply gap-3 min-w-0;
   }
 
   .cp-chart-card-head h2 {
-    @apply text-base font-semibold text-[rgb(var(--text))];
+    @apply text-[length:var(--text-cp-md)] leading-[length:var(--leading-cp-md)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))];
   }
 
   .cp-chart-card-head {
@@ -72,8 +178,17 @@
   }
 
   .cp-chart-wrap {
-    @apply w-full;
+    @apply w-full min-w-0;
   }
+
+  .cp-detail-chart-summary {
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))] border-t border-[rgb(var(--border))] pt-2 tabular-nums;
+    overflow-wrap: anywhere;
+  }
+  .cp-detail-chart-empty {
+    @apply flex flex-col items-center justify-center gap-3 min-h-[14rem] text-center rounded-[var(--radius-cp-md)] bg-[rgb(var(--surface-sunken)/0.45)] text-[rgb(var(--muted))] text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] p-4;
+  }
+  .cp-detail-chart-empty .cp-icon { @apply w-6 h-6; }
 
   .cp-uplot {
     @apply w-full;
@@ -84,7 +199,10 @@
      readable without needing to fight uPlot's default stylesheet. */
   .cp-uplot .u-legend {
     color: rgb(var(--muted));
-    font-size: 0.75rem;
+    font-size: var(--text-cp-xs);
+    line-height: var(--leading-cp-xs);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "cv11" 1, "tnum" 1;
   }
 
   /* -------------------------------------------------------------- */
@@ -94,6 +212,33 @@
   .cp-disks-host .cp-card {
     @apply gap-3;
   }
+
+  .cp-detail-agent-host { @apply min-w-0; }
+  .cp-detail-agent-panel {
+    @apply flex flex-row flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius-cp-sm)] bg-[rgb(var(--surface-sunken))] p-3;
+  }
+  .cp-detail-agent-panel h2 { @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))]; }
+  .cp-detail-agent-panel > p:not(.cp-agent-update-legacy-note) { @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))]; }
+  .cp-detail-agent-panel .cp-code-block { @apply m-0 min-w-0 flex-1 py-1.5 px-2 text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)]; }
+  .cp-detail-agent-panel .cp-code-block code { @apply whitespace-pre-wrap; overflow-wrap: break-word; }
+  /* Keep the command readable on phones: it takes its own row (with the
+     copy button) instead of shrinking into a sliver beside the text. */
+  .cp-detail-agent-panel .cp-code-block { flex-basis: 14rem; }
+  @media (max-width: 639px) {
+    .cp-detail-agent-panel > h2,
+    .cp-detail-agent-panel > p:not(.cp-agent-update-legacy-note) { @apply w-full; }
+  }
+  .cp-detail-agent-copy { @apply shrink-0 min-h-10 min-w-10; }
+  .cp-detail-agent-panel .cp-agent-update-legacy-note { @apply w-full mt-0; }
+
+  .cp-detail-activity-card { @apply gap-4; }
+  .cp-detail-activity-card .cp-activity-timeline { @apply gap-4; }
+
+  .cp-detail-compact-empty {
+    @apply flex items-center gap-2 rounded-[var(--radius-cp-md)] bg-[rgb(var(--surface-sunken))] px-3 py-2;
+  }
+  .cp-detail-compact-empty > .cp-icon { @apply h-4 w-4 shrink-0 text-[rgb(var(--muted))]; }
+  .cp-detail-compact-empty p { @apply m-0; }
 
   /* -------------------------------------------------------------- */
   /* Range row (legacy button-group fallback, unused by the redesign

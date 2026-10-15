@@ -9,46 +9,35 @@
   /* -------------------------------------------------------------- */
 
   .cp-stat-cards {
-    @apply grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-7;
+    @apply grid gap-3;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-rows: 1fr;
+  }
+  /* An odd number of KPI tiles gets a balanced final row on the two-column
+     mobile layout, rather than leaving a narrow orphan tile. */
+  .cp-stat-cards-odd > :last-child { grid-column: 1 / -1; }
+  @media (min-width: 40rem) {
+    .cp-stat-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
+  @media (min-width: 64rem) {
+    /* Four columns keep seven KPI labels to two readable lines at desktop
+       widths (4 + 3), without changing the equal-width tile rhythm. */
+    .cp-stat-cards { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .cp-stat-cards-odd > :last-child { grid-column: auto; }
   }
 
-  .cp-stat-card {
-    @apply flex items-center gap-3 rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-3.5 shadow-sm;
+  .cp-overview-page-header { @apply flex flex-col gap-1; }
+  .cp-overview-title-line { @apply flex flex-wrap items-center gap-2.5; }
+  .cp-overview-live-status {
+    @apply inline-flex items-center gap-1.5 rounded-[var(--radius-cp-full)] border border-[rgb(var(--status-ok)/0.25)] bg-[rgb(var(--status-ok)/0.1)] px-2 py-1 text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] font-[weight:var(--weight-cp-medium)] text-[rgb(var(--status-ok-fg))] whitespace-nowrap;
+  }
+  .cp-overview-live-dot {
+    width: calc(var(--size-cp-dot) * 0.7);
+    height: calc(var(--size-cp-dot) * 0.7);
+    @apply shrink-0 rounded-[var(--radius-cp-full)] bg-cp-ok;
   }
 
-  .cp-stat-card-icon {
-    @apply flex items-center justify-center h-9 w-9 rounded-lg bg-[rgb(var(--muted-surface))] text-[rgb(var(--muted))] shrink-0;
-  }
-
-  .cp-stat-card-icon .cp-icon {
-    @apply h-[18px] w-[18px];
-  }
-
-  .cp-stat-card-ok .cp-stat-card-icon {
-    @apply bg-cp-ok/15 text-emerald-600 dark:text-emerald-400;
-  }
-
-  .cp-stat-card-critical .cp-stat-card-icon {
-    @apply bg-cp-exceeded/15 text-red-600 dark:text-red-400;
-  }
-
-  .cp-stat-card-warning .cp-stat-card-icon {
-    @apply bg-cp-warning/15 text-amber-600 dark:text-amber-400;
-  }
-
-  .cp-stat-card-text {
-    @apply flex flex-col min-w-0;
-  }
-
-  .cp-stat-card-value {
-    @apply text-lg font-semibold text-[rgb(var(--text))] tabular-nums leading-tight whitespace-nowrap;
-  }
-
-  /* Wrap rather than truncate: Korean labels ("전체 송신 (월간)") are
-     wider than the English ones at a 360px viewport. */
-  .cp-stat-card-label {
-    @apply text-xs text-[rgb(var(--muted))] break-keep;
-  }
+  /* Card internals and status tones are owned by components/card.css. */
 
   /* -------------------------------------------------------------- */
   /* "All Systems" card header controls                              */
@@ -57,6 +46,72 @@
   .cp-systems-card {
     @apply gap-4;
   }
+
+  /* First-run guide: only a confirmed empty fleet uses this surface.
+     Enrollment commands and tokens belong to the explicitly opened dialog. */
+  .cp-onboarding {
+    @apply grid grid-cols-1 lg:grid-cols-2 gap-8 rounded-[var(--radius-cp-md)] bg-[rgb(var(--surface))] p-5 sm:p-8 min-w-0;
+  }
+  .cp-onboarding-intro { @apply flex flex-col items-start gap-4 min-w-0; }
+  .cp-onboarding-mark {
+    @apply flex items-center justify-center h-12 w-12 rounded-[var(--radius-cp-lg)] border border-[rgb(var(--accent)/0.2)] bg-[rgb(var(--accent)/0.1)] text-[rgb(var(--link))];
+  }
+  .cp-onboarding-mark .cp-icon { @apply h-6 w-6; }
+  .cp-onboarding-title {
+    @apply text-[length:var(--text-cp-2xl)] leading-[length:var(--leading-cp-2xl)] font-[weight:var(--weight-cp-semibold)] tracking-[length:var(--tracking-cp-tight)] text-[rgb(var(--text))] break-keep;
+    overflow-wrap: anywhere;
+  }
+  .cp-onboarding-description {
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-normal)] text-[rgb(var(--muted))] max-w-md break-keep;
+    overflow-wrap: anywhere;
+  }
+  .cp-onboarding-actions { @apply flex flex-wrap items-center gap-x-5 gap-y-3 pt-1; }
+  .cp-onboarding-actions .cp-btn { @apply min-h-10 whitespace-normal text-left; }
+  .cp-onboarding-intro > p:empty { display: none; }
+  .cp-onboarding-steps { @apply flex flex-col gap-5 list-none p-0 m-0 lg:pt-1; }
+  .cp-onboarding-step { @apply flex items-start gap-3 min-w-0; }
+  .cp-onboarding-step > div { @apply flex flex-col gap-1.5 min-w-0; }
+  .cp-onboarding-step-number {
+    @apply flex items-center justify-center shrink-0 h-7 w-7 border border-[rgb(var(--border-strong))] rounded-[var(--radius-cp-full)] bg-[rgb(var(--surface-raised))] text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] font-[weight:var(--weight-cp-medium)] text-[rgb(var(--text))] tabular-nums;
+  }
+  .cp-onboarding-step h4 {
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))] break-keep;
+    overflow-wrap: anywhere;
+  }
+  .cp-onboarding-step p {
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-normal)] text-[rgb(var(--muted))] break-keep;
+    overflow-wrap: anywhere;
+  }
+  .cp-overview-load-state { @apply flex flex-col items-center justify-center gap-4 min-h-56 p-6 text-center; }
+  .cp-overview-load-state > .cp-icon { @apply h-7 w-7 text-[rgb(var(--muted))]; }
+  .cp-overview-load-state .cp-loading-state { @apply w-full; }
+  .cp-optional-next-steps { @apply flex flex-col gap-2 border-t border-[rgb(var(--border))] pt-5; }
+  .cp-optional-next-steps h3 { @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))]; }
+  .cp-optional-next-steps ul { @apply flex flex-col; }
+  .cp-optional-next-steps li { @apply flex items-center gap-2 border-b border-[rgb(var(--border))] py-2.5 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)]; }
+  .cp-optional-next-steps li:last-child { @apply border-b-0; }
+  .cp-optional-next-steps .cp-icon { @apply h-4 w-4 text-[rgb(var(--muted))]; }
+  .cp-optional-next-steps a { @apply text-[rgb(var(--link))] underline underline-offset-2; }
+
+  /* Shell-owned enrollment dialog; scoped geometry leaves other dialogs alone. */
+  .cp-add-agent-dialog { @apply max-w-2xl; }
+  .cp-add-agent-dialog .cp-dialog-desc {
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-normal)] text-[rgb(var(--muted))] mt-2 mb-5;
+  }
+  .cp-add-agent-dialog .cp-dialog-body { @apply flex flex-col gap-4 min-w-0; }
+  .cp-add-agent-dialog .cp-btn-group { @apply flex-wrap; }
+  .cp-add-agent-dialog .cp-btn-group .cp-btn { @apply whitespace-normal; }
+  .cp-install-panel { @apply flex flex-col gap-3 rounded-[var(--radius-cp-md)] border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] p-4 min-w-0; }
+  .cp-install-terminal {
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-normal)] text-[rgb(var(--text))] break-keep;
+    overflow-wrap: anywhere;
+  }
+  .cp-install-command-actions { @apply flex flex-wrap gap-2; }
+  .cp-install-command-actions .cp-btn { @apply whitespace-normal min-h-9; }
+  .cp-install-panel > p:empty { display: none; }
+  .cp-install-report-note { @apply flex items-start gap-3 border-t border-[rgb(var(--border))] pt-4; }
+  .cp-install-report-note > .cp-icon { @apply h-5 w-5 shrink-0 text-[rgb(var(--muted))] mt-0.5; }
+  .cp-install-report-note > div { @apply flex flex-col gap-1.5 min-w-0; }
 
   .cp-systems-head {
     @apply flex flex-wrap items-start justify-between gap-3;
@@ -87,11 +142,11 @@
   }
 
   .cp-dropdown-heading {
-    @apply text-[11px] font-medium uppercase tracking-wide text-[rgb(var(--muted))] px-2.5 pt-1 pb-1.5;
+    @apply text-[length:var(--text-cp-chip)] leading-[length:var(--leading-cp-chip)] font-[weight:var(--weight-cp-medium)] normal-case tracking-[length:var(--tracking-cp-normal)] text-[rgb(var(--muted))] px-2.5 pt-1 pb-1.5;
   }
 
   .cp-dropdown-checkbox-item {
-    @apply flex items-center gap-2 rounded-md px-2.5 py-1.5 text-sm text-[rgb(var(--text))] hover:bg-[rgb(var(--muted-surface))] cursor-pointer;
+    @apply flex items-center gap-2 rounded-[var(--radius-cp-sm)] px-2.5 py-1.5 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--text))] hover:bg-[rgb(var(--muted-surface))] cursor-pointer;
   }
 
   .cp-dropdown-checkbox-item input[type="checkbox"] {
@@ -103,11 +158,24 @@
   /* -------------------------------------------------------------- */
 
   .cp-systems-table-wrap {
-    @apply hidden md:block overflow-x-auto;
+    @apply hidden md:block overflow-x-auto relative;
+    scrollbar-gutter: stable both-edges;
   }
 
   .cp-systems-table {
-    @apply min-w-[64rem];
+    @apply min-w-[72rem];
+  }
+
+  .cp-systems-table th { @apply normal-case tracking-[length:var(--tracking-cp-normal)]; }
+  .cp-systems-table th:first-child,
+  .cp-systems-table td:first-child { @apply sticky left-0; }
+  .cp-systems-table th:first-child { z-index: 3; }
+  .cp-systems-table td:first-child { z-index: 1; background-color: rgb(var(--surface)); }
+  /* Edge fade only while more columns are hidden to the right; the
+     state attribute is maintained by overview.js (syncTableOverflow). */
+  .cp-systems-table-wrap[data-overflow-right="true"] {
+    -webkit-mask-image: linear-gradient(90deg, rgb(var(--surface-overlay)) calc(100% - 2.5rem), rgb(var(--surface-overlay) / 0));
+    mask-image: linear-gradient(90deg, rgb(var(--surface-overlay)) calc(100% - 2.5rem), rgb(var(--surface-overlay) / 0));
   }
 
   .cp-systems-table th button {
@@ -120,11 +188,18 @@
 
   .cp-systems-row {
     @apply hover:bg-[rgb(var(--muted-surface))] transition-colors;
+    transition-duration: var(--motion-duration-cp-fast);
+    transition-timing-function: var(--motion-ease);
   }
 
   .cp-systems-row-offline {
-    @apply opacity-60;
+    background-color: rgb(var(--surface-sunken));
   }
+
+  /* The sticky cell must remain opaque while matching its row state; otherwise
+     scrolled columns show through and make hover/offline rows look split. */
+  .cp-systems-row:hover td:first-child { background-color: rgb(var(--muted-surface)); }
+  .cp-systems-row-offline td:first-child { background-color: rgb(var(--surface-sunken)); }
 
   .cp-systems-system-cell {
     @apply flex items-center gap-2 flex-wrap;
@@ -135,7 +210,7 @@
   }
 
   .cp-systems-system-name {
-    @apply font-medium whitespace-nowrap;
+    @apply font-[weight:var(--weight-cp-medium)] whitespace-nowrap;
   }
 
   .cp-systems-metric-cell {
@@ -151,7 +226,7 @@
   }
 
   .cp-systems-net-cell {
-    @apply flex flex-col text-xs whitespace-nowrap;
+    @apply flex flex-col text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] whitespace-nowrap;
   }
 
   .cp-systems-egress-cell {
@@ -174,25 +249,149 @@
     @apply flex items-center gap-1.5 whitespace-nowrap;
   }
 
-  .cp-dot-warning {
-    @apply bg-cp-warning;
-  }
-
   /* -------------------------------------------------------------- */
   /* Grid view (host cards)                                          */
   /* -------------------------------------------------------------- */
 
   .cp-host-grid {
-    @apply grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3;
+    display: grid;
+    grid-template-columns: repeat(1, minmax(0, 1fr));
+    gap: 1rem;
+    align-items: stretch;
+  }
+  @media (min-width: 56.25rem) { .cp-host-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (min-width: 75rem) { .cp-host-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+  .cp-host-grid-sort { @apply flex items-center gap-1.5; }
+  .cp-host-grid-sort .cp-select { @apply w-36; }
+
+  /* Only the overview grid opts into this composition. Legacy host cards,
+     mobile table summaries and settings callers retain their own density. */
+  .cp-host-grid-card {
+    @apply min-w-0 gap-2.5 p-3.5 sm:p-3.5;
+    /* The All Systems card is the section surface; its host cards need one
+       quiet raised step to remain individually scannable in either theme. */
+    background-color: rgb(var(--surface-raised));
   }
 
+  .cp-host-card-topline { @apply flex items-start justify-between gap-2; }
+  .cp-host-card-badges { @apply flex flex-wrap items-center gap-1.5 min-w-0; }
+  .cp-host-card-update {
+    @apply inline-flex items-center justify-center h-6 w-6 rounded-[var(--radius-cp-full)] border border-[rgb(var(--status-warning)/0.25)] bg-[rgb(var(--status-warning)/0.1)] text-[rgb(var(--status-warning-fg))] shrink-0;
+  }
+  .cp-host-card-update .cp-icon { @apply h-3.5 w-3.5; }
+  .cp-host-card-status { @apply shrink-0; }
+  .cp-host-card-identity { @apply flex items-start gap-2.5; }
+  .cp-host-card-mark {
+    @apply flex items-center justify-center shrink-0 h-9 w-9 rounded-[var(--radius-cp-sm)] text-[rgb(var(--muted))] bg-[rgb(var(--surface-sunken))];
+  }
+  .cp-host-card-mark .cp-icon { @apply h-[18px] w-[18px]; }
+  .cp-host-card-title-group { @apply flex flex-col gap-1 min-w-0; }
+  .cp-host-grid-name {
+    @apply text-[length:var(--text-cp-md)] leading-[length:var(--leading-cp-tight)] font-[weight:var(--weight-cp-semibold)] tracking-[length:var(--tracking-cp-tight)] text-[rgb(var(--text))] break-keep;
+    overflow-wrap: anywhere;
+  }
+  .cp-host-grid-card .cp-host-card-meta { overflow-wrap: anywhere; }
+  .cp-host-snapshot {
+    @apply flex flex-wrap justify-between gap-x-2 gap-y-0.5 text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))];
+  }
+  .cp-host-resources { @apply flex flex-col gap-1.5; }
+  .cp-host-resource {
+    @apply grid items-center gap-x-2 min-w-0;
+    grid-template-columns: 3.25rem 3.5rem minmax(0, 1fr);
+  }
+  .cp-host-resource-head {
+    display: contents;
+  }
+  .cp-host-resource-label {
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))] break-keep;
+    overflow-wrap: anywhere;
+  }
+  .cp-host-resource-value {
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] font-[weight:var(--weight-cp-medium)] text-[rgb(var(--text))] tabular-nums;
+  }
+  .cp-host-resource > .cp-bar,
+  .cp-host-resource > .cp-bar-track { margin-top: 0; padding-top: 0; }
+  /* Direct unknown tracks sit in vertical stacks, not a horizontal .cp-bar.
+     Keep their shared height instead of letting flex-1 stretch or collapse. */
+  .cp-host-resource > .cp-bar-track,
+  .cp-host-traffic-row > .cp-bar-track {
+    flex: none;
+    height: var(--size-cp-track);
+  }
+  .cp-host-resource .cp-bar-text,
+  .cp-host-traffic-row .cp-bar-text { @apply hidden; }
+  .cp-host-meta-row { @apply flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-[rgb(var(--border))] pt-2; }
+  .cp-host-network-item { @apply inline-flex items-center gap-1 min-w-0; }
+  .cp-host-network-label {
+    @apply inline-flex items-center gap-1 text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))];
+  }
+  .cp-host-network-label .cp-icon { @apply h-3 w-3 shrink-0; }
+  .cp-host-network-value {
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] font-[weight:var(--weight-cp-medium)] text-[rgb(var(--text))] tabular-nums;
+    overflow-wrap: anywhere;
+  }
+  .cp-host-runtime {
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))] tabular-nums;
+  }
+  /* Wide grids show the runtime summary as one divided scan line when it
+     fits; it still wraps (never overflows the card) for long readings. */
+  @media (min-width: 80rem) {
+    .cp-host-meta-row { flex-wrap: wrap; gap: 0.25rem 0; }
+    .cp-host-meta-row > * { flex: none; white-space: nowrap; }
+    .cp-host-meta-row > * + * {
+      border-inline-start: 1px solid rgb(var(--border));
+      margin-inline-start: 0.375rem;
+      padding-inline-start: 0.375rem;
+    }
+  }
+  .cp-host-card-traffic { @apply grid grid-cols-2 gap-3 border-t border-[rgb(var(--border))] pt-2; }
+  .cp-host-section-label {
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] font-[weight:var(--weight-cp-medium)] tracking-[length:var(--tracking-cp-normal)] text-[rgb(var(--muted))];
+    grid-column: span 2;
+  }
+  .cp-host-traffic-row { @apply flex flex-col gap-1 min-w-0; }
+  .cp-host-traffic-head { @apply flex flex-wrap items-center justify-between gap-1.5; }
+  .cp-host-traffic-label {
+    @apply flex flex-wrap items-center gap-1.5 text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))];
+  }
+  .cp-host-traffic-amount {
+    @apply flex flex-wrap items-baseline gap-x-1 gap-y-0.5 text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] font-[weight:var(--weight-cp-medium)] tabular-nums;
+  }
+  .cp-host-traffic-limit {
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] font-[weight:var(--weight-cp-regular)] text-[rgb(var(--muted))];
+  }
+  .cp-host-bar-neutral { background-color: rgb(var(--muted)); }
+  .cp-host-card-footer {
+    @apply flex flex-wrap items-center justify-between gap-2 border-t border-[rgb(var(--border))] pt-2;
+    margin-top: auto;
+  }
+  .cp-host-card-last-seen {
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))];
+    overflow-wrap: anywhere;
+  }
+  .cp-host-card-open {
+    @apply inline-flex items-center gap-1 text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] font-[weight:var(--weight-cp-medium)] text-[rgb(var(--link))];
+  }
+  .cp-host-card-open .cp-icon { @apply h-3.5 w-3.5; }
+  .cp-host-grid-card:focus-visible { outline-color: rgb(var(--ring)); }
+
   .cp-host-card {
-    @apply no-underline text-[rgb(var(--text))] hover:border-cp-accent/60 transition-colors;
+    @apply no-underline text-[rgb(var(--text))] transition-[background-color];
+    transition-duration: var(--motion-duration-cp-fast);
+    transition-timing-function: var(--motion-ease);
+  }
+
+  @media (hover: hover) {
+    .cp-host-card:hover {
+      background-color: rgb(var(--surface-raised));
+    }
   }
 
   .cp-host-card-offline {
-    @apply opacity-70;
+    box-shadow: var(--elevation-cp-0);
   }
+  .cp-host-grid-card.cp-host-card-offline { background-color: rgb(var(--surface-sunken) / 0.75); }
 
   .cp-host-card-header {
     @apply flex flex-wrap items-center gap-x-2 gap-y-1.5;
@@ -203,15 +402,16 @@
   }
 
   .cp-host-card-name {
-    @apply font-semibold flex-1 min-w-0 truncate;
+    @apply font-[weight:var(--weight-cp-semibold)] flex-1 min-w-0 truncate;
   }
 
   .cp-host-card-meta {
-    @apply text-xs text-[rgb(var(--muted))];
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))];
   }
 
   .cp-host-card-offline-note {
-    @apply text-xs text-red-600 dark:text-red-400;
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)];
+    color: rgb(var(--status-exceeded-fg));
   }
 
   .cp-metric-row {
@@ -223,19 +423,19 @@
   }
 
   .cp-metric-label {
-    @apply text-xs text-[rgb(var(--muted))];
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))];
   }
 
   .cp-metric-value {
-    @apply text-xs text-[rgb(var(--text))] tabular-nums;
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--text))] tabular-nums;
   }
 
   .cp-host-card-net {
-    @apply flex items-center gap-3 text-xs text-[rgb(var(--muted))] tabular-nums;
+    @apply flex items-center gap-3 text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))] tabular-nums;
   }
 
   .cp-host-card-uptime {
-    @apply text-xs text-[rgb(var(--muted))];
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))];
   }
 
   .cp-egress-mini {
@@ -251,11 +451,11 @@
   }
 
   .cp-egress-unlimited {
-    @apply text-xs text-[rgb(var(--muted))];
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))];
   }
 
   .cp-egress-projection {
-    @apply text-xs text-[rgb(var(--muted))];
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))];
   }
 
   /* -------------------------------------------------------------- */
@@ -267,11 +467,17 @@
   }
 
   .cp-systems-mobile-card {
-    @apply flex flex-col gap-2 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] p-3 no-underline text-[rgb(var(--text))];
+    @apply flex flex-col gap-2 rounded-[var(--radius-cp-md)] bg-[rgb(var(--surface-raised))] p-3 no-underline text-[rgb(var(--text))] transition-[background-color];
+    transition-duration: var(--motion-duration-cp-fast);
+    transition-timing-function: var(--motion-ease);
+  }
+
+  @media (hover: hover) {
+    .cp-systems-mobile-card:hover { background-color: rgb(var(--surface)); }
   }
 
   .cp-systems-mobile-metrics {
-    @apply flex items-center gap-3 text-xs text-[rgb(var(--muted))] tabular-nums;
+    @apply flex items-center gap-3 text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))] tabular-nums;
   }
 
   /* -------------------------------------------------------------- */
@@ -285,19 +491,19 @@
   /* Host-name links in monthly-traffic rows: WCAG 2.2 2.5.8 minimum
      24x24 target (these are standalone links, not inline text). */
   .cp-egress-row-head a {
-    @apply inline-flex items-center min-h-6;
+    @apply inline-flex items-center min-h-6 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-medium)] text-[rgb(var(--link))] hover:underline;
   }
 
   .cp-segmented {
-    @apply inline-flex rounded-lg border border-[rgb(var(--border))] p-0.5 bg-[rgb(var(--muted-surface))];
+    @apply inline-flex rounded-[var(--radius-cp-md)] border border-[rgb(var(--border))] p-0.5 bg-[rgb(var(--muted-surface))];
   }
 
   .cp-segmented-btn {
-    @apply border-0 bg-transparent shadow-none rounded-md px-3 py-1;
+    @apply border-0 bg-transparent shadow-[var(--elevation-cp-0)] rounded-[var(--radius-cp-sm)] px-3 py-1;
   }
 
   .cp-segmented-btn[aria-pressed="true"] {
-    @apply bg-[rgb(var(--surface-raised))] shadow-sm;
+    @apply bg-[rgb(var(--surface-raised))] shadow-[var(--elevation-cp-1)];
   }
 
   .cp-month-controls {
@@ -313,7 +519,7 @@
   }
 
   .cp-egress-row {
-    @apply rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] p-3 flex flex-col gap-2;
+    @apply rounded-[var(--radius-cp-md)] border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] p-3 flex flex-col gap-2;
   }
 
   .cp-egress-row-head {
@@ -333,24 +539,14 @@
   }
 
   .cp-bucket-card-name {
-    @apply font-semibold truncate flex-1;
+    @apply font-[weight:var(--weight-cp-semibold)] truncate flex-1;
   }
 
   .cp-bucket-stats-grid {
     @apply grid grid-cols-2 gap-3;
   }
 
-  .cp-stat-pair {
-    @apply flex flex-col;
-  }
-
-  .cp-stat-value {
-    @apply text-sm font-semibold text-[rgb(var(--text))] tabular-nums;
-  }
-
-  .cp-stat-label {
-    @apply text-xs text-[rgb(var(--muted))];
-  }
+  /* Stat pairs and sparkline frames are owned by components/meter.css. */
 
   .cp-sparkline-wrap {
     @apply h-10 w-full;
@@ -361,7 +557,7 @@
   }
 
   .cp-free-tier h4 {
-    @apply text-xs font-medium text-[rgb(var(--muted))] uppercase tracking-wide;
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] font-[weight:var(--weight-cp-medium)] text-[rgb(var(--muted))] uppercase tracking-[length:var(--tracking-cp-wide)];
   }
 
   .cp-collector-status {
@@ -369,7 +565,7 @@
   }
 
   .cp-collector-status h3 {
-    @apply text-sm font-semibold text-[rgb(var(--text))];
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))];
   }
 
   .cp-collector-list {
@@ -377,18 +573,39 @@
   }
 
   .cp-collector-item {
-    @apply flex items-center gap-2 flex-wrap text-sm;
+    @apply flex items-center gap-2 flex-wrap text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)];
   }
 
   .cp-collector-name {
-    @apply font-medium;
+    @apply font-[weight:var(--weight-cp-medium)];
   }
 
   .cp-collector-error {
-    @apply text-xs text-red-600 dark:text-red-400;
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)];
+    color: rgb(var(--status-exceeded-fg));
   }
 
   .cp-summary-host {
     @apply hidden;
+  }
+}
+
+/* Facet chips (status + provider) under the All Systems header. Tonal,
+   borderless: the active chip is a raised tone with full-contrast text. */
+@layer components {
+  .cp-facet-bar { @apply flex flex-wrap items-center gap-x-4 gap-y-2; }
+  .cp-facet-group { @apply flex flex-wrap items-center gap-1; }
+  .cp-facet-chip {
+    @apply inline-flex items-center gap-1.5 min-h-7 rounded-[var(--radius-cp-sm)] px-2.5 text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] font-[weight:var(--weight-cp-medium)] text-[rgb(var(--muted))] bg-transparent cursor-pointer transition-colors hover:text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-sunken))];
+    transition-duration: var(--motion-duration-cp-fast);
+  }
+  .cp-facet-chip-active {
+    @apply text-[rgb(var(--text))] bg-[rgb(var(--surface-sunken))];
+    box-shadow: inset 0 0 0 1px rgb(var(--border-strong) / 0.6);
+  }
+  .cp-facet-count { @apply tabular-nums text-[rgb(var(--muted-subtle))]; }
+  .cp-facet-chip-active .cp-facet-count { @apply text-[rgb(var(--muted))]; }
+  .cp-facet-clear {
+    @apply min-h-7 px-1 text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--link))] underline-offset-2 hover:underline cursor-pointer bg-transparent;
   }
 }

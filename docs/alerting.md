@@ -15,6 +15,14 @@ An `AlertRule` has:
   `egress_in_pct` | `host_down` | `storage_usage_pct` |
   `agent_outdated` | `update_batch_failed` (the last two are SPEC-v0.8
   §3-1's rollout alerts — see their own section below).
+- **Severity**: `warning` or `critical`. Omitted severity defaults to
+  `critical` for `host_down` and `update_batch_failed` and `warning` for
+  every other metric. Upgrading keeps what each rule was already delivered
+  as, except the seeded `Outbound traffic 95% (critical)` and
+  `Outbound traffic 100% (exceeded)` rules, which become `critical` to
+  match their names while those names are unchanged. An event
+  snapshots its rule severity when it fires, so later edits do not alter
+  alert history.
 - **Scope**: a specific host (or account, for `storage_usage_pct` — see
   [storage.md](storage.md#polling-and-alerting)), or `""` for "every
   host/account." `update_batch_failed` has no scope at all — it always
@@ -184,6 +192,8 @@ and `GET /api/v1/alerts/active` (any signed-in user). A validation
 failure on any rule/channel `POST`/`PUT` responds `400` with
 `APIError.details` — a `field -> message` map — so the Settings UI can
 highlight the offending form field directly.
+Rule `PUT` is a full replacement: omitting `severity` applies the same
+metric-based default as `POST` rather than preserving the prior value.
 
 ## Channel-failure fallback notification
 

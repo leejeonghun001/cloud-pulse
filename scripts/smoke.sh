@@ -747,6 +747,31 @@ if [ "$NEW_HOSTS_STATUS" != "200" ]; then
 fi
 pass "GET /api/v1/hosts with post-change session -> 200"
 
+# The rotation itself must show up in the audit log (actor/remote/entity
+# plus non-secret metadata), and the row must not carry either password
+# or the stored PBKDF2 hash — it is readable by every session and API
+# token holder.
+PW_AUDIT_JSON="$(curl -fsS -H "Authorization: Bearer ${NEW_SESSION_TOKEN}" \
+  "${HUB_BASE_URL}/api/v1/audit?entity_type=admin_password&limit=20")"
+echo "$PW_AUDIT_JSON" | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+entries = [e for e in doc.get('entries', []) if e.get('action') == 'auth.password_change']
+assert entries, f'no auth.password_change audit entry in {doc!r}'
+entry = entries[0]
+assert entry['actor'] == 'admin', f\"audit actor {entry['actor']!r} != 'admin'\"
+assert entry['remote'], 'audit entry has no remote address'
+assert not entry.get('before_json'), f\"unexpected before_json {entry.get('before_json')!r}\"
+after = json.loads(entry['after_json'])
+assert after.get('password_changed') is True, f\"password_changed {after.get('password_changed')!r} != True\"
+assert after.get('must_change_cleared') is True, f\"must_change_cleared {after.get('must_change_cleared')!r} != True\"
+assert isinstance(after.get('sessions_revoked'), int), 'missing sessions_revoked count'
+blob = json.dumps(doc)
+for secret in ('changeme', 'smoke-new-password-1', 'pbkdf2'):
+    assert secret not in blob, f'audit log leaked {secret!r}'
+"
+pass "GET /api/v1/audit records auth.password_change (actor=admin, no password/hash leaked)"
+
 # CP_UI_TOKEN bearer still works as a full-access, never-must-change
 # static API token, unaffected by the dashboard's session-based auth.
 UI_TOKEN_STATUS="$(curl -s -o /dev/null -w '%{http_code}' \

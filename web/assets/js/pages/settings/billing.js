@@ -43,9 +43,14 @@ const INTERVAL_API_COST_HINTS = {
  */
 export function mountBillingSection(container, { announce }) {
   const controller = new AbortController();
+  let generation = 0;
 
-  async function refresh() {
+  async function refresh(feedback) {
+    const current = ++generation;
     clearChildren(container);
+    const root = el("div", { class: "cp-billing-page", attrs: { "aria-busy": "true" } });
+    root.append(el("p", { class: "cp-muted", text: t("billing.loading"), attrs: { role: "status" } }));
+    container.append(root);
 
     let billing;
     let plans;
@@ -57,15 +62,26 @@ export function mountBillingSection(container, { announce }) {
         getDisplayCurrency(controller.signal),
       ]);
     } catch (err) {
-      if (err?.name === "AbortError") return;
-      container.append(errorBanner(describeError(err)));
+      if (err?.name === "AbortError" || controller.signal.aborted || current !== generation) return;
+      clearChildren(root);
+      root.setAttribute("aria-busy", "false");
+      root.append(errorBanner(t("billing.load_failed", { reason: describeError(err) })));
+      const retry = el("button", { class: "cp-btn cp-btn-secondary", text: t("billing.retry"), attrs: { type: "button" } });
+      retry.addEventListener("click", () => refresh());
+      root.append(retry);
       return;
     }
+    if (controller.signal.aborted || current !== generation) return;
+    clearChildren(root);
+    root.setAttribute("aria-busy", "false");
 
-    container.append(intervalCard({ billing, signal: controller.signal, announce, onChanged: refresh }));
-    container.append(currencyCard({ currency, signal: controller.signal, announce, onChanged: refresh }));
-    container.append(plansCard({ plans, signal: controller.signal, announce, onChanged: refresh }));
-    container.append(auditLogCard({ signal: controller.signal }));
+    const controls = el("div", { class: "cp-billing-controls" });
+    controls.append(intervalCard({ billing, signal: controller.signal, announce, onChanged: refresh, feedback }));
+    controls.append(currencyCard({ currency, signal: controller.signal, announce, onChanged: refresh, feedback }));
+    root.append(controls);
+    root.append(plansCard({ plans, signal: controller.signal, announce, onChanged: refresh }));
+    root.append(auditLogCard({ signal: controller.signal }));
+    if (feedback?.id) document.getElementById(feedback.id)?.focus();
   }
 
   function teardown() {
@@ -76,47 +92,63 @@ export function mountBillingSection(container, { announce }) {
 }
 
 /** intervalCard builds the provider status + polling interval card. */
-function intervalCard({ billing, signal, announce, onChanged }) {
-  const card = el("div", { class: "cp-card" });
-  card.append(el("h2", { class: "cp-card-title", text: t("billing.polling_title") }));
+function intervalCard({ billing, signal, announce, onChanged, feedback }) {
+  const card = el("section", { class: "cp-card cp-billing-card", attrs: { "aria-labelledby": "cp-billing-polling-heading" } });
+  card.append(el("h2", { class: "cp-card-title", text: t("billing.polling_title"), attrs: { id: "cp-billing-polling-heading" } }));
+  const form = el("form", { class: "cp-billing-form" });
 
   const currentInterval = secondsToInterval(billing.interval_seconds);
   const { node: intervalNode, select: intervalSelect } = selectField({
     id: "cp-billing-interval",
     label: t("billing.polling_interval_label"),
-    options: Object.entries(INTERVAL_API_COST_HINTS).map(([value, label]) => ({ value, label })),
+    options: Object.keys(INTERVAL_API_COST_HINTS).map((value) => ({ value, label: t(`billing.interval_option_${value}`) })),
     value: currentInterval,
   });
-  card.append(intervalNode);
+  form.append(intervalNode);
+  const intervalHint = el("p", { class: "cp-muted-small", attrs: { id: "cp-billing-interval-hint" } });
+  intervalSelect.setAttribute("aria-describedby", "cp-billing-interval-hint");
+  function syncIntervalHint() { intervalHint.textContent = INTERVAL_API_COST_HINTS[intervalSelect.value]; }
+  syncIntervalHint();
+  intervalSelect.addEventListener("change", syncIntervalHint);
+  form.append(intervalHint);
 
-  const status = el("p", { class: "cp-muted-small", attrs: { role: "status", "aria-live": "polite" } });
-  const saveBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: t("billing.save_interval") });
-  saveBtn.addEventListener("click", async () => {
+  const status = saveStatus(feedback?.id === "cp-billing-save-interval" ? feedback.message : "", "cp-billing-interval-status");
+  const saveBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "submit", id: "cp-billing-save-interval", "aria-describedby": "cp-billing-interval-status" }, text: t("billing.save_interval") });
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (saveBtn.disabled) return;
     saveBtn.disabled = true;
     status.textContent = t("billing.saving");
     try {
       await setBillingInterval(intervalSelect.value, signal);
       status.textContent = t("billing.saved_takes_effect");
       announce?.(t("billing.interval_set_to", { interval: intervalSelect.value }));
-      await onChanged();
+      await onChanged({ id: "cp-billing-save-interval", message: t("billing.saved_takes_effect") });
     } catch (err) {
       if (err?.name === "AbortError") return;
-      status.textContent = t("billing.save_failed", { reason: localizeApiError(err) });
+      status.textContent = t("billing.save_failed", { reason: describeError(err) });
     } finally {
       saveBtn.disabled = false;
     }
   });
-  card.append(saveBtn, status);
+  form.append(el("div", { class: "cp-billing-actions", children: [saveBtn, status] }));
+  card.append(form);
+  const providers = el("div", { class: "cp-billing-providers" });
+  providers.append(el("h3", { class: "cp-label", text: t("billing.provider_status_title") }));
 
   if ((billing.snapshots || []).length > 0) {
     const list = el("ul", { class: "cp-billing-provider-status-list", attrs: { role: "list" } });
     for (const snap of billing.snapshots) {
       const item = el("li", { class: "cp-billing-provider-status-row" });
-      item.append(el("strong", { text: snap.provider.toUpperCase() }));
-      item.append(el("span", { class: "cp-chip", text: providerStatusLabel(snap.status) }));
+      const statusHead = el("div", { class: "cp-billing-provider-head" });
+      statusHead.append(el("strong", { text: snap.provider.toUpperCase() }));
+      const tone = snap.status === "ok" ? "cp-chip-ok" : ["auth_failed", "permission_denied", "error"].includes(snap.status) ? "cp-chip-critical" : "cp-chip-other";
+      statusHead.append(el("span", { class: `cp-chip ${tone}`, text: providerStatusLabel(snap.status) }));
       if (snap.stale) {
-        item.append(el("span", { class: "cp-chip cp-chip-warning", text: t("costs.stale_data") }));
+        statusHead.append(el("span", { class: "cp-chip cp-chip-warning", text: t("costs.stale_data") }));
       }
+      item.append(statusHead);
+      if (snap.status_detail) item.append(el("span", { class: "cp-muted-small", text: snap.status_detail }));
       const vm = freshnessViewModel({
         status: snap.status,
         lastSuccessAt: snap.last_success_at || 0,
@@ -127,19 +159,22 @@ function intervalCard({ billing, signal, announce, onChanged }) {
       item.append(el("span", { class: "cp-muted-small", text: vm.text }));
       list.append(item);
     }
-    card.append(list);
+    providers.append(list);
   } else {
-    card.append(el("p", { class: "cp-muted-small", text: t("billing.billing_disabled_note") }));
+    providers.append(el("p", { class: "cp-muted-small", text: t("billing.billing_disabled_note") }));
   }
+  providers.append(el("p", { class: "cp-muted-small", text: t("billing.provider_setup_note") }));
+  card.append(providers);
 
   return card;
 }
 
 /** currencyCard builds the display currency settings card. */
-function currencyCard({ currency, signal, announce, onChanged }) {
-  const card = el("div", { class: "cp-card" });
-  card.append(el("h2", { class: "cp-card-title", text: t("billing.display_currency_title") }));
+function currencyCard({ currency, signal, announce, onChanged, feedback }) {
+  const card = el("section", { class: "cp-card cp-billing-card", attrs: { "aria-labelledby": "cp-billing-currency-heading" } });
+  card.append(el("h2", { class: "cp-card-title", text: t("billing.display_currency_title"), attrs: { id: "cp-billing-currency-heading" } }));
   card.append(el("p", { class: "cp-muted-small", text: t("billing.display_currency_description") }));
+  const form = el("form", { class: "cp-billing-form", attrs: { novalidate: "" } });
 
   const { node: currencyNode, select: currencySelect } = selectField({
     id: "cp-billing-currency",
@@ -150,27 +185,30 @@ function currencyCard({ currency, signal, announce, onChanged }) {
     ],
     value: currency.currency || "USD",
   });
-  card.append(currencyNode);
+  form.append(currencyNode);
 
   const rateField = el("div", { class: "cp-field" });
   rateField.append(el("label", { class: "cp-label", attrs: { for: "cp-billing-krw-rate" }, text: t("billing.krw_per_usd_label") }));
   const rateInput = /** @type {HTMLInputElement} */ (
     el("input", {
       class: "cp-input",
-      attrs: { id: "cp-billing-krw-rate", type: "text", inputmode: "decimal", value: currency.krw_per_usd ? String(currency.krw_per_usd) : "" },
+      attrs: { id: "cp-billing-krw-rate", name: "krw_per_usd", type: "text", inputmode: "decimal", value: currency.krw_per_usd ? String(currency.krw_per_usd) : "", "aria-describedby": "cp-billing-rate-hint cp-billing-currency-status" },
     })
   );
   rateField.append(rateInput);
-  card.append(rateField);
+  rateField.append(el("p", { class: "cp-muted-small", text: t("billing.manual_rate_note"), attrs: { id: "cp-billing-rate-hint" } }));
+  form.append(rateField);
 
   function syncRateVisibility() {
     rateField.hidden = currencySelect.value !== "KRW";
+    rateInput.required = !rateField.hidden;
+    rateInput.removeAttribute("aria-invalid");
   }
   syncRateVisibility();
   currencySelect.addEventListener("change", syncRateVisibility);
 
   if (currency.rate_updated_at) {
-    card.append(
+    rateField.append(
       el("p", {
         class: "cp-muted-small",
         text: t("billing.rate_last_entered", { date: new Date(currency.rate_updated_at * 1000).toISOString().slice(0, 10) }),
@@ -178,12 +216,17 @@ function currencyCard({ currency, signal, announce, onChanged }) {
     );
   }
 
-  const status = el("p", { class: "cp-muted-small", attrs: { role: "status", "aria-live": "polite" } });
-  const saveBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: t("billing.save_currency") });
-  saveBtn.addEventListener("click", async () => {
+  const status = saveStatus(feedback?.id === "cp-billing-save-currency" ? feedback.message : "", "cp-billing-currency-status");
+  const saveBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "submit", id: "cp-billing-save-currency", "aria-describedby": "cp-billing-currency-status" }, text: t("billing.save_currency") });
+  rateInput.addEventListener("input", () => rateInput.removeAttribute("aria-invalid"));
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (saveBtn.disabled) return;
     const rate = Number(rateInput.value);
     if (currencySelect.value === "KRW" && (!Number.isFinite(rate) || rate <= 0)) {
       status.textContent = t("billing.enter_positive_rate");
+      rateInput.setAttribute("aria-invalid", "true");
+      rateInput.focus();
       return;
     }
     saveBtn.disabled = true;
@@ -192,38 +235,48 @@ function currencyCard({ currency, signal, announce, onChanged }) {
       await setDisplayCurrency(currencySelect.value, rate, signal);
       status.textContent = t("billing.saved");
       announce?.(t("billing.currency_set_to", { currency: currencySelect.value }));
-      await onChanged();
+      await onChanged({ id: "cp-billing-save-currency", message: t("billing.saved") });
     } catch (err) {
       if (err?.name === "AbortError") return;
       if (err instanceof ApiError && err.code === "rate_required") {
         status.textContent = t("billing.krw_requires_positive_rate");
+        rateInput.setAttribute("aria-invalid", "true");
+        rateInput.focus();
       } else {
-        status.textContent = t("billing.save_failed", { reason: localizeApiError(err) });
+        status.textContent = t("billing.save_failed", { reason: describeError(err) });
       }
     } finally {
       saveBtn.disabled = false;
     }
   });
-  card.append(saveBtn, status);
+  form.append(el("div", { class: "cp-billing-actions", children: [saveBtn, status] }));
+  card.append(form);
+  card.append(el("p", { class: "cp-muted-small cp-billing-tax-note", text: t("billing.tax_note") }));
   return card;
+}
+
+function saveStatus(message, id) {
+  return el("p", { class: "cp-muted-small cp-billing-save-status", text: message, attrs: { id, role: "status", "aria-live": "polite", "aria-atomic": "true" } });
 }
 
 /** plansCard builds the pricing plan list + editor dialog trigger. */
 function plansCard({ plans, signal, announce, onChanged }) {
-  const card = el("div", { class: "cp-card" });
-  const head = el("div", { class: "cp-metric-head" });
-  head.append(el("h2", { class: "cp-card-title", text: t("billing.plans_title") }));
+  const card = el("section", { class: "cp-card cp-billing-card", attrs: { "aria-labelledby": "cp-billing-plans-heading" } });
+  const head = el("div", { class: "cp-billing-section-head" });
+  head.append(el("h2", { class: "cp-card-title", text: t("billing.plans_title"), attrs: { id: "cp-billing-plans-heading" } }));
   const addBtn = el("button", { class: "cp-btn cp-btn-primary", attrs: { type: "button" } });
   addBtn.append(icon("plus"), el("span", { text: t("billing.add_plan") }));
   addBtn.addEventListener("click", () => openPlanDialog({ signal, announce, onChanged }));
   head.append(addBtn);
   card.append(head);
+  card.append(el("p", { class: "cp-muted-small", text: t("billing.plans_description") }));
 
   const list = el("ul", { class: "cp-billing-plan-list", attrs: { role: "list" } });
   for (const plan of plans) {
     list.append(planRow({ plan, signal, announce, onChanged }));
   }
   card.append(list);
+  if (plans.length === 0) card.append(el("p", { class: "cp-muted", text: t("billing.plans_empty") }));
   return card;
 }
 
@@ -247,10 +300,13 @@ function pricingPlanProviderFamily(planProvider) {
 function planRow({ plan, signal, announce, onChanged }) {
   const row = el("li", { class: "cp-billing-plan-row" });
   row.append(providerBadge(pricingPlanProviderFamily(plan.provider)));
-  row.append(el("span", { class: "cp-billing-plan-row-name", text: plan.name }));
-  row.append(el("span", { class: "cp-muted-small", text: plan.pool_free_tier ? t("billing.free_gb_pooled", { gb: plan.egress_free_gb }) : t("billing.free_gb", { gb: plan.egress_free_gb }) }));
+  const info = el("div", { class: "cp-billing-plan-info" });
+  info.append(el("span", { class: "cp-billing-plan-row-name", text: plan.name }));
+  info.append(el("span", { class: "cp-muted-small", text: plan.pool_free_tier ? t("billing.free_gb_pooled", { gb: plan.egress_free_gb }) : t("billing.free_gb", { gb: plan.egress_free_gb }) }));
+  row.append(info);
+  const actions = el("div", { class: "cp-billing-plan-actions" });
   if (plan.builtin) {
-    row.append(el("span", { class: "cp-chip cp-chip-other", text: t("billing.builtin") }));
+    actions.append(el("span", { class: "cp-chip cp-chip-other", text: t("billing.builtin") }));
   } else {
     const editBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm cp-btn-icon", attrs: { type: "button", "aria-label": t("billing.edit_plan_aria", { name: plan.name }) } });
     editBtn.append(icon("pencil"));
@@ -269,8 +325,9 @@ function planRow({ plan, signal, announce, onChanged }) {
         showToast({ message: t("billing.delete_failed", { reason: describeError(err) }), variant: "error" });
       }
     });
-    row.append(editBtn, deleteBtn);
+    actions.append(editBtn, deleteBtn);
   }
+  row.append(actions);
   return row;
 }
 
@@ -286,6 +343,7 @@ function openPlanDialog({ plan, signal, announce, onChanged }) {
     title: isEdit ? t("billing.edit_plan_title", { name: plan.name }) : t("billing.add_plan_title"),
     wide: true,
   });
+  dialog.classList.add("cp-billing-plan-dialog");
 
   const draft = {
     name: plan?.name || "",
@@ -386,15 +444,15 @@ function openPlanDialog({ plan, signal, announce, onChanged }) {
   poolField.append(poolInput, el("span", { text: t("billing.pool_free_tier_label") }));
   body.append(poolField);
 
-  const previewHost = el("p", { class: "cp-muted-small" });
+  const previewHost = el("p", { class: "cp-muted-small", attrs: { role: "status", "aria-live": "polite" } });
   body.append(previewHost);
   function renderPreview() {
     const cost = previewCostForOneTB(draft.egressFreeGB, draft.egressTiers);
-    previewHost.textContent = t("billing.preview_1tb", { cost: formatUSD(cost) });
+    previewHost.textContent = t("billing.preview_1tb", { cost: formatUSD(cost, undefined, { taxNote: false }) });
   }
   renderPreview();
 
-  const errorsHost = el("div");
+  const errorsHost = el("div", { attrs: { role: "alert" } });
   body.append(errorsHost);
 
   const cancelBtn = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button" }, text: t("common.cancel") });
@@ -470,8 +528,8 @@ function previewCostForOneTB(freeGB, tiers) {
 
 /** auditLogCard builds the "변경 이력" (change history) table. */
 function auditLogCard({ signal }) {
-  const card = el("div", { class: "cp-card" });
-  card.append(el("h2", { class: "cp-card-title", text: t("billing.history_title") }));
+  const card = el("section", { class: "cp-card cp-billing-card cp-billing-history", attrs: { "aria-labelledby": "cp-billing-history-heading" } });
+  card.append(el("h2", { class: "cp-card-title", text: t("billing.history_title"), attrs: { id: "cp-billing-history-heading" } }));
 
   const tableHost = el("div");
   card.append(tableHost);
@@ -480,32 +538,33 @@ function auditLogCard({ signal }) {
 
   async function loadPage(before) {
     clearChildren(tableHost);
-    tableHost.append(el("p", { class: "cp-muted-small", text: t("common.loading") }));
+    tableHost.append(el("p", { class: "cp-muted-small", text: t("common.loading"), attrs: { role: "status" } }));
     let view;
     try {
       view = await getAuditEntries({ limit: 20, before: before || undefined }, signal);
     } catch (err) {
-      if (err?.name === "AbortError") return;
+      if (err?.name === "AbortError" || signal.aborted) return;
       clearChildren(tableHost);
       tableHost.append(errorBanner(describeError(err)));
       return;
     }
+    if (signal.aborted) return;
     clearChildren(tableHost);
     if ((view.entries || []).length === 0) {
       tableHost.append(el("p", { class: "cp-muted", text: t("billing.history_empty") }));
       return;
     }
 
-    const table = el("table", { class: "cp-table" });
+    const table = el("table", { class: "cp-table", attrs: { "aria-labelledby": "cp-billing-history-heading" } });
     const thead = el("thead");
-    thead.append(el("tr", { children: [t("billing.col_when"), t("billing.col_who"), t("billing.col_action"), t("billing.col_entity"), t("billing.col_before_after")].map((label) => el("th", { text: label })) }));
+    thead.append(el("tr", { children: [t("billing.col_when"), t("billing.col_who"), t("billing.col_action"), t("billing.col_entity"), t("billing.col_before_after")].map((label) => el("th", { text: label, attrs: { scope: "col" } })) }));
     table.append(thead);
     const tbody = el("tbody");
     for (const entry of view.entries) {
       tbody.append(auditRow(entry));
     }
     table.append(tbody);
-    const tableWrap = el("div", { class: "cp-table-wrap" });
+    const tableWrap = el("div", { class: "cp-table-wrap", attrs: { tabindex: "0", role: "region", "aria-labelledby": "cp-billing-history-heading" } });
     tableWrap.append(table);
     tableHost.append(tableWrap);
 
@@ -575,7 +634,7 @@ function secondsToInterval(seconds) {
 }
 
 function describeError(err) {
-  if (err instanceof ApiError) return err.message;
+  if (err instanceof ApiError) return localizeApiError(err);
   return String(err?.message || err);
 }
 
@@ -587,4 +646,3 @@ export function providerStatusLabel(status) {
   const label = t(key);
   return label === key ? status : label;
 }
-

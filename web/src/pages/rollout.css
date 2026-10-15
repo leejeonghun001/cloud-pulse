@@ -19,11 +19,11 @@
   }
 
   .cp-rollout-summary-value {
-    @apply text-xl font-semibold text-[rgb(var(--text))] tabular-nums;
+    @apply text-[length:var(--text-cp-xl)] leading-[length:var(--leading-cp-xl)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))] tabular-nums;
   }
 
   .cp-rollout-summary-label {
-    @apply text-xs text-[rgb(var(--muted))] uppercase tracking-wide;
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))] uppercase tracking-[length:var(--tracking-cp-wide)];
   }
 
   .cp-rollout-distribution-chart {
@@ -35,11 +35,11 @@
   }
 
   .cp-rollout-distribution-os-label {
-    @apply w-20 shrink-0 text-sm font-medium text-[rgb(var(--text))];
+    @apply w-20 shrink-0 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-medium)] text-[rgb(var(--text))];
   }
 
   .cp-rollout-distribution-track {
-    @apply flex-1 flex h-6 rounded-md overflow-hidden bg-[rgb(var(--surface-raised))] border border-[rgb(var(--border))];
+    @apply flex-1 flex h-6 rounded-[var(--radius-cp-sm)] overflow-hidden bg-[rgb(var(--surface-raised))] border border-[rgb(var(--border))];
   }
 
   .cp-rollout-distribution-fill {
@@ -54,25 +54,22 @@
     @apply mt-4;
   }
 
-  /* A small fixed palette cycling across a bar's version segments —
-     not tied to any specific version, just a rotation so adjacent
-     segments are visually distinguishable. Colors chosen for AA
-     contrast against both light/dark surface backgrounds and against
-     each other. */
+  /* Version segments rotate through identity colors. The adjacent table
+     supplies the values; this palette makes no AA contrast guarantee. */
   .cp-rollout-seg-0 {
-    @apply bg-cp-accent;
+    background-color: var(--chart-cp-cat-1);
   }
   .cp-rollout-seg-1 {
-    @apply bg-emerald-500;
+    background-color: var(--chart-cp-cat-2);
   }
   .cp-rollout-seg-2 {
-    @apply bg-amber-500;
+    background-color: var(--chart-cp-cat-3);
   }
   .cp-rollout-seg-3 {
-    @apply bg-fuchsia-500;
+    background-color: var(--chart-cp-cat-4);
   }
   .cp-rollout-seg-4 {
-    @apply bg-slate-400;
+    background-color: var(--chart-cp-cat-5);
   }
 
   .cp-rollout-progress-host {

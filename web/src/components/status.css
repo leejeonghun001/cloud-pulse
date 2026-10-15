@@ -1,0 +1,103 @@
+/* Status: bright indicator fills, AA text on soft tints, opaque provider
+   badges. Labels/icons must carry meaning alongside color. Legacy aliases
+   stay here because ui/components.js still emits cp-dot-up/down. */
+@layer components {
+  .cp-dot {
+    @apply inline-block shrink-0 rounded-[var(--radius-cp-full)];
+    width: var(--size-cp-dot);
+    height: var(--size-cp-dot);
+  }
+
+  .cp-dot-lg {
+    width: var(--size-cp-dot-lg);
+    height: var(--size-cp-dot-lg);
+  }
+
+  .cp-dot-up,
+  .cp-status-dot-ok { background-color: var(--color-cp-ok); }
+  .cp-dot-warning,
+  .cp-status-dot-warning { background-color: var(--color-cp-warning); }
+  .cp-status-dot-critical { background-color: var(--color-cp-exceeded); }
+  .cp-dot-down,
+  .cp-status-dot-exceeded { background-color: var(--color-cp-exceeded); }
+
+  /* Hollow marks distinguish unknown from a measured health state. */
+  .cp-status-dot-neutral {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 1.5px rgb(var(--muted));
+  }
+
+  .cp-status-dot-live {
+    animation: cp-status-pulse var(--motion-duration-cp-pulse) var(--motion-ease) infinite;
+  }
+  @keyframes cp-status-pulse { 50% { opacity: 0.6; } }
+
+  .cp-status-pill {
+    @apply inline-flex items-center gap-1.5 rounded-[var(--radius-cp-full)] px-2 py-0.5 font-[weight:var(--weight-cp-medium)] shrink-0;
+    font-size: var(--text-cp-xs);
+    line-height: var(--leading-cp-snug);
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .cp-status-pill-ok,
+  .cp-chip-ok {
+    background-color: rgb(var(--status-ok) / 0.15);
+    color: rgb(var(--status-ok-fg));
+  }
+  .cp-status-pill-warning,
+  .cp-chip-warning {
+    background-color: rgb(var(--status-warning) / 0.15);
+    color: rgb(var(--status-warning-fg));
+  }
+  .cp-status-pill-critical,
+  .cp-chip-critical {
+    background-color: rgb(var(--status-exceeded) / 0.15);
+    color: rgb(var(--status-exceeded-fg));
+  }
+  .cp-status-pill-exceeded,
+  .cp-chip-exceeded {
+    background-color: rgb(var(--status-exceeded) / 0.15);
+    color: rgb(var(--status-exceeded-fg));
+  }
+  .cp-status-pill-neutral,
+  .cp-chip-neutral,
+  .cp-chip-other {
+    background-color: rgb(var(--surface-sunken));
+    color: rgb(var(--status-neutral-fg));
+  }
+
+  /* Use the darker alarm fill behind small white text, not the bright dot hue. */
+  .cp-status-pill-solid {
+    color: rgb(var(--text-inverse));
+    background-color: var(--color-cp-badge-danger);
+  }
+  .cp-status-pill-solid .cp-dot { background-color: currentColor; box-shadow: none; }
+
+  .cp-badge {
+    @apply inline-flex items-center rounded-[var(--radius-cp-xs)] px-2 py-0.5 font-[weight:var(--weight-cp-semibold)] uppercase tracking-[length:var(--tracking-cp-wide)] text-[rgb(var(--text-inverse))] shrink-0 whitespace-nowrap;
+    font-size: var(--text-cp-micro);
+    /* Preserve legacy line boxes inherited from tables and button rows. */
+    line-height: inherit;
+  }
+  .cp-badge-aws { background-color: var(--color-cp-badge-aws); }
+  .cp-badge-oci { background-color: var(--color-cp-badge-oci); }
+  .cp-badge-other { background-color: var(--color-cp-badge-other); }
+  .cp-badge-r2 { background-color: var(--color-cp-badge-r2); }
+  .cp-badge-hub {
+    @apply normal-case tracking-[length:var(--tracking-cp-normal)];
+    background-color: var(--color-cp-badge-hub);
+  }
+  .cp-badge-update {
+    @apply normal-case tracking-[length:var(--tracking-cp-normal)];
+    background-color: var(--color-cp-badge-update);
+  }
+
+  .cp-chip {
+    @apply inline-flex items-center rounded-[var(--radius-cp-xs)] px-2 py-0.5 font-[weight:var(--weight-cp-medium)];
+    font-size: var(--text-cp-chip);
+    line-height: inherit;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+}

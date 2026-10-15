@@ -107,6 +107,8 @@ export function mountRolloutPage(container, { announce }) {
     const root = el("div", { class: "cp-page cp-rollout-page" });
     root.append(el("h1", { class: "cp-page-title", text: t("rollout.title") }));
     root.append(el("p", { class: "cp-page-subtitle", text: t("rollout.subtitle") }));
+    // Make the landmark and page heading available while the initial data loads.
+    container.append(root);
 
     let versions, hostsResp, batchesResp;
     try {
@@ -118,13 +120,24 @@ export function mountRolloutPage(container, { announce }) {
     } catch (err) {
       if (err?.name === "AbortError") return;
       root.append(errorBanner(describeError(err)));
-      container.append(root);
       return;
     }
 
     const hosts = hostsResp?.hosts || [];
     const batches = batchesResp?.batches || [];
     const nowUnixSeconds = Math.floor(Date.now() / 1000);
+
+    if (hosts.length === 0) {
+      root.append(emptyState({
+        title: t("rollout.empty_fleet_title"),
+        message: t("rollout.empty_fleet_message"),
+        iconName: "server",
+        action: { label: t("nav.add_agent"), href: "#/", iconName: "plus" },
+        secondary: t("rollout.empty_fleet_reason"),
+      }));
+      announce(t("rollout.title"));
+      return;
+    }
 
     root.append(summaryCards(versions));
     root.append(distributionSection(versions));
@@ -135,7 +148,6 @@ export function mountRolloutPage(container, { announce }) {
     root.append(agentsSection({ hosts, signal: controller.signal, announce, onBatchCreated: (id) => showBatch(id) }));
     root.append(progressHost);
 
-    container.append(root);
     announce(t("rollout.title"));
 
     async function showBatch(batchID) {

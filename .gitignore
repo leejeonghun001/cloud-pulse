@@ -22,3 +22,12 @@ __pycache__/
 
 # capture-screenshots.mjs's per-run bookkeeping (see docs/maintainers.md)
 docs/screenshots/**/capture-report.json
+
+# Session-local orchestration state, never a publication input.
+.slim/deepwork/
+
+# Local Compose credentials/configuration; keep .env.example tracked.
+.env
+
+# oh-my-claudecode session/agent state (local only)
+.omc/

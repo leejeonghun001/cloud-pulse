@@ -98,3 +98,72 @@ test("localizeApiError falls back to the generic catalog key for a non-ApiError"
     assert.equal(localizeApiError(new TypeError("boom")), "Something went wrong.");
   });
 });
+
+function hostsResponse(id) {
+  return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ hosts: [{ host: { id } }] }) };
+}
+
+test("palette never joins an in-flight page request carrying its AbortSignal", async () => {
+  const { getHosts, getRecentHosts, getRecentOrPendingHosts, clearHostsCache } = await loadApi();
+  const previousFetch = globalThis.fetch;
+  try {
+    clearHostsCache();
+    const pending = [];
+    globalThis.fetch = (_path, init) => new Promise((resolve) => pending.push({ resolve, signal: init.signal }));
+    const pageController = new AbortController();
+    const pageRequest = getHosts(pageController.signal);
+    assert.equal(getRecentOrPendingHosts(30000), null);
+    const paletteRequest = getHosts();
+    assert.equal(pending.length, 2);
+    assert.equal(pending[0].signal, pageController.signal);
+    assert.equal(pending[1].signal, undefined);
+    pending[1].resolve(hostsResponse("palette"));
+    pending[0].resolve(hostsResponse("page"));
+    await Promise.all([pageRequest, paletteRequest]);
+    assert.equal(getRecentHosts(30000).hosts[0].host.id, "palette");
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("host cache clears on session loss and late older responses cannot overwrite newer data", async () => {
+  const { getHosts, getRecentHosts, clearHostsCache } = await loadApi();
+  const previousFetch = globalThis.fetch;
+  try {
+    clearHostsCache();
+    const pending = [];
+    globalThis.fetch = () => new Promise((resolve) => pending.push(resolve));
+    const older = getHosts();
+    const newer = getHosts();
+    pending[1](hostsResponse("new"));
+    await newer;
+    pending[0](hostsResponse("old"));
+    await older;
+    assert.equal(getRecentHosts(30000).hosts[0].host.id, "new");
+    clearHostsCache();
+    assert.equal(getRecentHosts(30000), null);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("a 401 clears cached hosts before the unauthorized redirect", async () => {
+  const { getHosts, getRecentHosts, clearHostsCache } = await loadApi();
+  const previousFetch = globalThis.fetch;
+  try {
+    clearHostsCache();
+    globalThis.fetch = async () => hostsResponse("before-401");
+    await getHosts();
+    assert.ok(getRecentHosts(30000));
+    globalThis.fetch = async () => ({
+      ok: false,
+      status: 401,
+      headers: { get: () => null },
+      json: async () => ({ error: "expired", code: "session_expired" }),
+    });
+    await assert.rejects(getHosts());
+    assert.equal(getRecentHosts(30000), null);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});

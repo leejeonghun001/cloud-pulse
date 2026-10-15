@@ -2,12 +2,39 @@
    status list, pricing plan list/editor, and the audit log table. */
 
 @layer components {
+  .cp-billing-page { @apply flex flex-col gap-3 min-w-0; }
+  .cp-billing-controls { @apply grid grid-cols-1 gap-3 min-w-0 xl:grid-cols-2; }
+  .cp-billing-card { @apply p-3.5 sm:p-4 gap-3 min-w-0; }
+  .cp-billing-form { @apply flex flex-col gap-2.5 min-w-0; }
+  .cp-billing-section-head { @apply flex items-center justify-between gap-3 flex-wrap; }
+  .cp-billing-actions { @apply flex flex-wrap items-center gap-x-3 gap-y-2 pt-1; }
+  .cp-billing-save-status { @apply flex-1 min-w-[9rem]; }
+  .cp-billing-save-status:empty { @apply hidden; }
+  .cp-billing-providers { @apply flex flex-col gap-2 border-t border-[rgb(var(--border))] pt-3; }
+  .cp-billing-provider-head { @apply flex flex-wrap gap-2 items-center; }
+  .cp-billing-tax-note { @apply border-t border-[rgb(var(--border))] pt-3 mt-auto; }
+
+  .cp-billing-page p,
+  .cp-billing-page label,
+  .cp-billing-page span { overflow-wrap: anywhere; }
+  .cp-billing-page .cp-field { @apply min-w-0; }
+  .cp-billing-page [hidden] { display: none; }
+  .cp-billing-page .cp-input,
+  .cp-billing-page .cp-select { @apply min-h-11 min-w-0 max-w-full; }
+  .cp-billing-page .cp-btn,
+  .cp-billing-plan-dialog .cp-btn {
+    @apply min-h-11 max-w-full whitespace-normal;
+    overflow-wrap: anywhere;
+  }
+  .cp-billing-page .cp-btn-icon,
+  .cp-billing-plan-dialog .cp-btn-icon { @apply min-w-11; }
+
   .cp-billing-provider-status-list {
-    @apply flex flex-col gap-2 list-none p-0 m-0 mt-2;
+    @apply flex flex-col gap-2 list-none p-0 m-0;
   }
 
   .cp-billing-provider-status-row {
-    @apply flex items-center gap-2 flex-wrap text-sm;
+    @apply flex flex-col gap-1 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)];
   }
 
   .cp-billing-plan-list {
@@ -15,11 +42,15 @@
   }
 
   .cp-billing-plan-row {
-    @apply flex items-center gap-3 rounded-lg border border-[rgb(var(--border))] p-3 flex-wrap;
+    @apply flex items-center gap-2.5 rounded-[var(--radius-cp-md)] border border-[rgb(var(--border))] p-2.5 flex-wrap min-w-0;
   }
 
+  .cp-billing-plan-info { @apply flex flex-col gap-1 flex-1 min-w-0; flex-basis: 10rem; }
+  .cp-billing-plan-actions { @apply flex items-center gap-1.5 ml-auto; }
+
   .cp-billing-plan-row-name {
-    @apply font-medium text-[rgb(var(--text))] flex-1 min-w-[8rem];
+    @apply font-[weight:var(--weight-cp-medium)] text-[rgb(var(--text))];
+    overflow-wrap: anywhere;
   }
 
   .cp-billing-tiers-editor {
@@ -29,9 +60,25 @@
   .cp-billing-tier-row {
     @apply flex items-center gap-2 flex-wrap;
   }
+  .cp-billing-plan-dialog .cp-input { @apply min-h-11 min-w-0; }
+  .cp-billing-plan-dialog .cp-billing-tier-row .cp-input { @apply w-24 max-w-full; }
+  .cp-billing-plan-dialog .cp-checkbox-field { @apply flex items-start gap-2 min-h-11; }
+  .cp-billing-plan-dialog .cp-checkbox-field span { @apply min-w-0; overflow-wrap: anywhere; }
+  .cp-billing-plan-dialog .cp-checkbox-field input { @apply shrink-0; }
+
+  .cp-billing-history > div { @apply flex flex-col gap-3 min-w-0; }
+  .cp-billing-history .cp-table-wrap { @apply max-w-full; }
+  .cp-billing-history .cp-table { min-width: 36rem; table-layout: fixed; }
+  .cp-billing-history .cp-table th,
+  .cp-billing-history .cp-table td { @apply align-top whitespace-normal; overflow-wrap: anywhere; }
+  .cp-billing-history .cp-table th:last-child { width: 40%; }
+  .cp-billing-history .cp-table-wrap:focus-visible {
+    outline: var(--focus-ring-cp-width) solid rgb(var(--ring));
+    outline-offset: var(--focus-ring-cp-offset);
+  }
 
   .cp-billing-audit-diff {
-    @apply text-xs;
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)];
   }
 
   .cp-billing-audit-diff code {

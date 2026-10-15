@@ -20,12 +20,18 @@ import (
 
 // notifyVerifyHTTPClientTimeout bounds the http.Client shared by every
 // sender constructed for a verify run — separate from and no shorter
-// than notifyVerifyOptions.timeout, which bounds the whole per-platform
-// attempt (send + read-back + optional delete).
+// than the default notifyVerifyOptions.timeout, which bounds each send,
+// read-back and optional delete separately. Status waiting has its own budget.
 const notifyVerifyHTTPClientTimeout = 30 * time.Second
 
 // notifySenderFactory constructs the Sender for one verification attempt.
 type notifySenderFactory func(models.NotifyChannel, *http.Client) (notify.Sender, error)
+
+// notifyStatusWaiter is the status-listener capability used by one CLI run.
+// Tests supply a fake waiter without starting a listener or waiting 60s.
+type notifyStatusWaiter interface {
+	WaitFor(context.Context, string) (string, error)
+}
 
 // defaultNotifySender preserves the production SSRF policy used by alert
 // delivery. Tests provide an option-owned factory for fake endpoints.
@@ -39,20 +45,21 @@ func defaultNotifySender(ch models.NotifyChannel, client *http.Client) (notify.S
 func runNotifyVerifyReport(ctx context.Context, values map[string]string, opts notifyVerifyOptions) models.NotifyVerifyReport {
 	client := &http.Client{Timeout: notifyVerifyHTTPClientTimeout}
 
-	var statusListener *notify.StatusWebhookListener
+	var statusWaiter notifyStatusWaiter
 	if opts.statusWebhookListen != "" {
 		appSecret := values[envWhatsAppAppSecret]
-		statusListener = notify.NewStatusWebhookListener(appSecret)
+		statusListener := notify.NewStatusWebhookListener(appSecret)
 		if _, err := statusListener.Start(opts.statusWebhookListen); err != nil {
 			return models.NotifyVerifyReport{
 				OK: false,
 				Results: []models.NotifyVerifyResult{{
 					Platform: models.NotifyVerifyWhatsApp,
 					Status:   models.NotifyVerifyFailed,
-					Detail:   fmt.Sprintf("start --status-webhook-listen: %v", err),
+					Detail:   "could not start --status-webhook-listen",
 				}},
 			}
 		}
+		statusWaiter = statusListener
 		defer func() {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -72,7 +79,7 @@ func runNotifyVerifyReport(ctx context.Context, values map[string]string, opts n
 			})
 			continue
 		}
-		results = append(results, runOneNotifyVerify(ctx, *configured, client, opts, statusListener))
+		results = append(results, runOneNotifyVerify(ctx, *configured, client, opts, statusWaiter))
 	}
 
 	ok := true
@@ -194,7 +201,11 @@ func buildVerifyMessage() (notify.Message, error) {
 // runOneNotifyVerify sends the test message through platform's real
 // production sender, attempts a read-back, and (with --cleanup) a
 // delete, building one models.NotifyVerifyResult.
-func runOneNotifyVerify(ctx context.Context, ch models.NotifyChannel, client *http.Client, opts notifyVerifyOptions, statusListener *notify.StatusWebhookListener) models.NotifyVerifyResult {
+func runOneNotifyVerify(ctx context.Context, ch models.NotifyChannel, client *http.Client, opts notifyVerifyOptions, statusListener notifyStatusWaiter) models.NotifyVerifyResult {
+	timeout := opts.timeout
+	if timeout <= 0 {
+		timeout = notifyVerifyDefaultTimeout
+	}
 	platform := models.NotifyVerifyPlatform(ch.Type)
 	result := models.NotifyVerifyResult{Platform: platform}
 
@@ -205,19 +216,23 @@ func runOneNotifyVerify(ctx context.Context, ch models.NotifyChannel, client *ht
 	sender, err := factory(ch, client)
 	if err != nil {
 		result.Status = models.NotifyVerifyFailed
-		result.Detail = err.Error()
+		result.Detail = notify.SafeErrorText(ch, err)
+		return result
+	}
+	if sender == nil {
+		result.Status = models.NotifyVerifyFailed
+		result.Detail = "notification sender unavailable"
 		return result
 	}
 
 	msg, err := buildVerifyMessage()
 	if err != nil {
 		result.Status = models.NotifyVerifyFailed
-		result.Detail = err.Error()
+		result.Detail = notify.SafeErrorText(ch, err)
 		return result
 	}
 
-	sendCtx, cancel := context.WithTimeout(ctx, opts.timeout)
-	defer cancel()
+	sendCtx, cancel := context.WithTimeout(ctx, timeout)
 
 	refSender, hasRef := sender.(notify.RefSender)
 	var ref notify.MessageRef
@@ -226,9 +241,10 @@ func runOneNotifyVerify(ctx context.Context, ch models.NotifyChannel, client *ht
 	} else {
 		err = sender.Send(sendCtx, msg)
 	}
+	cancel()
 	if err != nil {
 		result.Status = models.NotifyVerifyFailed
-		diag := notify.DiagnoseError(err)
+		diag := notify.DiagnoseChannelError(ch, err)
 		result.Diagnosis = &diag
 		result.Detail = diag.Title
 		return result
@@ -242,25 +258,25 @@ func runOneNotifyVerify(ctx context.Context, ch models.NotifyChannel, client *ht
 	result.Detail = "accepted by platform"
 
 	if reader, ok := sender.(notify.MessageReader); ok {
-		readCtx, readCancel := context.WithTimeout(ctx, opts.timeout)
+		readCtx, readCancel := context.WithTimeout(ctx, timeout)
 		confirmed, err := reader.ReadBack(readCtx, ref)
 		readCancel()
 		if err != nil {
 			result.Status = models.NotifyVerifyFailed
-			diag := notify.DiagnoseError(err)
+			diag := notify.DiagnoseChannelError(ch, err)
 			result.Diagnosis = &diag
 			result.Detail = "read-back failed: " + diag.Title
-			return result
+		} else {
+			result.AttachmentVerified = confirmed
+			result.Status = models.NotifyVerifyVerified
+			result.Detail = "verified via read-back"
 		}
-		result.AttachmentVerified = confirmed
-		result.Status = models.NotifyVerifyVerified
-		result.Detail = "verified via read-back"
 	} else if platform == models.NotifyVerifyWhatsApp && statusListener != nil {
 		waitCtx, waitCancel := context.WithTimeout(ctx, opts.statusWebhookWait)
 		status, err := statusListener.WaitFor(waitCtx, ref.MessageID)
 		waitCancel()
 		if err != nil {
-			result.Detail = "accepted by platform; status webhook did not confirm delivery in time: " + err.Error()
+			result.Detail = "accepted by platform; status webhook did not confirm delivery in time: " + notify.SafeErrorText(ch, err)
 		} else {
 			result.Status = models.NotifyVerifyVerified
 			result.Detail = "verified via delivery-status webhook (" + status + ")"
@@ -270,13 +286,13 @@ func runOneNotifyVerify(ctx context.Context, ch models.NotifyChannel, client *ht
 	if opts.cleanup {
 		cleaned := false
 		if deleter, ok := sender.(notify.MessageDeleter); ok {
-			delCtx, delCancel := context.WithTimeout(ctx, opts.timeout)
+			delCtx, delCancel := context.WithTimeout(ctx, timeout)
 			delErr := deleter.Delete(delCtx, ref)
 			delCancel()
 			if delErr == nil {
 				cleaned = true
 			} else {
-				result.Detail += "; cleanup failed: " + delErr.Error()
+				result.Detail += "; cleanup failed: " + notify.SafeErrorText(ch, delErr)
 			}
 		} else {
 			result.Detail += "; cleanup not supported for this platform"

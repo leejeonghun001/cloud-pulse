@@ -151,3 +151,27 @@ test("COLUMNS labels render Korean text when lang is ko", () => {
     setLang("en");
   }
 });
+
+test("COLUMNS use sentence-case English labels rather than acronyms", () => {
+  setLang("en");
+  assert.equal(COLUMNS.find((c) => c.key === "net").label, "Net");
+  assert.equal(COLUMNS.find((c) => c.key === "agent").label, "Agent");
+});
+
+test("syncTableOverflow flags the scroll region only while columns are hidden to the right", async () => {
+  const { syncTableOverflow } = await import("../assets/js/pages/overview.js");
+  const attrs = new Map();
+  const wrap = {
+    scrollWidth: 1400, clientWidth: 1000, scrollLeft: 0,
+    setAttribute: (k, v) => attrs.set(k, v),
+    removeAttribute: (k) => attrs.delete(k),
+  };
+  syncTableOverflow(wrap);
+  assert.equal(attrs.get("data-overflow-right"), "true");
+  wrap.scrollLeft = 400;
+  syncTableOverflow(wrap);
+  assert.equal(attrs.has("data-overflow-right"), false);
+  wrap.scrollWidth = 900; wrap.clientWidth = 900; wrap.scrollLeft = 0;
+  syncTableOverflow(wrap);
+  assert.equal(attrs.has("data-overflow-right"), false);
+});

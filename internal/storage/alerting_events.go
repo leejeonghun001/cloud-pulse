@@ -12,16 +12,19 @@ import (
 // CreateAlertEvent inserts ev (ignoring ev.ID) and returns the row with
 // its assigned ID populated.
 func (db *DB) CreateAlertEvent(ctx context.Context, ev models.AlertEvent) (models.AlertEvent, error) {
+	if ev.Severity == "" {
+		ev.Severity = models.DefaultAlertSeverity(ev.Metric)
+	}
 	deliveriesJSON, err := marshalDeliveries(ev.Deliveries)
 	if err != nil {
 		return models.AlertEvent{}, fmt.Errorf("storage: create alert event: %w", err)
 	}
 
 	res, err := db.sql.ExecContext(ctx, `
-		INSERT INTO alert_events (rule_id, rule_name, host_id, hostname, metric, state,
+		INSERT INTO alert_events (rule_id, rule_name, host_id, hostname, metric, severity, state,
 		                          value, threshold, started_at, notified_at, resolved_at, deliveries)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, ev.RuleID, ev.RuleName, ev.HostID, ev.Hostname, string(ev.Metric), string(ev.State),
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, ev.RuleID, ev.RuleName, ev.HostID, ev.Hostname, string(ev.Metric), string(ev.Severity), string(ev.State),
 		ev.Value, ev.Threshold, ev.StartedAt, ev.NotifiedAt, ev.ResolvedAt, deliveriesJSON)
 	if err != nil {
 		return models.AlertEvent{}, fmt.Errorf("storage: create alert event: %w", err)
@@ -40,6 +43,9 @@ func (db *DB) CreateAlertEvent(ctx context.Context, ev models.AlertEvent) (model
 // UpdateAlertEvent replaces the stored event matching ev.ID with ev in
 // full, or returns models.ErrNotFound if no event with that ID exists.
 func (db *DB) UpdateAlertEvent(ctx context.Context, ev models.AlertEvent) error {
+	if ev.Severity == "" {
+		ev.Severity = models.DefaultAlertSeverity(ev.Metric)
+	}
 	deliveriesJSON, err := marshalDeliveries(ev.Deliveries)
 	if err != nil {
 		return fmt.Errorf("storage: update alert event: %w", err)
@@ -47,10 +53,10 @@ func (db *DB) UpdateAlertEvent(ctx context.Context, ev models.AlertEvent) error 
 
 	res, err := db.sql.ExecContext(ctx, `
 		UPDATE alert_events SET
-			rule_id = ?, rule_name = ?, host_id = ?, hostname = ?, metric = ?, state = ?,
+			rule_id = ?, rule_name = ?, host_id = ?, hostname = ?, metric = ?, severity = ?, state = ?,
 			value = ?, threshold = ?, started_at = ?, notified_at = ?, resolved_at = ?, deliveries = ?
 		WHERE id = ?
-	`, ev.RuleID, ev.RuleName, ev.HostID, ev.Hostname, string(ev.Metric), string(ev.State),
+	`, ev.RuleID, ev.RuleName, ev.HostID, ev.Hostname, string(ev.Metric), string(ev.Severity), string(ev.State),
 		ev.Value, ev.Threshold, ev.StartedAt, ev.NotifiedAt, ev.ResolvedAt, deliveriesJSON, ev.ID)
 	if err != nil {
 		return fmt.Errorf("storage: update alert event: %w", err)
@@ -68,7 +74,7 @@ func (db *DB) UpdateAlertEvent(ctx context.Context, ev models.AlertEvent) error 
 // GetAlertEvent returns one event by id, or models.ErrNotFound.
 func (db *DB) GetAlertEvent(ctx context.Context, id int64) (models.AlertEvent, error) {
 	row := db.sql.QueryRowContext(ctx, `
-		SELECT id, rule_id, rule_name, host_id, hostname, metric, state,
+		SELECT id, rule_id, rule_name, host_id, hostname, metric, severity, state,
 		       value, threshold, started_at, notified_at, resolved_at, deliveries
 		FROM alert_events WHERE id = ?
 	`, id)
@@ -86,7 +92,7 @@ func (db *DB) GetAlertEvent(ctx context.Context, id int64) (models.AlertEvent, e
 // hostID), or models.ErrNotFound if none is firing.
 func (db *DB) GetActiveAlertEvent(ctx context.Context, ruleID int64, hostID string) (models.AlertEvent, error) {
 	row := db.sql.QueryRowContext(ctx, `
-		SELECT id, rule_id, rule_name, host_id, hostname, metric, state,
+		SELECT id, rule_id, rule_name, host_id, hostname, metric, severity, state,
 		       value, threshold, started_at, notified_at, resolved_at, deliveries
 		FROM alert_events
 		WHERE rule_id = ? AND host_id = ? AND state = ?
@@ -107,7 +113,7 @@ func (db *DB) GetActiveAlertEvent(ctx context.Context, ruleID int64, hostID stri
 // matches any host; before == 0 means no upper bound on StartedAt.
 func (db *DB) ListAlertEvents(ctx context.Context, state models.AlertEventState, hostID string, before int64, limit int) ([]models.AlertEvent, error) {
 	query := `
-		SELECT id, rule_id, rule_name, host_id, hostname, metric, state,
+		SELECT id, rule_id, rule_name, host_id, hostname, metric, severity, state,
 		       value, threshold, started_at, notified_at, resolved_at, deliveries
 		FROM alert_events WHERE 1=1
 	`
@@ -172,14 +178,15 @@ func (db *DB) PruneAlertEvents(ctx context.Context, now time.Time) error {
 
 func scanAlertEvent(scan func(dest ...any) error) (models.AlertEvent, error) {
 	var ev models.AlertEvent
-	var metric, state, deliveriesJSON string
+	var metric, severity, state, deliveriesJSON string
 	if err := scan(
-		&ev.ID, &ev.RuleID, &ev.RuleName, &ev.HostID, &ev.Hostname, &metric, &state,
+		&ev.ID, &ev.RuleID, &ev.RuleName, &ev.HostID, &ev.Hostname, &metric, &severity, &state,
 		&ev.Value, &ev.Threshold, &ev.StartedAt, &ev.NotifiedAt, &ev.ResolvedAt, &deliveriesJSON,
 	); err != nil {
 		return models.AlertEvent{}, err
 	}
 	ev.Metric = models.AlertMetric(metric)
+	ev.Severity = models.AlertSeverity(severity)
 	ev.State = models.AlertEventState(state)
 	deliveries, err := unmarshalDeliveries(deliveriesJSON)
 	if err != nil {

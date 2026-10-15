@@ -1,10 +1,34 @@
 # REST API
 
-All responses are JSON. Read endpoints (`GET`, except `/healthz` and
-static assets) require signing in (session bearer token) or the
-optional `CP_UI_TOKEN` bearer token — see
-[security.md](security.md#sign-in-and-accounts). **Admin** endpoints
-require the same; there is no "admin_disabled" mode.
+All API responses are JSON.
+
+## Authentication
+
+Authentication has three distinct classes:
+
+- **Public health and dashboard shell**: `GET /healthz`, `GET /`,
+  embedded static assets, and dashboard routes such as `GET /login` do
+  not require a bearer token. `POST /api/v1/auth/login` also has no
+  existing-token requirement; it checks the single admin's credentials
+  and is rate-limited. Serving the login page does not authenticate the
+  dashboard APIs.
+- **Agent**: `POST /api/v1/agent/report` and `GET /api/v1/agent/time`
+  require `Authorization: Bearer <CP_AGENT_TOKEN>`. A dashboard session
+  or `CP_UI_TOKEN` is not a substitute for the agent token.
+- **Dashboard API**: normal user/read endpoints accept an active
+  dashboard-session bearer token or, when configured, the optional
+  `CP_UI_TOKEN` static bearer token. Admin endpoints use `requireAdmin`,
+  which is an alias of `requireUser`: this installation has one `admin`
+  account, not role-based users. `CP_UI_TOKEN` grants full read/admin API
+  access but does not sign in the browser dashboard.
+
+On first login with the default password, the session must change that
+password. Until it does, only `GET /api/v1/auth/me`,
+`POST /api/v1/auth/password`, and `POST /api/v1/auth/logout` are allowed;
+other session-authenticated APIs return `403 password_change_required`.
+The static `CP_UI_TOKEN` is not a session and bypasses that session
+must-change gate. See [security.md](security.md#sign-in-and-accounts)
+for session and password details.
 
 | Method & path | Purpose | Auth |
 |---|---|---|
@@ -44,8 +68,8 @@ require the same; there is no "admin_disabled" mode.
 | `POST /api/v1/alerts/channels/{id}/synthetic-test` | Run a channel's synthetic connectivity test immediately | Admin |
 | `PUT /api/v1/alerts/channels/{id}/health-settings` | Set a channel's weekly synthetic-test schedule (UTC weekday/minute) | Admin |
 | `GET /api/v1/alerts/rules` | List alert rules | Admin |
-| `POST /api/v1/alerts/rules` | Create an alert rule | Admin |
-| `PUT /api/v1/alerts/rules/{id}` | Update an alert rule | Admin |
+| `POST /api/v1/alerts/rules` | Create an alert rule (`severity`: `warning`/`critical`; omitted defaults by metric) | Admin |
+| `PUT /api/v1/alerts/rules/{id}` | Replace an alert rule (omitted `severity` defaults by metric) | Admin |
 | `DELETE /api/v1/alerts/rules/{id}` | Delete an alert rule and its persisted state | Admin |
 | `POST /api/v1/alerts/rules/{id}/preview` | Report whether a rule is currently satisfied, without altering state | Admin |
 | `GET /api/v1/alerts/events?state=&host=&limit=&before=` | Paginated alert event history | Session or API token |

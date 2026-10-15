@@ -16,7 +16,7 @@ import { t } from "../core/i18n.js";
  */
 export function buildBucketsSection({ buckets, collectors, nowMs }) {
   const section = el("section", { class: "cp-section", attrs: { "aria-labelledby": "cp-buckets-heading" } });
-  section.append(el("h2", { id: "cp-buckets-heading", text: t("buckets.title") }));
+  section.append(el("h2", { attrs: { id: "cp-buckets-heading" }, text: t("buckets.title") }));
 
   const charts = [];
 

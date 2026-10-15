@@ -175,6 +175,7 @@ export function createPalette(getItems) {
   });
 
   function open() {
+    if (dialog.open) return;
     previouslyFocused = document.activeElement;
     items = getItems();
     selectedIndex = 0;

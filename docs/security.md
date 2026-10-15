@@ -112,9 +112,15 @@ SQLite), instead of requiring an edit to `hub.env` and a restart:
   the hub logs an escalating warning while the default is still in
   effect; and the default allowlist restricts access to
   Tailscale/loopback ranges only.
-- **Security headers** on every response: CSP (`script-src 'self'`, no
-  inline scripts, `frame-ancestors 'none'`), `X-Content-Type-Options:
-  nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`.
+- **Security headers** on every response, including a CIDR-allowlist
+  denial: CSP (`script-src 'self'`, no inline scripts,
+  `frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: no-referrer`, and `X-Frame-Options: DENY`. The
+  current CSP retains `style-src 'unsafe-inline'` for dashboard style
+  compatibility; that is a known reduction in style-src strictness, not
+  an inline-script allowance. HSTS is not emitted by the hub: it can
+  serve plain HTTP, so HTTPS/HSTS policy belongs at a confirmed TLS
+  termination boundary and is not enabled automatically.
 - **Hardened service definitions**: `NoNewPrivileges`,
   `ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateTmp`,
   `PrivateDevices`, empty capability set, and a
@@ -165,10 +171,65 @@ SQLite), instead of requiring an edit to `hub.env` and a restart:
   cannot write to.
 - **Audit log**: every settings/pricing/currency/billing-interval/
   storage-account/update-batch change that mutates admin-facing state
-  is recorded to an `audit_log` table with the actor, requesting IP,
+  gets a best-effort write to an `audit_log` table with the actor, requesting IP,
   action, and full before/after values — mirrored to `slog.Info` with
-  no secret values in either. `GET
+  no secret values in either. Audit writes are nontransactional and may
+  fail without undoing the underlying change; an audit row is not an
+  atomicity guarantee. Once an admin password's new hash is confirmed
+  persisted, one audit write is attempted (`auth.password_change`), even
+  if clearing the must-change flag or issuing the session later fails.
+  This uses a short bounded context independent of request cancellation
+  and carries only non-secret, confirmed metadata: `password_changed`,
+  `must_change_cleared`, `session_issued`, and `session_revocation_status`
+  (`not_attempted`, `completed`, or `failed`), plus a symbolic
+  `failure_stage` when applicable. `sessions_revoked` remains an integer
+  on confirmed success, but is `null` when not attempted or when its
+  outcome is unconfirmed (a deletion may have happened before a count
+  error). These steps are not transactional: a later failure does not
+  roll back the password hash, and revocation failure still returns the
+  existing successful rotation response. Neither audit rows nor this
+  route's error logs contain passwords, stored PBKDF2 hashes, session
+  tokens/hashes, or raw store errors. The local
+  `cloud-pulse-hub reset-password` CLI path writes the same setting
+  directly and has no request context to attribute, so it is not
+  audited; its own stdout is the receipt. `GET
   /api/v1/audit?entity_type=&limit=&before=` (admin) serves the log.
+
+## Dependency audit coverage (2026-10-06)
+
+- **Go advisories: source scan completed.** On 2026-10-06, pinned
+  `govulncheck@v1.8.0` (Go `go1.27.1`) scanned `./...` on Linux/arm64
+  against `https://vuln.go.dev` (database last modified 2026-10-01
+  20:24:15 UTC). The scan used source mode at symbol reachability level,
+  with `GOPROXY=off`, `GOSUMDB=off`, and `GOFLAGS=-mod=readonly`; no
+  project tests were run (the scanner excludes test files by default). Exit status was 0.
+  The JSON stream contained 170 OSV metadata events (168 distinct IDs)
+  and no `finding` events or call traces. OSV metadata is not itself a
+  reachable vulnerability finding; this scan identified no reachable
+  vulnerable-symbol call sites for the Linux/arm64 source selection. It
+  is not a claim that every dependency is vulnerability-free: this was
+  not a module-only scan and did not assess other operating systems or
+  test-only code. Full run evidence is retained under
+  `.verification/round31/security/govulncheck-approved/`.
+  The pinned scanner was installed only into a temporary tool directory using
+  the existing Go compiler, via
+  `https://proxy.golang.org` and `sum.golang.org`; no product dependency
+  was changed. No Go module files were modified.
+- **npm advisories: NOT AUDITED.** The root `package.json` has a test
+  script but no dependency declarations, and there is no checked-in
+  `package-lock.json` or `npm-shrinkwrap.json`. The actual npm 12 audit
+  command was pinned to `https://registry.npmjs.org` and returned `ENOLOCK`
+  before an audit graph could be assessed. `ENOLOCK` is not a pass.
+- The shipped `web/assets` files are embedded application assets, not a
+  checked npm dependency graph. Their transitive dependency health is
+  therefore not established by this audit. No frontend dependency-safety
+  claim is made. A future complete npm audit requires a reviewed lockfile
+  and separate authorization to add or change dependency metadata.
+- **API compression:** substantial JSON `GET` responses may use gzip when the
+  caller opts in; agent and streaming endpoints are excluded. BREACH-style
+  cross-site response compression attacks rely on a secret automatically sent
+  with a cross-site request, while this API uses explicit bearer tokens rather
+  than cookies, so gzip needs no additional cross-site mitigation here.
 
 ## Reporting a vulnerability
 

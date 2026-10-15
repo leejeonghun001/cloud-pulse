@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/leejeonghun001/cloud-pulse/internal/alerting"
@@ -91,7 +92,7 @@ var validChannelTypes = map[models.NotifyChannelType]bool{
 // internal/notify).
 func validateChannelRequest(req channelRequest) (models.NotifyChannelType, map[string]string) {
 	details := make(map[string]string)
-	if req.Name == "" {
+	if strings.TrimSpace(req.Name) == "" {
 		details["name"] = "must not be empty"
 	}
 	if len(req.Name) > 200 {
@@ -199,7 +200,7 @@ func mergePreservedSecrets(existing models.NotifyChannel, typ models.NotifyChann
 	for _, field := range typ.SecretFields() {
 		v, present := out[field]
 		if !present || v == models.RedactedConfigValue {
-			if existing.Config != nil {
+			if existing.Type == typ && existing.Config != nil {
 				out[field] = existing.Config[field]
 			}
 		}
@@ -280,19 +281,58 @@ func (s *Server) handleTestExistingChannel(w http.ResponseWriter, r *http.Reques
 // channel configuration from the request body, for the "Add channel"
 // dialog's "Send test" button: POST /api/v1/alerts/channels/test
 // (admin).
+type draftChannelTestRequest struct {
+	channelRequest
+	ExistingChannelID *int64 `json:"existing_channel_id,omitempty"`
+}
+
 func (s *Server) handleTestDraftChannel(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxAlertBodyBytes)
-	var req channelRequest
+	var req draftChannelTestRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
 		return
 	}
-	typ, details := validateChannelRequest(req)
+	typ, details := validateChannelRequest(req.channelRequest)
+	if req.ExistingChannelID != nil && *req.ExistingChannelID <= 0 {
+		details["existing_channel_id"] = "must be a positive channel id"
+	}
 	if len(details) > 0 {
 		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "validation failed", Details: details})
 		return
 	}
-	s.sendTestMessage(w, r, models.NotifyChannel{Name: req.Name, Type: typ, Enabled: true, Config: req.Config})
+	ch := models.NotifyChannel{Name: req.Name, Type: typ, Enabled: true, Config: req.Config}
+	if req.ExistingChannelID != nil {
+		existing, err := s.store.GetNotifyChannel(r.Context(), *req.ExistingChannelID)
+		if err != nil {
+			if isNotFound(err) {
+				writeJSON(w, http.StatusNotFound, models.APIError{Error: "channel not found", Code: "channel_not_found"})
+				return
+			}
+			// No channel is available to redact a possibly credential-bearing
+			// store error. Keep the log text fixed rather than exposing it.
+			s.logger.Error("get existing channel for draft test failed", "id", *req.ExistingChannelID)
+			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
+			return
+		}
+		if existing.Type != typ {
+			writeJSON(w, http.StatusBadRequest, models.APIError{Error: "validation failed", Details: map[string]string{"existing_channel_id": "channel type must match the draft"}})
+			return
+		}
+		ch.Config = mergePreservedSecrets(existing, typ, req.Config)
+	}
+	details = notify.ValidateConfig(ch)
+	for _, field := range typ.SecretFields() {
+		if ch.Config[field] == models.RedactedConfigValue {
+			details[field] = "a stored secret or replacement value is required"
+		}
+	}
+	if len(details) > 0 {
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "validation failed", Details: details})
+		return
+	}
+	// Only this in-memory draft is sent. Never persist or return its config.
+	s.sendTestMessage(w, r, ch)
 }
 
 // sendTestMessage constructs a Sender for ch via s.opts.NotifyFactory
@@ -305,7 +345,11 @@ func (s *Server) sendTestMessage(w http.ResponseWriter, r *http.Request, ch mode
 	}
 	sender, err := s.opts.NotifyFactory(ch)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid channel configuration: " + err.Error()})
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid channel configuration: " + notify.SafeErrorText(ch, err)})
+		return
+	}
+	if sender == nil {
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid channel configuration: sender unavailable"})
 		return
 	}
 
@@ -321,7 +365,7 @@ func (s *Server) sendTestMessage(w http.ResponseWriter, r *http.Request, ch mode
 	sendErr := sender.Send(ctx, message)
 
 	if sendErr != nil {
-		diagnosis := notify.DiagnoseError(sendErr)
+		diagnosis := notify.DiagnoseChannelError(ch, sendErr)
 		writeJSON(w, http.StatusOK, models.TestResult{OK: false, Diagnosis: &diagnosis})
 		return
 	}
@@ -348,6 +392,7 @@ type ruleRequest struct {
 	Name           string  `json:"name"`
 	Enabled        bool    `json:"enabled"`
 	Metric         string  `json:"metric"`
+	Severity       string  `json:"severity"`
 	HostID         string  `json:"host_id"`
 	Operator       string  `json:"operator"`
 	Threshold      float64 `json:"threshold"`
@@ -397,6 +442,12 @@ func validateRuleRequest(req ruleRequest) (models.AlertRule, map[string]string) 
 	if !validAlertMetrics[metric] {
 		details["metric"] = "must be one of cpu, memory, disk, load1, egress_out_pct, egress_in_pct, host_down, storage_usage_pct"
 	}
+	severity := models.AlertSeverity(req.Severity)
+	if severity == "" {
+		severity = models.DefaultAlertSeverity(metric)
+	} else if severity != models.AlertSeverityWarning && severity != models.AlertSeverityCritical {
+		details["severity"] = "must be one of warning, critical"
+	}
 	op := models.AlertOperator(req.Operator)
 	if !validAlertOperators[op] {
 		details["operator"] = `must be ">" or ">="`
@@ -438,6 +489,7 @@ func validateRuleRequest(req ruleRequest) (models.AlertRule, map[string]string) 
 		Name:           req.Name,
 		Enabled:        req.Enabled,
 		Metric:         metric,
+		Severity:       severity,
 		HostID:         req.HostID,
 		Operator:       op,
 		Threshold:      req.Threshold,

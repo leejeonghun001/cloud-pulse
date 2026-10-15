@@ -77,7 +77,7 @@ export function setStoredDirection(dir) {
  */
 export function buildEgressSection({ month, direction, hosts, onMonthChange, onDirectionChange }) {
   const section = el("section", { class: "cp-section", attrs: { "aria-labelledby": "cp-egress-heading" } });
-  section.append(el("h2", { id: "cp-egress-heading", text: t("egress.title") }));
+  section.append(el("h2", { attrs: { id: "cp-egress-heading" }, text: t("egress.title") }));
 
   const topRow = el("div", { class: "cp-egress-top-row" });
 

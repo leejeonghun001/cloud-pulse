@@ -103,8 +103,49 @@ func TestSecurityHeaders_Present(t *testing.T) {
 			t.Errorf("header %s = %q, want %q", header, got, want)
 		}
 	}
-	if rec.Header().Get("Content-Security-Policy") == "" {
-		t.Error("Content-Security-Policy header missing")
+	wantCSP := "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " +
+		"script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+	if got := rec.Header().Get("Content-Security-Policy"); got != wantCSP {
+		t.Errorf("Content-Security-Policy = %q, want %q", got, wantCSP)
+	}
+}
+
+func TestSecurityHeadersCoverCIDRAuthAndStaticResponses(t *testing.T) {
+	assets := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html>fixture</html>")}}
+	opts := testOptions()
+	opts.AllowedCIDRs = []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}
+	s := New(opts, newFakeStore(), nil, nil, assets, testLogger())
+
+	wantCSP := "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " +
+		"script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+	cases := []struct {
+		name       string
+		path       string
+		remoteAddr string
+		wantStatus int
+	}{
+		{name: "healthz", path: "/healthz", remoteAddr: "127.0.0.1:1234", wantStatus: http.StatusOK},
+		{name: "cidr_denied", path: "/healthz", remoteAddr: "203.0.113.1:1234", wantStatus: http.StatusForbidden},
+		{name: "auth_error", path: "/api/v1/hosts", remoteAddr: "127.0.0.1:1234", wantStatus: http.StatusUnauthorized},
+		{name: "static", path: "/", remoteAddr: "127.0.0.1:1234", wantStatus: http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := doRequest(t, s.Handler(), http.MethodGet, tc.path, tc.remoteAddr, "", nil)
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.wantStatus)
+			}
+			for header, want := range map[string]string{
+				"Content-Security-Policy": wantCSP,
+				"X-Content-Type-Options":  "nosniff",
+				"Referrer-Policy":         "no-referrer",
+				"X-Frame-Options":         "DENY",
+			} {
+				if got := rec.Header().Get(header); got != want {
+					t.Errorf("header %s = %q, want %q", header, got, want)
+				}
+			}
+		})
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
 )
@@ -174,6 +175,21 @@ type changePasswordRequest struct {
 	NewPassword     string `json:"new_password"`
 }
 
+// AuditActionPasswordChange records an admin password change made
+// through POST /api/v1/auth/password (SPEC-v0.6 §3 개선 c: any
+// admin action that changes persisted state is audited). The entry
+// deliberately carries only non-secret metadata — never the old or new
+// password, and never either PBKDF2 hash: models.AuditEntry's before/
+// after JSON is readable by every admin session and by anyone holding
+// an exported API token, so a leaked row must not help anyone offline
+// attack the stored hash.
+//
+// The CLI reset path (cmd/hub/resetpassword.go) writes the same setting
+// directly against the store and has no request context to resolve an
+// actor or remote address from, so it stays unaudited; it is a local,
+// already-authenticated shell action whose own stdout is the receipt.
+const AuditActionPasswordChange models.AuditAction = "auth.password_change"
+
 // handleChangePassword verifies the current password, stores a new
 // password hash, clears the must-change flag, revokes every other
 // session, and issues a fresh session for the caller: POST
@@ -202,7 +218,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	hash, ok, err := s.store.GetSetting(ctx, SettingPasswordHash)
 	if err != nil {
-		s.logger.Error("get password hash failed", "error", err)
+		s.logger.Error("get password hash failed")
 		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
@@ -224,32 +240,79 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 
 	newHash, err := hashPassword(req.NewPassword)
 	if err != nil {
-		s.logger.Error("hash new password failed", "error", err)
+		s.logger.Error("hash new password failed")
 		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
 	if err := s.store.SetSetting(ctx, SettingPasswordHash, newHash); err != nil {
-		s.logger.Error("store new password hash failed", "error", err)
+		s.logger.Error("store new password hash failed")
 		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
+	// The hash is already persisted. Attempt exactly one audit even if a
+	// later, nontransactional step fails or the request is canceled. Only
+	// confirmed outcomes go in the entry; nil is an unknown revocation count.
+	after := struct {
+		PasswordChanged         bool   `json:"password_changed"`
+		MustChangeCleared       bool   `json:"must_change_cleared"`
+		SessionsRevoked         *int   `json:"sessions_revoked"`
+		SessionIssued           bool   `json:"session_issued"`
+		SessionRevocationStatus string `json:"session_revocation_status"`
+		FailureStage            string `json:"failure_stage,omitempty"`
+	}{PasswordChanged: true, SessionRevocationStatus: "not_attempted"}
+	defer func() {
+		auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		afterJSON, err := json.Marshal(after)
+		if err != nil {
+			s.logger.Error("audit: marshal password change failed", "action", AuditActionPasswordChange)
+			return
+		}
+		entry := models.AuditEntry{
+			At:         s.opts.now().Unix(),
+			Actor:      auditActorFor(auditCtx),
+			Remote:     clientIP,
+			Action:     AuditActionPasswordChange,
+			EntityType: "admin_password",
+			AfterJSON:  string(afterJSON),
+		}
+		// Store errors can contain credentials or tokens; never log their
+		// text. Audit failure must not change the rotation's HTTP response.
+		if _, err := s.store.CreateAuditEntry(auditCtx, entry); err != nil {
+			s.logger.Error("audit: create entry failed", "action", AuditActionPasswordChange)
+			return
+		}
+		s.logger.Info("audit", "actor", entry.Actor, "remote", entry.Remote,
+			"action", string(entry.Action), "entity_type", entry.EntityType, "entity_id", entry.EntityID)
+	}()
+
 	if err := s.store.SetSetting(ctx, SettingMustChangePassword, "0"); err != nil {
-		s.logger.Error("clear must-change-password flag failed", "error", err)
+		after.FailureStage = "must_change_clear"
+		s.logger.Error("clear must-change-password flag failed")
 		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
+	after.MustChangeCleared = true
 
 	resp, err := s.createSession(ctx, r, false)
 	if err != nil {
-		s.logger.Error("create session failed", "error", err)
+		after.FailureStage = "session_issue"
+		s.logger.Error("create session failed")
 		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
+	after.SessionIssued = true
 
 	// Revoke every other session (including the one this request was
 	// authenticated with, if any) now that the new one exists.
-	if _, err := s.store.DeleteSessionsExcept(ctx, hashSessionToken(resp.Token)); err != nil {
-		s.logger.Error("revoke other sessions after password change failed", "error", err)
+	revoked, err := s.store.DeleteSessionsExcept(ctx, hashSessionToken(resp.Token))
+	if err != nil {
+		after.SessionRevocationStatus = "failed"
+		after.FailureStage = "session_revocation"
+		s.logger.Error("revoke other sessions after password change failed")
+	} else {
+		after.SessionRevocationStatus = "completed"
+		after.SessionsRevoked = &revoked
 	}
 
 	writeJSON(w, http.StatusOK, resp)

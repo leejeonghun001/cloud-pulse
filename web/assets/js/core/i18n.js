@@ -41,22 +41,38 @@ const FALLBACK_LANG = "en";
  * throw, so a page that renders before boot finishes (shouldn't happen
  * given main.js's ordering, but defensively) doesn't crash. */
 let catalogs = { en: {}, ko: {} };
+const catalogLoads = new Map();
 
 /**
- * loadCatalogs fetches web/assets/i18n/en.json and ko.json (served
- * statically by the hub, no auth required — same-origin under the CSP's
- * connect-src 'self') and installs them via setCatalogs. Call once
- * during boot, before mounting any page (see main.js). Both catalogs
- * are always loaded regardless of the active language, so switching
- * language later (setLang + re-render) never needs a second fetch.
+ * loadCatalogs fetches only the effective language's catalog at boot.
+ * The other catalog is fetched on demand by ensureCatalog(), keeping an
+ * initial English and Korean visit from paying for both translations.
  * @returns {Promise<void>}
  */
 export async function loadCatalogs() {
-  const [en, ko] = await Promise.all([
-    fetch("/assets/i18n/en.json").then((r) => r.json()),
-    fetch("/assets/i18n/ko.json").then((r) => r.json()),
-  ]);
-  setCatalogs({ en, ko });
+  await ensureCatalog(getLang());
+}
+
+/**
+ * ensureCatalog loads a language catalog once. Language controls await this
+ * before rerendering, so a switch never briefly renders untranslated keys.
+ * @param {ResolvedLang} lang
+ * @returns {Promise<void>}
+ */
+export function ensureCatalog(lang) {
+  if (Object.keys(catalogs[lang] || {}).length) return Promise.resolve();
+  if (catalogLoads.has(lang)) return catalogLoads.get(lang);
+  const load = fetch(`/assets/i18n/${lang}.json`)
+    .then((response) => {
+      if (!response.ok) throw new Error(`catalog request failed: ${response.status}`);
+      return response.json();
+    })
+    .then((catalog) => {
+      catalogs = { ...catalogs, [lang]: flatten(catalog || {}) };
+    })
+    .finally(() => catalogLoads.delete(lang));
+  catalogLoads.set(lang, load);
+  return load;
 }
 
 /**
@@ -71,6 +87,7 @@ export function setCatalogs(loaded) {
     en: flatten(loaded.en || {}),
     ko: flatten(loaded.ko || {}),
   };
+  catalogLoads.clear();
 }
 
 /**
@@ -144,6 +161,13 @@ export function detectAutoLang() {
  */
 export function getLang() {
   const pref = getLangPreference();
+  return resolveLangPreference(pref);
+}
+
+/** Resolves a candidate preference before it is persisted. Language controls
+ * use this to load the destination catalog without exposing untranslated keys
+ * during a failed switch. */
+export function resolveLangPreference(pref) {
   if (pref === "auto") return detectAutoLang();
   return pref;
 }
@@ -171,6 +195,12 @@ export const SUPPORTED_LANGUAGES = SUPPORTED_LANGS;
 export function t(key, params) {
   const lang = getLang();
   let entry = catalogs[lang]?.[key];
+  if (entry === undefined && lang !== FALLBACK_LANG && !Object.keys(catalogs[FALLBACK_LANG] || {}).length) {
+    // Catalog parity normally makes this path unnecessary. If a newer
+    // Korean catalog temporarily lacks a key, start loading the English
+    // fallback without blocking a synchronous render.
+    void ensureCatalog(FALLBACK_LANG);
+  }
   if (entry === undefined) entry = catalogs[FALLBACK_LANG]?.[key];
   if (entry === undefined) return key;
 

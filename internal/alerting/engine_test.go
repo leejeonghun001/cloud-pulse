@@ -406,6 +406,35 @@ func TestEvaluate_HostDown(t *testing.T) {
 	}
 }
 
+func TestEvaluate_CriticalRuleSnapshotsSeverityOnEvent(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	clock := newFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	sender := &fakeSender{}
+	e := newTestEngine(t, store, clock, func(models.NotifyChannel) (Sender, error) { return sender, nil })
+
+	store.setChannel(models.NotifyChannel{ID: 1, Name: "c1", Type: models.NotifyChannelWebhook, Enabled: true})
+	rule := models.AlertRule{ID: 1, Name: "CPU critical", Enabled: true, Metric: models.AlertMetricCPU, Severity: models.AlertSeverityCritical, Operator: models.AlertOperatorGT, Threshold: 90, ChannelIDs: []int64{1}}
+	store.setRule(rule)
+	if err := e.Evaluate(t.Context(), clock.Now(), []models.HostSnapshot{hostSnapshot("h1", &models.Sample{CPUPercent: 95})}); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	e.Wait()
+
+	if got := sender.lastMessage().Severity; got != SeverityCritical {
+		t.Errorf("notification severity = %q, want critical", got)
+	}
+	events := store.listEvents()
+	if len(events) != 1 || events[0].Severity != models.AlertSeverityCritical {
+		t.Fatalf("events = %+v, want one critical event", events)
+	}
+	rule.Severity = models.AlertSeverityWarning
+	store.setRule(rule)
+	if got := store.listEvents()[0].Severity; got != models.AlertSeverityCritical {
+		t.Errorf("stored event severity after rule edit = %q, want critical snapshot", got)
+	}
+}
+
 func TestEvaluate_HostDownNotYetPastDuration(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
@@ -884,5 +913,40 @@ func TestEvaluate_MetricValueMissing_NoLatestSample(t *testing.T) {
 	}
 	if st := store.getState(1, "h1"); st.State != "" {
 		t.Errorf("state = %+v, want untouched (no data to evaluate)", st)
+	}
+}
+
+// TestEvaluate_ReNotifyUsesEventSeveritySnapshot checks that a "still
+// firing" reminder repeats the severity the event fired with even when
+// the rule's severity was edited while it kept firing.
+func TestEvaluate_ReNotifyUsesEventSeveritySnapshot(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	clock := newFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	sender := &fakeSender{}
+	e := newTestEngine(t, store, clock, func(models.NotifyChannel) (Sender, error) { return sender, nil })
+
+	store.setChannel(models.NotifyChannel{ID: 1, Name: "c1", Type: models.NotifyChannelWebhook, Enabled: true})
+	rule := models.AlertRule{ID: 1, Name: "CPU", Enabled: true, Metric: models.AlertMetricCPU, Severity: models.AlertSeverityCritical,
+		Operator: models.AlertOperatorGT, Threshold: 90, CooldownSec: 600, ChannelIDs: []int64{1}}
+	store.setRule(rule)
+	host := hostSnapshot("h1", &models.Sample{CPUPercent: 95})
+	if err := e.Evaluate(t.Context(), clock.Now(), []models.HostSnapshot{host}); err != nil {
+		t.Fatalf("Evaluate (fire): %v", err)
+	}
+	e.Wait()
+
+	rule.Severity = models.AlertSeverityWarning
+	store.setRule(rule)
+	clock.Advance(601 * time.Second)
+	if err := e.Evaluate(t.Context(), clock.Now(), []models.HostSnapshot{host}); err != nil {
+		t.Fatalf("Evaluate (renotify): %v", err)
+	}
+	e.Close()
+	if got := sender.callCount(); got != 2 {
+		t.Fatalf("sender calls = %d, want 2", got)
+	}
+	if got := sender.lastMessage().Severity; got != SeverityCritical {
+		t.Errorf("reminder severity = %q, want critical (event snapshot)", got)
 	}
 }

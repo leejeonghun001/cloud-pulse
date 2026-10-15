@@ -11,14 +11,14 @@ import { loadDisplayCurrency } from "../core/display-currency.js";
 import {
   el,
   clearChildren,
-  emptyState,
   errorBanner,
   statusDot,
   providerBadge,
   progressBar,
   levelClassForBar,
-  egressLevelChip,
   hubOverrideBadge,
+  skeletonCards,
+  skeletonTable,
 } from "../ui/components.js";
 import { icon } from "../ui/icons.js";
 import { sortableHeader, nextSortState, sortRows } from "../ui/table.js";
@@ -27,7 +27,6 @@ import {
   formatBytes,
   formatBitrate,
   formatPercent,
-  formatDuration,
   formatRelativeTimeFromUnixSeconds,
   formatLoad,
   formatNumber,
@@ -37,6 +36,7 @@ import { buildEgressSection, currentMonth, getStoredDirection, setStoredDirectio
 import { buildBucketsSection } from "./buckets.js";
 import { buildStorageAccountsSection } from "./storage-overview.js";
 import { outdatedAgentCount, agentVersionText, hostUpdateBadgeText } from "../core/updates.js";
+import { applyFacets, facetCounts, facetsActive, normalizeFacets } from "../core/hostfilter.js";
 import {
   COLUMNS,
   columnAccessors,
@@ -50,9 +50,19 @@ import {
 } from "./hosttable.js";
 import { t } from "../core/i18n.js";
 import { localizeApiError } from "../core/api.js";
+import { hostGridCard } from "./hostgrid.js";
+import { selectField } from "../ui/select.js";
 
-const AGENT_INSTALL_HINT =
-  "curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scripts/install-agent.sh | sudo bash -s -- --hub-url <HUB_URL> --token <AGENT_TOKEN>";
+// These cloud-backed summaries are collected by the hub on a much slower
+// cadence than host telemetry. Reusing a successful snapshot for one minute
+// avoids presenting a 15-second UI refresh as freshly collected cloud data.
+export const CLOUD_SUMMARY_REFRESH_MS = 60000;
+
+/** Pure freshness check kept separate so cloud request cadence is testable
+ * without mounting the dashboard DOM. */
+export function isCloudSummaryFresh(snapshot, snapshotAtMs, month, nowMs = Date.now()) {
+  return Boolean(snapshot && snapshot.month === month && nowMs - snapshotAtMs < CLOUD_SUMMARY_REFRESH_MS);
+}
 
 /**
  * mountOverviewPage renders the overview page into container and
@@ -60,26 +70,57 @@ const AGENT_INSTALL_HINT =
  * @param {HTMLElement} container
  * @param {Object} ctx
  * @param {(text: string) => void} ctx.announce
+ * @param {(opener: HTMLElement, options: {signal: AbortSignal}) => Promise<void>|void} [ctx.onAddAgent] opens the existing enrollment dialog on explicit request
  * @returns {{refresh: (showLoading: boolean) => Promise<void>, teardown: () => void}}
  */
-export function mountOverviewPage(container, { announce }) {
+export function mountOverviewPage(container, { announce, onAddAgent }) {
   const controller = new AbortController();
+  let resizeFrame = null;
+  const syncTableOverflowOnResize = () => {
+    if (resizeFrame !== null) return;
+    resizeFrame = globalThis.requestAnimationFrame(() => {
+      resizeFrame = null;
+      const wrap = container.querySelector(".cp-systems-table-wrap");
+      if (wrap) syncTableOverflow(wrap);
+    });
+  };
+  globalThis.addEventListener?.("resize", syncTableOverflowOnResize);
+  const storedView = getItem(VIEW_STORAGE_KEY);
   const state = {
     month: currentMonth(),
     direction: getStoredDirection(),
     charts: [],
     hosts: [],
+    hostsLoaded: false,
+    hostsError: "",
     filter: "",
+    // Facet chips are page-session state: a stored filter that silently
+    // hides hosts on the next visit would be more confusing than helpful.
+    facets: normalizeFacets(null),
     sort: getJSON(SORT_STORAGE_KEY, { key: "system", direction: "asc" }),
     visibleColumns: normalizeVisibleColumns(getJSON(COLUMNS_STORAGE_KEY, null)),
-    view: getItem(VIEW_STORAGE_KEY, "table") === "grid" ? "grid" : "table",
+    view: storedView === "grid" ? "grid" : "table",
+    hasStoredView: storedView === "grid" || storedView === "table",
+    hasResolvedDefaultView: false,
+    cloudSnapshot: null,
+    cloudSnapshotAtMs: 0,
+    lastUpdatedMs: 0,
   };
 
   clearChildren(container);
-  container.append(el("h1", { class: "cp-page-title", text: t("overview.page_title") }));
-  container.append(el("p", { class: "cp-page-subtitle", text: t("overview.page_subtitle") }));
+  const pageHeader = el("div", { class: "cp-overview-page-header" });
+  const titleLine = el("div", { class: "cp-overview-title-line" });
+  titleLine.append(el("h1", { class: "cp-page-title", text: t("overview.page_title") }));
+  const liveStatus = el("span", { class: "cp-overview-live-status" });
+  liveStatus.append(el("span", { class: "cp-overview-live-dot", attrs: { "aria-hidden": "true" } }), el("span", { text: t("overview.page_subtitle") }));
+  titleLine.append(liveStatus);
+  pageHeader.append(titleLine, el("p", { class: "cp-page-subtitle", text: t("overview.page_description") }));
+  container.append(pageHeader);
 
+  // Keep an inactive banner out of the shell's shared page gap. Otherwise
+  // this empty node creates an extra gap only between the header and KPIs.
   const bannerHost = el("div");
+  bannerHost.hidden = true;
   const statCardsHost = el("div", { class: "cp-stat-cards" });
   const systemsCard = el("section", { class: "cp-card cp-systems-card", attrs: { "aria-labelledby": "cp-systems-heading" } });
   const egressHost = el("div", { class: "cp-egress-host" });
@@ -87,18 +128,43 @@ export function mountOverviewPage(container, { announce }) {
   const storageAccountsHost = el("div", { class: "cp-storage-accounts-host" });
   container.append(bannerHost, statCardsHost, systemsCard, egressHost, bucketsHost, storageAccountsHost);
 
-  function showBanner(message) {
+  function showBanner(message, retry = false) {
+    bannerHost.hidden = false;
     clearChildren(bannerHost);
-    bannerHost.append(errorBanner(message));
+    const banner = errorBanner(message);
+    if (retry) {
+      const button = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button" }, text: t("common.retry") });
+      button.addEventListener("click", () => refresh());
+      banner.append(button);
+    }
+    bannerHost.append(banner);
   }
   function clearBanner() {
     clearChildren(bannerHost);
+    bannerHost.hidden = true;
   }
 
   function renderSystemsCardBody() {
+    // Rebuilding the header must not interrupt typing or a timed refresh's
+    // focused search field. Keep the caret as well as the current query.
+    const active = document.activeElement;
+    const focusedFilter = systemsCard.contains(active) && active?.matches(".cp-systems-filter .cp-input");
+    const selection = focusedFilter ? [active.selectionStart, active.selectionEnd] : null;
+    const focusedSort = systemsCard.contains(active) && active?.matches(".cp-host-grid-sort select, .cp-host-grid-sort button");
+    const focusedCardHref = systemsCard.contains(active) && active?.matches("a.cp-host-grid-card") ? active.getAttribute("href") : null;
+    const focusedOnboardingID = systemsCard.contains(active) && active?.matches(".cp-onboarding button, .cp-overview-load-state button") ? active.id : null;
+    const focusedFacet = systemsCard.contains(active) && active?.matches("[data-facet]") ? active.getAttribute("data-facet") : null;
     renderSystemsCard(systemsCard, state, {
+      onAddAgent: onAddAgent ? (opener) => {
+        if (!controller.signal.aborted) return onAddAgent(opener, { signal: controller.signal });
+      } : undefined,
+      onRetry: refresh,
       onFilterChange: (q) => {
         state.filter = q;
+        renderSystemsCardBody();
+      },
+      onFacetsChange: (facets) => {
+        state.facets = normalizeFacets(facets);
         renderSystemsCardBody();
       },
       onSortChange: (key) => {
@@ -113,39 +179,91 @@ export function mountOverviewPage(container, { announce }) {
       },
       onViewChange: (v) => {
         state.view = v;
+        state.hasStoredView = true;
         setItem(VIEW_STORAGE_KEY, v);
         renderSystemsCardBody();
       },
     });
+    if (focusedFilter) {
+      const input = systemsCard.querySelector(".cp-systems-filter .cp-input");
+      input?.focus({ preventScroll: true });
+      if (selection && selection.every((value) => value !== null)) input?.setSelectionRange(...selection);
+    } else if (focusedSort) {
+      systemsCard.querySelector(active.tagName === "SELECT" ? ".cp-host-grid-sort select" : ".cp-host-grid-sort button")?.focus({ preventScroll: true });
+    } else if (focusedCardHref) {
+      // Preserve a keyboard user's place across normal 15-second refreshes.
+      Array.from(systemsCard.querySelectorAll("a.cp-host-grid-card")).find((link) => link.getAttribute("href") === focusedCardHref)?.focus({ preventScroll: true });
+    } else if (focusedOnboardingID) {
+      systemsCard.querySelector(`#${focusedOnboardingID}`)?.focus({ preventScroll: true });
+    } else if (focusedFacet) {
+      Array.from(systemsCard.querySelectorAll("[data-facet]")).find((chip) => chip.getAttribute("data-facet") === (focusedFacet === "clear" ? "status:all" : focusedFacet))?.focus({ preventScroll: true });
+    }
   }
+  renderSystemsCardBody();
 
   async function refresh() {
+    if (controller.signal.aborted) return;
+    if (!state.hostsLoaded) { state.hostsError = ""; renderSystemsCardBody(); }
     try {
-      const [hostsResp, egressResp, bucketsResp, displayCurrency, storageAccountsResp] = await Promise.all([
+      const cloudFresh = isCloudSummaryFresh(state.cloudSnapshot, state.cloudSnapshotAtMs, state.month);
+      const cloudPromise = cloudFresh
+        ? Promise.resolve(state.cloudSnapshot)
+        : Promise.all([
+          getEgress(state.month, controller.signal),
+          getBuckets(controller.signal),
+          getStorageAccounts(controller.signal).catch((err) => {
+            if (err?.name === "AbortError") throw err;
+            return { accounts: [] };
+          }),
+        ]).then(([egress, buckets, storageAccounts]) => ({
+          month: state.month,
+          fetchedAtMs: Date.now(),
+          egress,
+          buckets,
+          storageAccounts,
+        }));
+      const [hostsResp, displayCurrency, cloudSnapshot] = await Promise.all([
         getHosts(controller.signal),
-        getEgress(state.month, controller.signal),
-        getBuckets(controller.signal),
         loadDisplayCurrency(controller.signal),
-        getStorageAccounts(controller.signal).catch((err) => {
-          if (err?.name === "AbortError") throw err;
-          return { accounts: [] };
-        }),
+        cloudPromise,
       ]);
+      if (controller.signal.aborted) return;
+      if (!cloudFresh) {
+        state.cloudSnapshot = cloudSnapshot;
+        state.cloudSnapshotAtMs = cloudSnapshot.fetchedAtMs;
+      }
       state.displayCurrency = displayCurrency;
       clearBanner();
 
       const nowMs = Date.now();
       state.hosts = hostsResp.hosts;
+      state.hostsLoaded = true;
+      state.hostsError = "";
       state.nowMs = nowMs;
+      state.lastUpdatedMs = nowMs;
+      if (!state.hasStoredView && !state.hasResolvedDefaultView) {
+        state.view = state.hosts.length <= 12 ? "grid" : "table";
+        state.hasResolvedDefaultView = true;
+      }
       renderSystemsCardBody();
-      renderStatCards(statCardsHost, hostsResp, bucketsResp, nowMs);
+      // No hosts means no measured fleet CPU/rates. The confirmed host count
+      // lives beside the onboarding guide; don't present placeholder metrics.
+      statCardsHost.hidden = state.hosts.length === 0;
+      if (state.hosts.length === 0) clearChildren(statCardsHost);
+      else renderStatCards(statCardsHost, hostsResp, cloudSnapshot.buckets, nowMs);
 
+      const noFleetOrBuckets = state.hosts.length === 0 && (cloudSnapshot.buckets.buckets || []).length === 0;
       clearChildren(egressHost);
-      egressHost.append(
+      clearChildren(bucketsHost);
+      clearChildren(storageAccountsHost);
+      egressHost.hidden = noFleetOrBuckets;
+      bucketsHost.hidden = noFleetOrBuckets;
+      storageAccountsHost.hidden = noFleetOrBuckets;
+      if (!noFleetOrBuckets) egressHost.append(
         buildEgressSection({
           month: state.month,
           direction: state.direction,
-          hosts: egressResp.hosts,
+          hosts: cloudSnapshot.egress.hosts,
           onMonthChange: (m) => {
             state.month = m;
             refresh(false);
@@ -159,26 +277,30 @@ export function mountOverviewPage(container, { announce }) {
       );
 
       state.charts.forEach((c) => c.destroy());
-      clearChildren(bucketsHost);
-      const { node, charts } = buildBucketsSection({
-        buckets: bucketsResp.buckets,
-        collectors: bucketsResp.collectors,
-        nowMs,
-      });
-      bucketsHost.append(node);
-      state.charts = charts;
-
-      clearChildren(storageAccountsHost);
-      storageAccountsHost.append(buildStorageAccountsSection({ accounts: storageAccountsResp.accounts || [], nowMs }));
+      if (!noFleetOrBuckets) {
+        const { node, charts } = buildBucketsSection({
+          buckets: cloudSnapshot.buckets.buckets,
+          collectors: cloudSnapshot.buckets.collectors,
+          nowMs,
+        });
+        bucketsHost.append(node);
+        state.charts = charts;
+        storageAccountsHost.append(buildStorageAccountsSection({ accounts: cloudSnapshot.storageAccounts.accounts || [], nowMs }));
+      } else state.charts = [];
 
       announce?.(t("overview.dashboard_refreshed"));
     } catch (err) {
       if (err?.name === "AbortError") return;
-      showBanner(describeError(err));
+      if (controller.signal.aborted) return;
+      state.hostsError = describeError(err);
+      showBanner(state.hostsLoaded ? t("overview.refresh_failed_keep_data") : state.hostsError, state.hostsLoaded);
+      renderSystemsCardBody();
     }
   }
 
   function teardown() {
+    globalThis.removeEventListener?.("resize", syncTableOverflowOnResize);
+    if (resizeFrame !== null) globalThis.cancelAnimationFrame?.(resizeFrame);
     controller.abort();
     state.charts.forEach((c) => c.destroy());
     state.charts = [];
@@ -200,10 +322,9 @@ function renderStatCards(host, hostsResp, bucketsResp, nowMs) {
   const fleetIngressBytes = hosts.reduce((sum, h) => sum + h.egress.rx_bytes, 0);
   const outdated = outdatedAgentCount(hosts);
 
-  clearChildren(host);
   const cards = [
     { icon: "server", label: t("overview.summary_hosts_up"), value: formatNumber(up.length), tone: "ok" },
-    { icon: "wifiOff", label: t("overview.summary_hosts_down"), value: formatNumber(down.length), tone: down.length > 0 ? "critical" : "ok" },
+    { icon: "wifiOff", label: t("overview.summary_hosts_down"), value: formatNumber(down.length), tone: down.length > 0 ? "critical" : "neutral" },
     { icon: "cpu", label: t("overview.summary_avg_cpu"), value: formatPercent(avgCPU), tone: "neutral" },
     { icon: "arrowUp", label: t("overview.summary_fleet_outbound"), value: formatBytes(fleetEgressBytes), tone: "neutral" },
     { icon: "arrowDown", label: t("overview.summary_fleet_inbound"), value: formatBytes(fleetIngressBytes), tone: "neutral" },
@@ -213,6 +334,8 @@ function renderStatCards(host, hostsResp, bucketsResp, nowMs) {
     cards.push({ icon: "cloudUpload", label: t("overview.summary_agents_outdated"), value: formatNumber(outdated), tone: "warning" });
   }
 
+  clearChildren(host);
+  host.className = `cp-stat-cards cp-stat-cards-${cards.length}${cards.length % 2 ? " cp-stat-cards-odd" : ""}`;
   for (const c of cards) {
     const card = el("div", { class: `cp-stat-card cp-stat-card-${c.tone}` });
     const iconWrap = el("div", { class: "cp-stat-card-icon" });
@@ -237,9 +360,35 @@ function renderSystemsCard(card, state, handlers) {
 
   const head = el("div", { class: "cp-systems-head" });
   const titleCol = el("div");
-  titleCol.append(el("h2", { id: "cp-systems-heading", text: t("overview.all_systems_title") }));
-  titleCol.append(el("p", { class: "cp-page-subtitle", text: t("overview.host_count", { count: state.hosts.length }) }));
+  titleCol.append(el("h2", { class: "cp-card-title", attrs: { id: "cp-systems-heading" }, text: t("overview.all_systems_title") }));
+  const subtitle = state.hostsLoaded ? el("p", { class: "cp-page-subtitle", text: t("overview.host_count", { count: state.hosts.length }) }) : null;
+  if (subtitle) titleCol.append(subtitle);
   head.append(titleCol);
+
+  if (!state.hostsLoaded || (state.hostsError && state.hosts.length === 0)) {
+    card.append(head);
+    const notice = el("div", { class: "cp-overview-load-state" });
+    if (!state.hostsError) {
+      notice.append(skeletonCards(4), skeletonTable(4, 4), el("p", { class: "sr-only", attrs: { role: "status" }, text: t("overview.onboarding_loading") }));
+      card.append(notice);
+      return;
+    }
+    notice.append(icon("triangleAlert"));
+    const noticeText = t("overview.onboarding_load_error");
+    notice.append(el("p", { class: "cp-muted", text: noticeText }));
+    {
+      const retry = el("button", { class: "cp-btn cp-btn-secondary", attrs: { type: "button", id: "cp-overview-retry" }, text: t("overview.onboarding_retry") });
+      retry.addEventListener("click", () => handlers.onRetry?.());
+      notice.append(retry);
+    }
+    card.append(notice);
+    return;
+  }
+
+  if (state.hosts.length === 0) {
+    card.append(head, buildFirstAgentGuide(handlers.onAddAgent), buildOptionalNextSteps());
+    return;
+  }
 
   const controls = el("div", { class: "cp-systems-controls" });
 
@@ -258,26 +407,23 @@ function renderSystemsCard(card, state, handlers) {
 
   controls.append(buildViewToggle(state.view, handlers.onViewChange));
   controls.append(buildColumnsDropdown(state.visibleColumns, handlers.onColumnsChange));
+  if (state.view === "grid") controls.append(buildGridSort(state.sort, handlers.onSortChange));
 
   head.append(controls);
   card.append(head);
 
-  const filtered = filterRows(state.hosts, state.filter);
-
-  if (state.hosts.length === 0) {
-    card.append(
-      emptyState({
-        title: t("overview.empty_add_first_agent_title"),
-        message: t("overview.empty_add_first_agent_message"),
-        code: AGENT_INSTALL_HINT,
-        iconName: "server",
-      }),
-    );
-    return;
+  const textMatched = filterRows(state.hosts, state.filter);
+  card.append(buildFacetBar(textMatched, state.facets, handlers.onFacetsChange, state.hosts));
+  const filtered = applyFacets(textMatched, state.facets);
+  if (filtered.length !== state.hosts.length) {
+    subtitle.textContent = t("overview.hosts_shown", { shown: filtered.length, total: state.hosts.length });
   }
 
   if (filtered.length === 0) {
-    card.append(el("p", { class: "cp-muted", text: t("overview.no_hosts_match_filter", { filter: state.filter }) }));
+    const message = textMatched.length === 0
+      ? t("overview.no_hosts_match_filter", { filter: state.filter })
+      : t("overview.no_hosts_match_facets");
+    card.append(el("p", { class: "cp-muted", attrs: { role: "status" }, text: message }));
     return;
   }
 
@@ -289,6 +435,63 @@ function renderSystemsCard(card, state, handlers) {
     card.append(buildTableView(sorted, state, handlers));
     card.append(buildMobileCardList(sorted, state));
   }
+}
+
+function buildOptionalNextSteps() {
+  const section = el("section", { class: "cp-optional-next-steps", attrs: { "aria-labelledby": "cp-optional-next-steps" } });
+  section.append(el("h3", { attrs: { id: "cp-optional-next-steps" }, text: t("overview.optional_next_steps") }));
+  const list = el("ul", { attrs: { role: "list" } });
+  const steps = [
+    ["database", t("overview.optional_storage"), "https://github.com/leejeonghun001/cloud-pulse/blob/main/docs/storage.md"],
+    ["gauge", t("overview.optional_limits"), "#/settings/limits"],
+    ["bell", t("overview.optional_notifications"), "#/settings/notifications"],
+  ];
+  for (const [iconName, label, href] of steps) {
+    const row = el("li");
+    row.append(icon(iconName), el("a", { attrs: href.startsWith("http") ? { href, target: "_blank", rel: "noopener noreferrer" } : { href }, text: label }));
+    list.append(row);
+  }
+  section.append(list);
+  return section;
+}
+
+function buildFirstAgentGuide(onAddAgent) {
+  const guide = el("div", { class: "cp-onboarding" });
+  const intro = el("div", { class: "cp-onboarding-intro" });
+  const mark = el("span", { class: "cp-onboarding-mark", attrs: { "aria-hidden": "true" } });
+  mark.append(icon("server"));
+  intro.append(mark, el("h3", { class: "cp-onboarding-title", text: t("overview.onboarding_title") }), el("p", { class: "cp-onboarding-description", text: t("overview.onboarding_description") }));
+  const actions = el("div", { class: "cp-onboarding-actions" });
+  const feedback = el("p", { class: "cp-muted-small", attrs: { role: "alert" } });
+  const add = el(onAddAgent ? "button" : "a", {
+    class: "cp-btn cp-btn-primary",
+    attrs: onAddAgent ? { type: "button", id: "cp-onboarding-add-agent" } : { href: "#/settings/agents" },
+    children: [icon("plus"), el("span", { text: t("nav.add_agent") })],
+  });
+  let opening = false;
+  if (onAddAgent) add.addEventListener("click", async () => {
+    if (opening) return;
+    opening = true;
+    // Keep the native button focusable while the command request is pending.
+    // Disabling a focused button makes Firefox drop its keyboard focus.
+    add.setAttribute("aria-disabled", "true");
+    feedback.textContent = "";
+    try { await onAddAgent(add); }
+    catch { if (add.isConnected) feedback.textContent = t("overview.onboarding_open_error"); }
+    finally { opening = false; add.removeAttribute("aria-disabled"); }
+  });
+  actions.append(add, el("a", { class: "cp-back-link", attrs: { href: "https://github.com/leejeonghun001/cloud-pulse/blob/main/docs/install.md", target: "_blank", rel: "noopener noreferrer" }, text: t("overview.onboarding_install_guide") }));
+  intro.append(actions, feedback);
+  const steps = el("ol", { class: "cp-onboarding-steps", attrs: { role: "list" } });
+  for (const step of [1, 2, 3]) {
+    const item = el("li", { class: "cp-onboarding-step" });
+    const copy = el("div");
+    copy.append(el("h4", { text: t(`overview.onboarding_step_${step}_title`) }), el("p", { text: t(`overview.onboarding_step_${step}_description`) }));
+    item.append(el("span", { class: "cp-onboarding-step-number", attrs: { "aria-hidden": "true" }, text: String(step) }), copy);
+    steps.append(item);
+  }
+  guide.append(intro, steps);
+  return guide;
 }
 
 function buildViewToggle(current, onChange) {
@@ -307,6 +510,25 @@ function buildViewToggle(current, onChange) {
   gridBtn.addEventListener("click", () => onChange("grid"));
   group.append(tableBtn, gridBtn);
   return group;
+}
+
+function buildGridSort(sort, onChange) {
+  const wrap = el("div", { class: "cp-host-grid-sort" });
+  const { node, select } = selectField({
+    id: "cp-host-grid-sort", ariaLabel: t("overview.card_sort_by"),
+    options: COLUMNS.filter((column) => column.sortable).map((column) => ({ value: column.key, label: column.label })),
+    value: sort.key,
+  });
+  select.addEventListener("change", () => onChange(select.value));
+  const directionLabel = sort.direction === "asc" ? t("overview.card_sort_ascending") : t("overview.card_sort_descending");
+  const reverse = el("button", {
+    class: "cp-btn cp-btn-icon",
+    attrs: { type: "button", "aria-label": directionLabel, title: directionLabel },
+  });
+  reverse.append(icon(sort.direction === "asc" ? "arrowUp" : "arrowDown"));
+  reverse.addEventListener("click", () => onChange(sort.key));
+  wrap.append(node, reverse);
+  return wrap;
 }
 
 function buildColumnsDropdown(visibleColumns, onChange) {
@@ -354,7 +576,10 @@ function buildColumnsDropdown(visibleColumns, onChange) {
 // ---------------------------------------------------------------------------
 
 function buildTableView(rows, state, handlers) {
-  const wrap = el("div", { class: "cp-table-wrap cp-systems-table-wrap" });
+  const wrap = el("div", {
+    class: "cp-table-wrap cp-systems-table-wrap",
+    attrs: { tabindex: "0", role: "region", "aria-label": t("overview.systems_table_scroll_label") },
+  });
   const table = el("table", { class: "cp-table cp-systems-table" });
   const thead = el("thead");
   const headRow = el("tr");
@@ -375,7 +600,22 @@ function buildTableView(rows, state, handlers) {
   }
   table.append(tbody);
   wrap.append(table);
+  // No ResizeObserver: the table is rebuilt on every refresh. The page-scoped
+  // resize listener re-syncs the current wrapper without adding rebuild leaks.
+  const sync = () => syncTableOverflow(wrap);
+  wrap.addEventListener("scroll", sync, { passive: true });
+  wrap.addEventListener("pointerenter", sync);
+  wrap.addEventListener("focus", sync);
+  globalThis.requestAnimationFrame?.(sync);
   return wrap;
+}
+
+// syncTableOverflow marks the scroll region while columns remain hidden to
+// its right, which drives the CSS edge fade.
+export function syncTableOverflow(wrap) {
+  const hiddenRight = wrap.scrollWidth - wrap.clientWidth - wrap.scrollLeft > 1;
+  if (hiddenRight) wrap.setAttribute("data-overflow-right", "true");
+  else wrap.removeAttribute("data-overflow-right");
 }
 
 function buildTableRow(row, state) {
@@ -559,103 +799,6 @@ function buildGridView(rows, state) {
   return grid;
 }
 
-function hostGridCard(row, nowMs) {
-  const isUp = row.status === "up";
-  const card = /** @type {HTMLAnchorElement} */ (
-    el("a", {
-      class: `cp-card cp-host-card ${isUp ? "" : "cp-host-card-offline"}`.trim(),
-      attrs: { href: `#/host/${encodeURIComponent(row.host.id)}` },
-    })
-  );
-
-  const header = el("div", { class: "cp-host-card-header" });
-  const nameRow = el("div", { class: "cp-host-card-header-name-row" });
-  nameRow.append(statusDot(row.status), el("h3", { class: "cp-host-card-name", text: row.host.hostname }));
-  header.append(nameRow);
-  header.append(providerBadge(row.host.provider));
-  const updateInfo = hostUpdateBadgeText(row.update);
-  if (updateInfo) {
-    header.append(
-      el("span", { class: "cp-badge cp-badge-update", text: updateInfo.text, attrs: { title: updateInfo.label, "aria-label": updateInfo.label } }),
-    );
-  }
-  card.append(header);
-
-  card.append(
-    el("p", {
-      class: "cp-host-card-meta",
-      text: t("overview.grid_os_arch_agent", { os: row.host.os || t("overview.unknown"), arch: row.host.arch || t("overview.unknown"), agent: agentVersionText(row.host.agent_version) }),
-    }),
-  );
-
-  if (!isUp) {
-    card.append(el("p", { class: "cp-host-card-offline-note", text: t("overview.offline_since", { relative: formatRelativeTimeFromUnixSeconds(row.last_seen, nowMs) }) }));
-  }
-
-  if (row.latest) {
-    card.append(gridMetricRow(t("overview.metric_cpu"), row.latest.cpu_percent));
-    card.append(gridMetricRow(t("overview.metric_memory"), row.latest.mem_used_percent, `${formatBytes(row.latest.mem_used)}/${formatBytes(row.latest.mem_total)}`));
-    card.append(gridMetricRow(t("overview.metric_disk"), row.latest.disk_used_percent, `${formatBytes(row.latest.disk_used)}/${formatBytes(row.latest.disk_total)}`));
-
-    const netRow = el("div", { class: "cp-host-card-net" });
-    netRow.append(
-      el("span", { text: `↓ ${formatBitrate(row.latest.net_rx_bps)}` }),
-      el("span", { text: `↑ ${formatBitrate(row.latest.net_tx_bps)}` }),
-      el("span", { text: t("overview.load_value", { value: formatLoad(row.latest.load1) }) }),
-    );
-    card.append(netRow);
-    card.append(
-      el("p", {
-        class: "cp-host-card-uptime",
-        text: t("overview.uptime_last_seen", { uptime: formatDuration(row.latest.uptime_seconds), relative: formatRelativeTimeFromUnixSeconds(row.last_seen, nowMs) }),
-      }),
-    );
-  } else {
-    card.append(el("p", { class: "cp-host-card-meta", text: t("host.no_samples_yet") }));
-  }
-
-  const egressWrap = el("div", { class: "cp-egress-mini" });
-  egressWrap.append(gridEgressRow(t("host.egress_outbound_label"), row.egress, "out"));
-  egressWrap.append(gridEgressRow(t("host.egress_inbound_label"), row.egress, "in"));
-  card.append(egressWrap);
-
-  return card;
-}
-
-function gridMetricRow(label, percent, detail) {
-  const row = el("div", { class: "cp-metric-row" });
-  const head = el("div", { class: "cp-metric-head" });
-  head.append(
-    el("span", { class: "cp-metric-label", text: label }),
-    el("span", { class: "cp-metric-value", text: detail ? `${formatPercent(percent)} · ${detail}` : formatPercent(percent) }),
-  );
-  row.append(head);
-  row.append(progressBar({ value: percent, max: 100, label: t("host.metric_usage_label", { label }), levelClass: thresholdBarClass(percent), valueText: "" }));
-  return row;
-}
-
-function gridEgressRow(label, egress, direction) {
-  const isOut = direction === "out";
-  const bytes = isOut ? egress.tx_bytes : egress.rx_bytes;
-  const limitBytes = isOut ? egress.limit_bytes : egress.rx_limit_bytes;
-  const level = isOut ? egress.level : egress.rx_level;
-  const hubOverride = (isOut ? egress.limit_source : egress.rx_limit_source) === "hub";
-
-  const wrap = el("div", { class: "cp-egress-direction" });
-  const head = el("div", { class: "cp-metric-head" });
-  const labelGroup = el("span", { class: "cp-egress-direction-label-group" });
-  labelGroup.append(el("span", { class: "cp-metric-label", text: label }));
-  if (hubOverride) labelGroup.append(hubOverrideBadge());
-  head.append(labelGroup, egressLevelChip(level));
-  wrap.append(head);
-  if (limitBytes === 0) {
-    wrap.append(el("p", { class: "cp-egress-unlimited", text: t("host.egress_no_limit", { amount: formatBytes(bytes) }) }));
-    return wrap;
-  }
-  wrap.append(progressBar({ value: bytes, max: limitBytes, label: t("host.egress_usage_label", { label }), levelClass: levelClassForBar(level), valueText: `${formatBytes(bytes)} / ${formatBytes(limitBytes)}` }));
-  return wrap;
-}
-
 // ---------------------------------------------------------------------------
 // Mobile card list (< md, shown alongside the table via CSS visibility)
 // ---------------------------------------------------------------------------
@@ -697,4 +840,50 @@ function mobileCard(row, nowMs) {
 function describeError(err) {
   if (err instanceof ApiError) return t("overview.api_error_prefix", { message: localizeApiError(err) });
   return t("overview.hub_unreachable_showing_last_known");
+}
+
+// Status chips are single-choice; provider chips toggle independently.
+// Counts come from facetCounts so each chip shows what clicking it leaves.
+export function buildFacetBar(rows, facets, onChange, fleet = rows) {
+  const counts = facetCounts(rows, facets, fleet);
+  const bar = el("div", { class: "cp-facet-bar", attrs: { role: "group", "aria-label": t("overview.facet_group_label") } });
+  const chip = (key, label, count, pressed, onClick, title) => {
+    const button = el("button", {
+      class: `cp-facet-chip${pressed ? " cp-facet-chip-active" : ""}`,
+      attrs: { type: "button", "aria-pressed": pressed ? "true" : "false", "data-facet": key, ...(title ? { title } : {}) },
+    });
+    button.append(el("span", { text: label }), el("span", { class: "cp-facet-count", text: String(count) }));
+    button.addEventListener("click", onClick);
+    return button;
+  };
+  const statusGroup = el("div", { class: "cp-facet-group", attrs: { role: "group", "aria-label": t("overview.facet_status_label") } });
+  const statusLabels = {
+    all: t("overview.facet_all"),
+    online: t("overview.card_online"),
+    offline: t("overview.card_offline"),
+    attention: t("overview.facet_attention"),
+  };
+  for (const key of Object.keys(statusLabels)) {
+    statusGroup.append(chip(`status:${key}`, statusLabels[key], counts.status[key], facets.status === key,
+      () => onChange({ ...facets, status: key }), key === "attention" ? t("overview.facet_attention_title") : undefined));
+  }
+  bar.append(statusGroup);
+  if (counts.providers.length > 1 || facets.providers.length > 0) {
+    const providerGroup = el("div", { class: "cp-facet-group", attrs: { role: "group", "aria-label": t("overview.facet_provider_label") } });
+    const providerLabels = { aws: "AWS", oci: "OCI", other: t("host.provider_other") };
+    for (const { key, count } of counts.providers) {
+      const pressed = facets.providers.includes(key);
+      providerGroup.append(chip(`provider:${key}`, providerLabels[key], count, pressed, () => onChange({
+        ...facets,
+        providers: pressed ? facets.providers.filter((p) => p !== key) : [...facets.providers, key],
+      })));
+    }
+    bar.append(providerGroup);
+  }
+  if (facetsActive(facets)) {
+    const clear = el("button", { class: "cp-facet-clear", attrs: { type: "button", "data-facet": "clear" }, text: t("overview.facet_clear") });
+    clear.addEventListener("click", () => onChange(normalizeFacets(null)));
+    bar.append(clear);
+  }
+  return bar;
 }

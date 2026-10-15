@@ -35,7 +35,7 @@ func validateDiscordConfig(cfg map[string]string) map[string]string {
 	requireNonEmpty(errs, cfg, "webhook_url")
 	if cfg["webhook_url"] != "" {
 		if _, err := validateEndpointHost(cfg["webhook_url"], discordAllowedHosts, clientOptions{}); err != nil {
-			errs["webhook_url"] = err.Error()
+			errs["webhook_url"] = SafeErrorText(models.NotifyChannel{Type: models.NotifyChannelDiscord, Config: cfg}, err)
 		}
 	}
 	return errs

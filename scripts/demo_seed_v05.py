@@ -76,6 +76,7 @@ class AlertRuleSpec:
     threshold: float
     duration_sec: int
     channel_keys: tuple[str, ...]
+    severity: str = "warning"
     host_id: str = ""
     cooldown_sec: int = 3600
     notify_resolved: bool = True
@@ -196,6 +197,7 @@ ALERT_RULES: tuple[AlertRuleSpec, ...] = (
         threshold=90,
         duration_sec=0,
         channel_keys=("telegram-oncall",),
+        severity="critical",
     ),
     AlertRuleSpec(
         name="Load average above 4",
@@ -230,6 +232,7 @@ ALERT_RULES: tuple[AlertRuleSpec, ...] = (
         threshold=0,
         duration_sec=120,
         channel_keys=("discord-ops", "telegram-oncall", "whatsapp-oncall"),
+        severity="critical",
     ),
 )
 
@@ -436,6 +439,7 @@ class AlertingSeeder:
                 "name": spec.name,
                 "enabled": spec.enabled,
                 "metric": spec.metric,
+                "severity": spec.severity,
                 "host_id": spec.host_id,
                 "operator": spec.operator,
                 "threshold": spec.threshold,
@@ -623,9 +627,9 @@ class FiringEventSeeder:
                 cur.execute(
                     """
                     INSERT INTO alert_events (
-                        rule_id, rule_name, host_id, hostname, metric, state,
+                        rule_id, rule_name, host_id, hostname, metric, severity, state,
                         value, threshold, started_at, notified_at, resolved_at, deliveries
-                    ) VALUES (?, ?, ?, ?, ?, 'firing', ?, ?, ?, ?, 0, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'firing', ?, ?, ?, ?, 0, ?)
                     """,
                     (
                         rule["id"],
@@ -633,6 +637,7 @@ class FiringEventSeeder:
                         host_id,
                         hostname,
                         rule["metric"],
+                        rule.get("severity", "critical" if rule["metric"] == "host_down" else "warning"),
                         _demo_value_for_metric(rule["metric"], rule["threshold"]),
                         rule["threshold"],
                         started_at,

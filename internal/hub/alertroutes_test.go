@@ -249,7 +249,7 @@ func TestAlertChannels_TestDraft_SendsAndReportsResult(t *testing.T) {
 	opts := testOptions()
 	s, _ := newTestServerWithEngine(t, opts, store, rec.senderFactory())
 
-	body := `{"name":"draft","type":"webhook","enabled":true,"config":{}}`
+	body := `{"name":"draft","type":"webhook","enabled":true,"config":{"url":"https://hooks.example.invalid/test"}}`
 	httpRec := doRequest(t, s.Handler(), http.MethodPost, "/api/v1/alerts/channels/test", "203.0.113.1:1234", testUIToken, []byte(body))
 	if httpRec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", httpRec.Code, httpRec.Body.String())
@@ -322,6 +322,9 @@ func TestAlertRules_CreateListUpdateDelete(t *testing.T) {
 	if created.CooldownSec != alertingDefaultCooldownSec {
 		t.Errorf("CooldownSec = %d, want default %d (cooldown_sec omitted)", created.CooldownSec, alertingDefaultCooldownSec)
 	}
+	if created.Severity != models.AlertSeverityWarning {
+		t.Errorf("Severity = %q, want warning default for cpu", created.Severity)
+	}
 
 	listRec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/alerts/rules", "203.0.113.1:1234", testUIToken, nil)
 	list := decodeJSON[[]models.AlertRule](t, listRec.Body)
@@ -340,6 +343,9 @@ func TestAlertRules_CreateListUpdateDelete(t *testing.T) {
 	}
 	if updated.Enabled {
 		t.Error("Enabled = true, want false after update")
+	}
+	if updated.Severity != models.AlertSeverityWarning {
+		t.Errorf("Severity after omitted PUT field = %q, want warning metric default", updated.Severity)
 	}
 
 	delRec := doRequest(t, s.Handler(), http.MethodDelete, "/api/v1/alerts/rules/"+idPath(created.ID), "203.0.113.1:1234", testUIToken, nil)
@@ -366,6 +372,7 @@ func TestAlertRules_CreateValidation(t *testing.T) {
 		{"negative_duration", `{"name":"x","metric":"cpu","operator":">","threshold":90,"duration_sec":-5}`},
 		{"negative_cooldown", `{"name":"x","metric":"cpu","operator":">","threshold":90,"cooldown_sec":-5}`},
 		{"invalid_host_id", `{"name":"x","metric":"cpu","operator":">","threshold":90,"host_id":"bad id with spaces"}`},
+		{"invalid_severity", `{"name":"x","metric":"cpu","severity":"urgent","operator":">","threshold":90}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -376,6 +383,30 @@ func TestAlertRules_CreateValidation(t *testing.T) {
 			got := decodeJSON[models.APIError](t, rec.Body)
 			if len(got.Details) == 0 {
 				t.Error("expected field-level Details in APIError")
+			}
+		})
+	}
+}
+
+func TestAlertRules_SeverityDefaultsAndExplicitCritical(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	s := newTestServer(t, testOptions(), store)
+
+	for _, tc := range []struct {
+		name, body string
+		want       models.AlertSeverity
+	}{
+		{"host down defaults critical", `{"name":"host down","enabled":true,"metric":"host_down","operator":">","threshold":0}`, models.AlertSeverityCritical},
+		{"cpu explicit critical", `{"name":"cpu critical","enabled":true,"metric":"cpu","severity":"critical","operator":">","threshold":90}`, models.AlertSeverityCritical},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := doRequest(t, s.Handler(), http.MethodPost, "/api/v1/alerts/rules", "203.0.113.1:1234", testUIToken, []byte(tc.body))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+			}
+			if got := decodeJSON[models.AlertRule](t, rec.Body).Severity; got != tc.want {
+				t.Errorf("Severity = %q, want %q", got, tc.want)
 			}
 		})
 	}

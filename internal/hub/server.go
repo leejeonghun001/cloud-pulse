@@ -196,6 +196,10 @@ type Store interface {
 	// snapshot for hostID, or models.ErrNotFound if none has been
 	// collected yet.
 	GetHostInventory(ctx context.Context, hostID string) (models.Inventory, error)
+	// ListHostInventoryCounts returns running-container/listening-port
+	// counts keyed by host ID (hosts that never reported an inventory
+	// are absent).
+	ListHostInventoryCounts(ctx context.Context) (map[string]models.InventoryCounts, error)
 	// SetHostInventory replaces the stored inventory snapshot for
 	// hostID with inv (one row per host; upsert on host_id).
 	SetHostInventory(ctx context.Context, hostID string, inv models.Inventory) error
@@ -558,7 +562,7 @@ type Server struct {
 	store      Store
 	collectors []BucketCollector
 	notifier   Notifier
-	assets     fs.FS
+	static     *staticAssets
 	logger     *slog.Logger
 
 	mux *http.ServeMux
@@ -623,18 +627,25 @@ type Server struct {
 // assets may be nil, in which case "/" serves a JSON 404 for any path.
 // logger must not be nil.
 func New(opts Options, store Store, collectors []BucketCollector, notifier Notifier, assets fs.FS, logger *slog.Logger) *Server {
+	static, err := buildStaticAssets(assets)
+	if err != nil {
+		logger.Error("embedded asset index unavailable", "error", err)
+	}
 	s := &Server{
 		opts:       opts,
 		store:      store,
 		collectors: collectors,
 		notifier:   notifier,
-		assets:     assets,
+		static:     static,
 		logger:     logger,
 		status:     make(map[string]models.CollectorStatus, len(collectors)),
 		limiter:    newRateLimiter(opts.Now),
 		agentConns: newAgentConnTracker(),
 
 		fleetOutdatedTracker: newFleetVersionTracker(),
+	}
+	if static != nil {
+		logger.Info("embedded assets prepared", "gzip_bytes", static.gzipBytes)
 	}
 	for _, c := range collectors {
 		s.status[c.Name()] = models.CollectorStatus{Name: c.Name(), Enabled: true}
@@ -647,8 +658,10 @@ func New(opts Options, store Store, collectors []BucketCollector, notifier Notif
 // middleware) for the server.
 func (s *Server) Handler() http.Handler {
 	var h http.Handler = s.jsonMethodNotAllowed(s.mux)
-	h = s.securityHeaders(h)
+	h = s.apiGzip(h)
 	h = s.cidrAllowlist(h)
+	// Apply headers outside the allowlist so denied requests retain them too.
+	h = s.securityHeaders(h)
 	h = s.requestLogger(h)
 	h = s.recoverMiddleware(h)
 	return h

@@ -14,6 +14,7 @@ import (
 	"github.com/leejeonghun001/cloud-pulse/internal/channelhealth"
 	"github.com/leejeonghun001/cloud-pulse/internal/i18n"
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
+	"github.com/leejeonghun001/cloud-pulse/internal/notify"
 )
 
 // channelHealthTickInterval is how often the background scheduler
@@ -43,7 +44,7 @@ type ChannelHealthRuntime struct {
 	// inject a fixed/advancing clock.
 	Now func() time.Time
 	// RunOptions configures internal/channelhealth.RunSyntheticTest
-	// (sender factory, per-attempt timeout). Zero value uses
+	// (sender factory, whole-run and per-attempt timeouts). Zero value uses
 	// production defaults.
 	RunOptions channelhealth.RunOptions
 }
@@ -115,6 +116,8 @@ func (s *Server) runDueChannelHealthChecks(ctx context.Context) {
 // test, updates its schedule's LastRunAt, and evaluates the fallback
 // dispatch.
 func (s *Server) runOneChannelSyntheticTest(ctx context.Context, channelID int64, now time.Time) {
+	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	defer cancel()
 	rt := s.opts.ChannelHealth
 	ch, err := s.store.GetNotifyChannel(ctx, channelID)
 	if err != nil {
@@ -314,7 +317,8 @@ func (s *Server) dispatchChannelFailureFallback(ctx context.Context, ch models.N
 	}
 }
 
-// sendFallbackNotification sends msg as a plain text notification
+// sendFallbackNotification sends msg as a notification (with a generated
+// demo chart for WhatsApp, whose sender requires an image)
 // through fallback via s.opts.NotifyFactory, returning whether the send
 // succeeded. A nil NotifyFactory (no notify stage wired) or a build/
 // send error is logged and reported as failure — never retried within
@@ -326,13 +330,26 @@ func (s *Server) sendFallbackNotification(ctx context.Context, fallback models.N
 	}
 	sender, err := s.opts.NotifyFactory(fallback)
 	if err != nil {
-		s.logger.Error("channel health: build fallback sender failed", "fallback_id", fallback.ID, "error", err)
+		s.logger.Error("channel health: build fallback sender failed", "fallback_id", fallback.ID, "error", notify.SafeErrorText(fallback, err))
 		return false
+	}
+	if sender == nil {
+		s.logger.Error("channel health: fallback sender unavailable", "fallback_id", fallback.ID)
+		return false
+	}
+	message := fallbackAlertingMessage(msg)
+	if fallback.Type == models.NotifyChannelWhatsApp {
+		message.Image, err = notify.GeneratedTestChartPNG()
+		if err != nil {
+			s.logger.Error("channel health: render fallback demo chart failed", "fallback_id", fallback.ID)
+			return false
+		}
+		message.ImageName = "connectivity-demo.png"
 	}
 	sendCtx, cancel := context.WithTimeout(ctx, alertNotifyTimeout)
 	defer cancel()
-	if err := sender.Send(sendCtx, fallbackAlertingMessage(msg)); err != nil {
-		s.logger.Error("channel health: send fallback notification failed", "fallback_id", fallback.ID, "error", err)
+	if err := sender.Send(sendCtx, message); err != nil {
+		s.logger.Error("channel health: send fallback notification failed", "fallback_id", fallback.ID, "error", notify.SafeErrorText(fallback, err))
 		return false
 	}
 	return true

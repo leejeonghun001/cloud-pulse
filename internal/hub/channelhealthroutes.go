@@ -16,6 +16,7 @@ import (
 
 	"github.com/leejeonghun001/cloud-pulse/internal/channelhealth"
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
+	"github.com/leejeonghun001/cloud-pulse/internal/notify"
 )
 
 // maxChannelHealthBodyBytes bounds the health-settings PUT request
@@ -94,6 +95,12 @@ func (s *Server) buildChannelHealth(ctx context.Context, ch models.NotifyChannel
 	if err != nil {
 		return models.ChannelHealth{}, err
 	}
+	// Defense in depth for historical entries written before channel-aware
+	// error sanitization. Copy so a fake/store-owned slice is not mutated.
+	recent = append([]models.SyntheticResult(nil), recent...)
+	for i := range recent {
+		recent[i].Detail = notify.SafeText(ch, recent[i].Detail)
+	}
 	var last *models.SyntheticResult
 	if len(recent) > 0 {
 		last = &recent[0]
@@ -145,13 +152,15 @@ func (s *Server) channelHealthBannerState(ctx context.Context, channels []models
 
 // handleRunSyntheticTest runs a channel's synthetic test immediately:
 // POST /api/v1/alerts/channels/{id}/synthetic-test (admin, "run now").
-// Runs synchronously (a single test send + optional read-back/cleanup
-// completes well within a normal HTTP request timeout) and returns the
-// resulting models.SyntheticResult.
+// Runs synchronously with a 25s whole-route deadline (including storage
+// and fallback dispatch), returning the resulting models.SyntheticResult.
 func (s *Server) handleRunSyntheticTest(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	// Includes store work, fallback dispatch and final persistence, below
+	// the hub's 30s WriteTimeout. A shorter parent deadline always wins.
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
 	id, err := parseAlertID(r.PathValue("id"))
-	if err != nil {
+	if err != nil || id <= 0 {
 		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid id"})
 		return
 	}

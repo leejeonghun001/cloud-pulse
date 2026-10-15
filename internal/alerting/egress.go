@@ -66,6 +66,7 @@ func (e *Engine) evaluateEgressRuleHost(ctx context.Context, now time.Time, rule
 		HostID:    host.HostID,
 		Hostname:  host.Hostname,
 		Metric:    rule.Metric,
+		Severity:  ruleSeverity(rule),
 		State:     models.AlertEventFiring,
 		Value:     value,
 		Threshold: rule.Threshold,
@@ -92,6 +93,6 @@ func (e *Engine) evaluateEgressRuleHost(ctx context.Context, now time.Time, rule
 		return fmt.Errorf("set alert state (egress): %w", err)
 	}
 
-	e.notifyEvent(ctx, now, rule, host, created, SeverityWarning)
+	e.notifyEvent(ctx, now, rule, host, created, severityFor(rule))
 	return nil
 }

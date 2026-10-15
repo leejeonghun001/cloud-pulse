@@ -1,0 +1,37 @@
+# Repository history, private verification, and local orchestration state.
+.git
+.git/**
+.verification
+.verification/**
+.slim
+.slim/**
+.ignore
+
+# Local configuration and secrets. Keep the safe, checked-in example.
+.env
+.env.*
+!.env.example
+*.env
+*.env.*
+*.local
+*.secret
+**/secrets/**
+.prepublish-markers.local
+.prepublish-historical-fixtures.json
+
+# Local databases, builds, binaries, caches, and downloaded dependencies.
+data/
+**/data/
+bin/
+dist/
+build/
+tmp/
+coverage.out
+*.db
+*.db-wal
+*.db-shm
+*.exe
+/cloud-pulse-hub
+/cloud-pulse-agent
+node_modules/
+**/.cache/**

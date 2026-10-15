@@ -14,6 +14,7 @@ func TestAlertRuleJSON(t *testing.T) {
 		Name:           "CPU above 90% for 5 minutes",
 		Enabled:        true,
 		Metric:         AlertMetricCPU,
+		Severity:       AlertSeverityCritical,
 		HostID:         "",
 		Operator:       AlertOperatorGT,
 		Threshold:      90,
@@ -34,7 +35,7 @@ func TestAlertRuleJSON(t *testing.T) {
 		t.Fatalf("Unmarshal raw: %v", err)
 	}
 	for _, field := range []string{
-		"id", "name", "enabled", "metric", "host_id", "operator", "threshold",
+		"id", "name", "enabled", "metric", "severity", "host_id", "operator", "threshold",
 		"duration_sec", "cooldown_sec", "notify_resolved", "channel_ids",
 		"created_at", "updated_at",
 	} {
@@ -187,6 +188,7 @@ func TestAlertEventJSON(t *testing.T) {
 		HostID:     "host1",
 		Hostname:   "host1.local",
 		Metric:     AlertMetricCPU,
+		Severity:   AlertSeverityCritical,
 		State:      AlertEventFiring,
 		Value:      93.4,
 		Threshold:  90,

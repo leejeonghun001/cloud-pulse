@@ -1,0 +1,8 @@
+{
+  "name": "cloud-pulse-verification",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "make test-js"
+  }
+}

@@ -92,6 +92,7 @@ func (e *Engine) transitionToFiring(ctx context.Context, now time.Time, rule mod
 		HostID:    host.HostID,
 		Hostname:  host.Hostname,
 		Metric:    rule.Metric,
+		Severity:  ruleSeverity(rule),
 		State:     models.AlertEventFiring,
 		Value:     value,
 		Threshold: rule.Threshold,
@@ -158,19 +159,39 @@ func (e *Engine) maybeRenotifyStillFiring(ctx context.Context, now time.Time, ru
 		return fmt.Errorf("set alert state (renotify): %w", err)
 	}
 
-	e.notifyEvent(ctx, now, rule, host, ev, severityFor(rule))
+	// A reminder repeats the urgency the event fired with (its stored
+	// snapshot), so a later rule edit cannot make the channel and the
+	// dashboard badge disagree about the same event.
+	e.notifyEvent(ctx, now, rule, host, ev, snapshotSeverity(ev, rule))
 	return nil
 }
 
-// severityFor maps a rule to the Severity its firing notifications
-// should carry. There is currently no per-rule severity configuration
-// (SPEC-v0.5 §B doesn't define one), so every firing alert is "warning"
-// except host_down, which is always "critical".
+// snapshotSeverity maps ev's persisted severity to a notification
+// Severity, falling back to the rule for events stored without one.
+func snapshotSeverity(ev models.AlertEvent, rule models.AlertRule) Severity {
+	switch ev.Severity {
+	case models.AlertSeverityCritical:
+		return SeverityCritical
+	case models.AlertSeverityWarning:
+		return SeverityWarning
+	}
+	return severityFor(rule)
+}
+
+// severityFor maps a rule's persisted severity to the notification severity
+// for a firing alert. Resolved notifications intentionally remain resolved.
 func severityFor(rule models.AlertRule) Severity {
-	if rule.Metric == models.AlertMetricHostDown {
+	if ruleSeverity(rule) == models.AlertSeverityCritical {
 		return SeverityCritical
 	}
 	return SeverityWarning
+}
+
+func ruleSeverity(rule models.AlertRule) models.AlertSeverity {
+	if rule.Severity == "" {
+		return models.DefaultAlertSeverity(rule.Metric)
+	}
+	return rule.Severity
 }
 
 // notifyEvent builds a Message for ev (attaching a rendered chart image

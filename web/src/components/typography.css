@@ -1,0 +1,35 @@
+/* Shared type roles, independent of cards and page layouts. Local font
+   stacks and existing sizes keep rendering stable without font downloads. */
+@layer components {
+  .cp-page-title {
+    @apply text-[length:var(--text-cp-2xl)] leading-[length:var(--leading-cp-2xl)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))] tracking-[length:var(--tracking-cp-tight)];
+    overflow-wrap: anywhere;
+  }
+
+  .cp-section h2 {
+    @apply text-[length:var(--text-cp-lg)] leading-[length:var(--leading-cp-lg)] font-[weight:var(--weight-cp-semibold)] tracking-[length:var(--tracking-cp-tight)] text-[rgb(var(--text))];
+  }
+
+  .cp-page-subtitle,
+  .cp-muted {
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--muted))];
+  }
+
+  .cp-label {
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-medium)] text-[rgb(var(--text))];
+  }
+
+  .cp-help-text,
+  .cp-muted-small {
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))];
+  }
+
+  .cp-muted-subtle {
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted-subtle))];
+  }
+
+  .cp-tabular {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "cv11" 1, "tnum" 1;
+  }
+}

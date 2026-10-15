@@ -13,7 +13,12 @@ import (
 // opts via WithAllowCustomEndpoints(AllowCustomEndpointsFromEnv(...))
 // once and reuse it; tests pass WithAllowCustomEndpoints(true)
 // directly rather than mutating the process environment.
-func New(ch models.NotifyChannel, client *http.Client, opts ...Option) (Sender, error) {
+func New(ch models.NotifyChannel, client *http.Client, opts ...Option) (sender Sender, err error) {
+	defer func() {
+		if err != nil {
+			err = &safeDisplayError{text: SafeErrorText(ch, err), cause: err}
+		}
+	}()
 	var o clientOptions
 	for _, opt := range opts {
 		opt(&o)
@@ -32,3 +37,13 @@ func New(ch models.NotifyChannel, client *http.Client, opts ...Option) (Sender, 
 		return nil, fmt.Errorf("notify: unsupported channel type %q", ch.Type)
 	}
 }
+
+// safeDisplayError keeps constructor diagnostics safe even for a caller that
+// logs Error directly, without losing errors.Is/As access to the cause.
+type safeDisplayError struct {
+	text  string
+	cause error
+}
+
+func (e *safeDisplayError) Error() string { return e.text }
+func (e *safeDisplayError) Unwrap() error { return e.cause }

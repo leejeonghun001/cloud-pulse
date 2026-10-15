@@ -1,119 +1,13 @@
-/* base.css — design tokens (light + dark) and shell/component styles
-   shared across every page. Page-specific styles live in
-   web/src/pages/*.css. Zinc-like neutral palette, shadcn-inspired,
-   dark by default with a `.dark` class on <html> switched by
-   theme-init.js before first paint. */
-
-@custom-variant dark (&:where(.dark, .dark *));
-
-@theme {
-  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas, monospace;
-
-  /* Status / level colors — same hue mapping in both themes. */
-  --color-cp-ok: #10b981;
-  --color-cp-warning: #f59e0b;
-  --color-cp-critical: #fb923c;
-  --color-cp-exceeded: #ef4444;
-
-  --color-cp-aws: #f59e0b;
-  --color-cp-oci: #ef4444;
-  --color-cp-other: #64748b;
-  --color-cp-r2: #f97316;
-
-  --color-cp-accent: #0369a1;
-  --color-cp-accent-strong: #075985;
-}
-
-@layer base {
-  :root {
-    color-scheme: light;
-
-    /* Zinc-like light theme */
-    --bg: 255 255 255;
-    --surface: 250 250 250;
-    --surface-raised: 255 255 255;
-    --border: 228 228 231;
-    --text: 24 24 27;
-    --muted: 100 100 108;
-    --muted-surface: 244 244 245;
-    --ring: 14 165 233;
-    --shadow-color: 0 0% 0%;
-    /* --link is a separate, theme-aware token from --color-cp-accent
-       (Tailwind's bg-cp-accent/border-cp-accent-strong, used for solid
-       button backgrounds against white text): a solid background can
-       stay the same dark, WCAG-AA-passing blue in both themes, but
-       text/icon usages (a link's own color, sitting directly on
-       --bg/--surface rather than a solid fill) need a lighter blue in
-       dark theme to stay readable against a near-black background —
-       same rationale as --ring's own per-theme light/dark split above. */
-    --link: 3 105 161;
-  }
-
-  .dark {
-    color-scheme: dark;
-
-    /* Zinc-like dark theme */
-    --bg: 9 9 11;
-    --surface: 15 15 17;
-    --surface-raised: 20 20 23;
-    --border: 39 39 42;
-    --text: 244 244 245;
-    --muted: 161 161 170;
-    --muted-surface: 24 24 27;
-    --ring: 56 189 248;
-    --shadow-color: 0 0% 0%;
-    --link: 56 189 248;
-  }
-
-  * {
-    scrollbar-color: rgb(var(--border)) transparent;
-  }
-
-  html {
-    background: rgb(var(--bg));
-  }
-
-  body {
-    background: rgb(var(--bg));
-    color: rgb(var(--text));
-    font-family: var(--font-sans);
-  }
-
-  :focus-visible {
-    outline: 2px solid rgb(var(--ring));
-    outline-offset: 2px;
-    border-radius: 4px;
-  }
-
-  ::selection {
-    background: rgb(var(--ring) / 0.3);
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after {
-      animation-duration: 0.001ms !important;
-      animation-iteration-count: 1 !important;
-      transition-duration: 0.001ms !important;
-      scroll-behavior: auto !important;
-    }
-  }
-}
-
+/* App shell and shared controls. Visual tokens live in tokens.css;
+   card/status/meter/type families each have a single component owner. */
 @layer components {
   /* -------------------------------------------------------------- */
   /* Utility surfaces                                                */
   /* -------------------------------------------------------------- */
 
   .cp-skip-link {
-    /* Visually hidden until focused, but — unlike Tailwind's sr-only
-       utility (a 1x1px clip-rect trick) — kept at a real 24x24+ CSS
-       pixel box moved off-screen, so it still satisfies WCAG 2.2 AA
-       2.5.8's target-size minimum for automated/assistive tooling that
-       measures getBoundingClientRect() rather than visibility. Same
-       "not removed from the layout/accessibility tree, just moved
-       off-canvas" pattern as the WebAIM skip-link recipe. */
-    @apply absolute left-[-9999px] top-0 h-8 min-w-24 focus:static focus:left-auto focus:top-2 focus:ml-2 focus:z-50 focus:rounded-md focus:bg-[rgb(var(--surface-raised))] focus:px-4 focus:py-2 focus:text-[rgb(var(--text))] focus:shadow-lg;
+    /* Move off-canvas without shrinking the keyboard target. */
+    @apply absolute left-[-9999px] top-0 h-8 min-w-24 focus:static focus:left-auto focus:top-2 focus:ml-2 focus:z-50 focus:rounded-[var(--radius-cp-sm)] focus:bg-[rgb(var(--surface-raised))] focus:px-4 focus:py-2 focus:text-[rgb(var(--text))] focus:shadow-[var(--elevation-cp-2)];
   }
 
   .cp-sr-only,
@@ -122,11 +16,7 @@
   }
 
   .cp-noscript-banner {
-    @apply bg-cp-exceeded/20 border border-cp-exceeded text-[rgb(var(--text))] p-4 text-center;
-  }
-
-  .cp-tabular {
-    font-variant-numeric: tabular-nums;
+    @apply bg-[rgb(var(--status-exceeded)/0.2)] border border-cp-exceeded text-[rgb(var(--text))] p-4 text-center;
   }
 
   /* -------------------------------------------------------------- */
@@ -138,11 +28,30 @@
   }
 
   .cp-shell-header {
-    @apply sticky top-0 z-40 px-3 pt-3 sm:px-6;
+    @apply sticky top-0 z-40 border-b border-[rgb(var(--border)/0.65)] bg-[rgb(var(--surface)/0.94)] backdrop-blur px-3 sm:px-6;
   }
 
   .cp-navbar {
-    @apply mx-auto max-w-7xl flex items-center gap-3 rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))]/95 backdrop-blur px-4 py-2.5 shadow-sm;
+    @apply mx-auto max-w-7xl flex items-center gap-3 px-1 py-2.5;
+  }
+
+  .cp-primary-nav {
+    @apply hidden lg:flex self-stretch items-center gap-4;
+  }
+
+  .cp-primary-nav-link {
+    @apply inline-flex self-stretch items-center border-b-2 border-transparent text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-medium)] text-[rgb(var(--muted))] no-underline transition-colors;
+    transition-duration: var(--motion-duration-cp-fast);
+    transition-timing-function: var(--motion-ease);
+  }
+
+  @media (hover: hover) {
+    .cp-primary-nav-link:hover { color: rgb(var(--text)); }
+  }
+
+  .cp-primary-nav-link-active {
+    color: rgb(var(--text));
+    border-bottom-color: rgb(var(--link));
   }
 
   .cp-navbar-brand {
@@ -154,19 +63,15 @@
   }
 
   .cp-navbar-wordmark {
-    @apply text-base font-semibold tracking-tight hidden sm:inline;
+    @apply text-[length:var(--text-cp-md)] leading-[length:var(--leading-cp-md)] font-[weight:var(--weight-cp-semibold)] tracking-[length:var(--tracking-cp-tight)] hidden sm:inline;
   }
 
   .cp-navbar-search {
-    @apply flex-1 flex items-center gap-2 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--muted-surface))] px-3 py-1.5 text-sm text-[rgb(var(--muted))] hover:border-cp-accent/50 transition-colors cursor-pointer max-w-md;
+    @apply flex-1 flex items-center gap-2 rounded-[var(--radius-cp-md)] border border-[rgb(var(--border))] bg-[rgb(var(--muted-surface))] px-3 py-1.5 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--muted))] hover:border-[rgb(var(--accent)/0.5)] transition-colors cursor-pointer max-w-md;
+    transition-duration: var(--motion-duration-cp-fast);
+    transition-timing-function: var(--motion-ease);
   }
 
-  /* Mobile navbar (SPEC-v0.7 §5, < 640px): the search bar collapses to
-     an icon-only square button (its label/kbd hint hide via
-     .cp-navbar-search-label/.cp-kbd's own sm:inline rules below) so it
-     no longer competes for width with the brand + action icons —
-     together with .cp-navbar-overflow-btn below, this is what keeps
-     the 360px viewport free of horizontal overflow. */
   @media (max-width: 639px) {
     .cp-navbar-search {
       @apply flex-none w-9 justify-center px-0 gap-0;
@@ -182,7 +87,19 @@
   }
 
   .cp-kbd {
-    @apply hidden sm:inline-flex items-center gap-0.5 rounded border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] px-1.5 py-0.5 text-[10px] font-medium text-[rgb(var(--muted))] font-mono;
+    @apply hidden sm:inline-flex items-center gap-0.5 rounded-[var(--radius-cp-xs)] border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] px-1.5 py-0.5 text-[length:var(--text-cp-micro)] leading-[length:var(--leading-cp-micro)] font-[weight:var(--weight-cp-medium)] text-[rgb(var(--muted))] font-mono;
+  }
+
+  .cp-shortcuts-list {
+    @apply flex flex-col gap-2 m-0;
+  }
+
+  .cp-shortcuts-row {
+    @apply flex items-center justify-between gap-4 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--text))];
+  }
+
+  .cp-shortcuts-row .cp-kbd {
+    @apply inline-flex shrink-0;
   }
 
   .cp-navbar-actions {
@@ -190,7 +107,9 @@
   }
 
   .cp-icon-btn {
-    @apply inline-flex items-center justify-center h-9 w-9 rounded-lg text-[rgb(var(--muted))] hover:bg-[rgb(var(--muted-surface))] hover:text-[rgb(var(--text))] transition-colors cursor-pointer border border-transparent;
+    @apply inline-flex items-center justify-center h-9 w-9 rounded-[var(--radius-cp-md)] text-[rgb(var(--muted))] hover:bg-[rgb(var(--muted-surface))] hover:text-[rgb(var(--text))] transition-colors cursor-pointer border border-transparent;
+    transition-duration: var(--motion-duration-cp-fast);
+    transition-timing-function: var(--motion-ease);
   }
 
   .cp-icon-btn .cp-icon {
@@ -206,43 +125,15 @@
   }
 
   .cp-footer {
-    @apply mx-auto max-w-7xl w-full px-3 py-4 sm:px-6 text-xs text-[rgb(var(--muted))];
+    @apply mx-auto max-w-7xl w-full px-3 py-4 sm:px-6 text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))];
   }
 
   /* -------------------------------------------------------------- */
   /* Cards / surfaces                                                */
   /* -------------------------------------------------------------- */
 
-  .cp-card {
-    @apply rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-4 sm:p-5 shadow-sm flex flex-col gap-3;
-  }
-
-  .cp-card-header {
-    @apply flex items-start justify-between gap-3 flex-wrap;
-  }
-
-  .cp-card-title {
-    @apply text-base font-semibold text-[rgb(var(--text))];
-  }
-
-  .cp-card-subtitle {
-    @apply text-sm text-[rgb(var(--muted))];
-  }
-
-  .cp-page-title {
-    @apply text-2xl font-semibold text-[rgb(var(--text))] tracking-tight;
-  }
-
-  .cp-page-subtitle {
-    @apply text-sm text-[rgb(var(--muted))];
-  }
-
   .cp-section {
     @apply flex flex-col gap-3;
-  }
-
-  .cp-section h2 {
-    @apply text-lg font-semibold text-[rgb(var(--text))];
   }
 
   /* -------------------------------------------------------------- */
@@ -250,7 +141,15 @@
   /* -------------------------------------------------------------- */
 
   .cp-btn {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] px-3 py-1.5 text-sm font-medium text-[rgb(var(--text))] hover:bg-[rgb(var(--muted-surface))] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-[var(--radius-cp-md)] border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] px-3 py-1.5 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-medium)] text-[rgb(var(--text))] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed;
+    transition-duration: var(--motion-duration-cp-fast);
+    transition-timing-function: var(--motion-ease);
+  }
+
+  @media (hover: hover) {
+    .cp-btn:where(:not(:disabled)):hover {
+      background-color: rgb(var(--surface-sunken));
+    }
   }
 
   .cp-btn .cp-icon {
@@ -258,16 +157,25 @@
   }
 
   .cp-btn-primary {
-    @apply bg-cp-accent border-cp-accent-strong text-white hover:bg-cp-accent-strong;
+    @apply bg-cp-accent border-cp-accent-strong text-[rgb(var(--text-inverse))];
+  }
+
+  @media (hover: hover) {
+    .cp-btn-primary:where(:not(:disabled)):hover {
+      background-color: var(--color-cp-accent-strong);
+    }
   }
 
   .cp-btn-danger {
-    /* Literal hex, not Tailwind's red-600/red-700 keywords — see
-       .cp-navbar-bell-badge's comment in web/src/pages/alerts.css for
-       why (oklch()-sourced colors defeat scripts/ui-audit.mjs's
-       contrast checker). #dc2626/#b91c1c are the same colors
-       red-600/red-700 refer to. */
-    @apply bg-[#dc2626] border-[#b91c1c] text-white hover:bg-[#b91c1c];
+    @apply text-[rgb(var(--text-inverse))];
+    background-color: var(--color-cp-badge-danger);
+    border-color: var(--color-cp-badge-danger-strong);
+  }
+
+  @media (hover: hover) {
+    .cp-btn-danger:where(:not(:disabled)):hover {
+      background-color: var(--color-cp-badge-danger-strong);
+    }
   }
 
   .cp-btn-ghost {
@@ -275,7 +183,7 @@
   }
 
   .cp-btn-sm {
-    @apply px-2 py-1 text-xs;
+    @apply px-2 py-1 text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)];
   }
 
   .cp-btn-icon {
@@ -286,34 +194,19 @@
     @apply w-full;
   }
 
-  /* Defined after .cp-btn (not just as a modifier alongside it) so its
-     responsive `display` wins the same-specificity cascade tie-break
-     against .cp-btn's own unconditional `display: inline-flex` — see
-     notes/v04-web-visual.md for the bug this fixes (the "Add agent"
-     button never actually hid below the sm breakpoint). */
-  .cp-navbar-primary-btn {
-    @apply hidden sm:inline-flex;
-  }
-
   /* -------------------------------------------------------------- */
   /* Inputs / forms                                                  */
   /* -------------------------------------------------------------- */
 
   .cp-input {
-    color-scheme: light dark;
-    @apply w-full appearance-none rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] px-3 py-1.5 text-sm text-[rgb(var(--text))] placeholder:text-[rgb(var(--muted))] focus:border-cp-accent transition-colors;
+    color-scheme: inherit;
+    @apply w-full appearance-none rounded-[var(--radius-cp-md)] border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] px-3 py-1.5 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--text))] placeholder:text-[rgb(var(--muted))] focus:border-cp-accent transition-colors;
+    transition-duration: var(--motion-duration-cp-fast);
+    transition-timing-function: var(--motion-ease);
   }
 
   .cp-input-sm {
-    @apply px-2 py-1 text-xs min-w-32;
-  }
-
-  .cp-label {
-    @apply text-sm font-medium text-[rgb(var(--text))];
-  }
-
-  .cp-help-text {
-    @apply text-xs text-[rgb(var(--muted))];
+    @apply px-2 py-1 text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] min-w-32;
   }
 
   .cp-field {
@@ -325,152 +218,24 @@
   }
 
   .cp-input-group-btn {
-    @apply absolute right-1.5 inline-flex items-center justify-center h-7 w-7 rounded text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] cursor-pointer;
+    @apply absolute right-1.5 inline-flex items-center justify-center h-7 w-7 rounded-[var(--radius-cp-xs)] text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] cursor-pointer;
   }
 
   .cp-error-text {
-    @apply text-xs text-red-600 dark:text-red-400 min-h-[1rem];
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] min-h-[1rem];
+    color: rgb(var(--status-exceeded-fg));
   }
 
   .cp-checkbox-row {
-    @apply flex items-center gap-2 text-sm text-[rgb(var(--text))];
+    @apply flex items-center gap-2 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--text))];
   }
 
-  /* Native checkbox/radio inputs default to ~13-16 CSS px depending on
-     UA stylesheet/font-size — below WCAG 2.2 AA 2.5.8's 24x24 minimum
-     target size. Every checkbox/radio in this app is a bare native
-     input (no custom-styled replacement element), so the fix is
-     applied once, globally, rather than per call site. */
   input[type="checkbox"],
   input[type="radio"] {
     @apply h-6 w-6 cursor-pointer;
-    /* box-sizing: content-box (overriding Preflight's border-box
-       reset for just these two replaced-element types): Firefox's
-       native checkbox/radio widget appears to apply this app's
-       `width` CSS property inconsistently under border-box sizing
-       specifically for width vs height (verified: height reliably
-       reaches 24px, width does not) — content-box is the more
-       widely-documented-compatible sizing mode for native form
-       control dimensions across engines. */
+    /* Retain native controls and their existing 24px target boxes. */
     box-sizing: content-box;
-  }
-
-  /* -------------------------------------------------------------- */
-  /* Badges / chips / dots                                          */
-  /* -------------------------------------------------------------- */
-
-  .cp-dot {
-    @apply inline-block h-2.5 w-2.5 rounded-full shrink-0;
-  }
-
-  .cp-dot-up {
-    @apply bg-cp-ok;
-  }
-
-  .cp-dot-down {
-    @apply bg-cp-exceeded;
-  }
-
-  .cp-badge {
-    @apply inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shrink-0;
-  }
-
-  .cp-badge-aws {
-    /* Plain hex (no Tailwind opacity modifier) deliberately: a `/NN`
-       alpha modifier compiles to a `@supports (color-mix(...))`
-       progressive-enhancement override that resolves via
-       `color-mix(in oklab, ...)` in any current browser — correct
-       visually, but scripts/ui-audit.mjs's contrast checker (owned by
-       the ui-audit-tool stage, not this one) can't resolve that
-       function's computed value, and silently mis-reports a false
-       "identical foreground/background" (ratio 1) finding, masking
-       what was actually a real, pre-existing contrast failure
-       underneath (the semi-transparent versions were themselves
-       under 4.5:1 against white text once actually measured — a 10px
-       uppercase badge is never "large text", so no exception applies).
-       A flat, WCAG-AA-passing hex sidesteps the @supports/color-mix
-       code path entirely and fixes the real underlying ratio. */
-    background-color: #b45309;
-  }
-
-  .cp-badge-oci {
-    background-color: #b91c1c;
-  }
-
-  .cp-badge-other {
-    background-color: #475569;
-  }
-
-  .cp-badge-r2 {
-    background-color: #c2410c;
-  }
-
-  .cp-badge-hub {
-    @apply normal-case tracking-normal;
-    background-color: #075985;
-  }
-
-  .cp-badge-update {
-    /* Keep this opaque for the same WCAG/UI-audit reasons as the AWS
-       badge above: white 10px text needs a >=4.5:1 background. */
-    @apply normal-case tracking-normal;
-    background-color: #b45309;
-  }
-
-  .cp-chip {
-    @apply inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium;
-  }
-
-  .cp-chip-ok {
-    @apply bg-cp-ok/15 text-emerald-600 dark:text-emerald-400;
-  }
-
-  .cp-chip-warning {
-    @apply bg-cp-warning/15 text-amber-600 dark:text-amber-400;
-  }
-
-  .cp-chip-critical {
-    @apply bg-cp-critical/15 text-orange-600 dark:text-orange-400;
-  }
-
-  .cp-chip-exceeded {
-    @apply bg-cp-exceeded/15 text-red-600 dark:text-red-400;
-  }
-
-  /* -------------------------------------------------------------- */
-  /* Progress bars                                                   */
-  /* -------------------------------------------------------------- */
-
-  .cp-bar {
-    @apply flex items-center gap-2;
-  }
-
-  .cp-bar-track {
-    @apply relative h-1.5 flex-1 rounded-full bg-[rgb(var(--muted-surface))] overflow-hidden;
-  }
-
-  .cp-bar-fill {
-    @apply h-full rounded-full transition-[width];
-  }
-
-  .cp-bar-ok {
-    @apply bg-cp-ok;
-  }
-
-  .cp-bar-warning {
-    @apply bg-cp-warning;
-  }
-
-  .cp-bar-critical {
-    @apply bg-cp-critical;
-  }
-
-  .cp-bar-exceeded {
-    @apply bg-cp-exceeded;
-  }
-
-  .cp-bar-text {
-    @apply text-xs text-[rgb(var(--muted))] w-auto whitespace-nowrap tabular-nums;
+    accent-color: var(--color-cp-accent);
   }
 
   /* -------------------------------------------------------------- */
@@ -478,19 +243,19 @@
   /* -------------------------------------------------------------- */
 
   .cp-empty-state {
-    @apply col-span-full flex flex-col items-center gap-3 rounded-xl border border-dashed border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-10 text-center;
+    @apply col-span-full flex flex-col items-center gap-3 rounded-[var(--radius-cp-lg)] border border-dashed border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-10 text-center;
   }
 
   .cp-empty-state h3 {
-    @apply text-lg font-semibold text-[rgb(var(--text))];
+    @apply text-[length:var(--text-cp-lg)] leading-[length:var(--leading-cp-lg)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))];
   }
 
   .cp-empty-state p {
-    @apply text-sm text-[rgb(var(--muted))] max-w-md;
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--muted))] max-w-md;
   }
 
   .cp-code-block {
-    @apply w-full max-w-2xl overflow-x-auto rounded-lg bg-[rgb(var(--muted-surface))] border border-[rgb(var(--border))] p-3 text-left text-xs text-[rgb(var(--text))] font-mono;
+    @apply w-full max-w-2xl overflow-x-auto rounded-[var(--radius-cp-md)] bg-[rgb(var(--surface-sunken))] border border-[rgb(var(--border))] p-3 text-left text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--text))] font-mono;
   }
 
   .cp-code-block-wrap {
@@ -498,19 +263,14 @@
   }
 
   .cp-error-banner {
-    @apply rounded-lg border border-cp-exceeded bg-cp-exceeded/10 text-red-700 dark:text-red-300 px-4 py-2 text-sm flex items-center gap-2;
+    @apply rounded-[var(--radius-cp-md)] border border-cp-exceeded px-4 py-2 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] flex items-center gap-2;
+    background-color: rgb(var(--status-exceeded) / 0.1);
+    color: rgb(var(--status-exceeded-fg-soft));
   }
 
   .cp-hint {
-    @apply text-xs text-amber-600 dark:text-amber-400;
-  }
-
-  .cp-muted {
-    @apply text-sm text-[rgb(var(--muted))];
-  }
-
-  .cp-muted-small {
-    @apply text-xs text-[rgb(var(--muted))];
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)];
+    color: rgb(var(--status-warning-fg));
   }
 
   /* -------------------------------------------------------------- */
@@ -518,7 +278,8 @@
   /* -------------------------------------------------------------- */
 
   .cp-skeleton {
-    @apply animate-pulse rounded-md bg-[rgb(var(--muted-surface))];
+    @apply animate-pulse rounded-[var(--radius-cp-sm)] bg-[rgb(var(--muted-surface))];
+    animation-duration: var(--motion-duration-cp-pulse);
   }
 
   /* -------------------------------------------------------------- */
@@ -530,16 +291,16 @@
   }
 
   .cp-toast {
-    @apply flex items-start gap-2 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] px-4 py-3 text-sm text-[rgb(var(--text))] shadow-lg;
-    animation: cp-toast-in 0.15s ease-out;
+    @apply flex items-start gap-2 rounded-[var(--radius-cp-md)] border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] px-4 py-3 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--text))] shadow-[var(--elevation-cp-2)];
+    animation: cp-toast-in var(--motion-duration-cp-fast) var(--motion-ease-out);
   }
 
   .cp-toast-error {
-    @apply border-cp-exceeded/50;
+    @apply border-[rgb(var(--status-exceeded)/0.5)];
   }
 
   .cp-toast-success {
-    @apply border-cp-ok/50;
+    @apply border-[rgb(var(--status-ok)/0.5)];
   }
 
   .cp-toast-body {
@@ -547,7 +308,7 @@
   }
 
   .cp-toast-action {
-    @apply text-[rgb(var(--link))] hover:underline text-sm font-medium cursor-pointer bg-transparent border-0 p-0 text-left;
+    @apply text-[rgb(var(--link))] hover:underline text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-medium)] cursor-pointer bg-transparent border-0 p-0 text-left;
   }
 
   .cp-toast-close {
@@ -564,7 +325,7 @@
   /* -------------------------------------------------------------- */
 
   .cp-dialog {
-    @apply rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-[rgb(var(--text))] p-6 max-w-md w-[calc(100vw-2rem)] shadow-2xl m-auto;
+    @apply rounded-[var(--radius-cp-lg)] border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-[rgb(var(--text))] p-6 max-w-md w-[calc(100vw-2rem)] shadow-[var(--elevation-cp-3)] m-auto;
     position: fixed;
     inset: 0;
     max-height: calc(100vh - 2rem);
@@ -572,7 +333,7 @@
   }
 
   .cp-dialog::backdrop {
-    @apply bg-black/50 backdrop-blur-sm;
+    @apply bg-[rgb(var(--surface-overlay)/0.5)] backdrop-blur-sm;
   }
 
   .cp-dialog-wide {
@@ -584,11 +345,11 @@
   }
 
   .cp-dialog-title {
-    @apply text-lg font-semibold text-[rgb(var(--text))];
+    @apply text-[length:var(--text-cp-lg)] leading-[length:var(--leading-cp-lg)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))];
   }
 
   .cp-dialog-desc {
-    @apply text-sm text-[rgb(var(--muted))];
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--muted))];
   }
 
   .cp-dialog form {
@@ -604,7 +365,7 @@
   /* -------------------------------------------------------------- */
 
   .cp-palette {
-    @apply rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-[rgb(var(--text))] p-0 w-[min(36rem,calc(100vw-2rem))] shadow-2xl overflow-hidden m-auto;
+    @apply rounded-[var(--radius-cp-lg)] border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-[rgb(var(--text))] p-0 w-[min(36rem,calc(100vw-2rem))] shadow-[var(--elevation-cp-3)] overflow-hidden m-auto;
     position: fixed;
     inset: 0;
     top: 10vh;
@@ -612,7 +373,7 @@
   }
 
   .cp-palette::backdrop {
-    @apply bg-black/50 backdrop-blur-sm;
+    @apply bg-[rgb(var(--surface-overlay)/0.5)] backdrop-blur-sm;
   }
 
   .cp-palette-input-row {
@@ -624,7 +385,12 @@
   }
 
   .cp-palette-input {
-    @apply flex-1 bg-transparent border-0 outline-none text-sm text-[rgb(var(--text))] placeholder:text-[rgb(var(--muted))];
+    @apply flex-1 bg-transparent border-0 outline-none text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--text))] placeholder:text-[rgb(var(--muted))];
+  }
+
+  .cp-palette-input:focus-visible {
+    outline: var(--focus-ring-cp-width) solid rgb(var(--ring));
+    outline-offset: var(--focus-ring-cp-offset);
   }
 
   .cp-palette-list {
@@ -632,11 +398,11 @@
   }
 
   .cp-palette-group-label {
-    @apply text-[11px] font-medium uppercase tracking-wide text-[rgb(var(--muted))] px-2 pt-2 pb-1;
+    @apply text-[length:var(--text-cp-chip)] leading-[length:var(--leading-cp-chip)] font-[weight:var(--weight-cp-medium)] uppercase tracking-[length:var(--tracking-cp-wide)] text-[rgb(var(--muted))] px-2 pt-2 pb-1;
   }
 
   .cp-palette-item {
-    @apply flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-[rgb(var(--text))] cursor-pointer;
+    @apply flex items-center gap-2.5 rounded-[var(--radius-cp-md)] px-2.5 py-2 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--text))] cursor-pointer;
   }
 
   .cp-palette-item .cp-icon {
@@ -644,11 +410,11 @@
   }
 
   .cp-palette-item[aria-selected="true"] {
-    @apply bg-cp-accent/15;
+    @apply bg-[rgb(var(--accent)/0.15)];
   }
 
   .cp-palette-empty {
-    @apply px-4 py-6 text-center text-sm text-[rgb(var(--muted))];
+    @apply px-4 py-6 text-center text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--muted))];
   }
 
   /* -------------------------------------------------------------- */
@@ -660,7 +426,7 @@
   }
 
   .cp-dropdown-menu {
-    @apply absolute right-0 z-30 mt-2 min-w-[12rem] rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] p-1 shadow-lg;
+    @apply absolute right-0 z-30 mt-2 min-w-[12rem] rounded-[var(--radius-cp-md)] border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] p-1 shadow-[var(--elevation-cp-2)];
   }
 
   .cp-dropdown-menu[hidden] {
@@ -668,7 +434,7 @@
   }
 
   .cp-dropdown-item {
-    @apply flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-sm text-[rgb(var(--text))] hover:bg-[rgb(var(--muted-surface))] cursor-pointer border-0 bg-transparent text-left min-h-6;
+    @apply flex w-full items-center gap-2 rounded-[var(--radius-cp-sm)] px-2.5 py-1.5 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--text))] hover:bg-[rgb(var(--muted-surface))] cursor-pointer border-0 bg-transparent text-left min-h-6;
   }
 
   .cp-dropdown-item .cp-icon {
@@ -680,7 +446,21 @@
   }
 
   .cp-select {
-    @apply w-full rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] px-3 py-1.5 pr-8 text-sm text-[rgb(var(--text))] focus:border-cp-accent transition-colors appearance-none bg-no-repeat;
+    @apply w-full rounded-[var(--radius-cp-md)] border border-[rgb(var(--border))] bg-[rgb(var(--surface-raised))] px-3 py-1.5 pr-8 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--text))] focus:border-cp-accent transition-colors appearance-none bg-no-repeat;
+    transition-duration: var(--motion-duration-cp-fast);
+    transition-timing-function: var(--motion-ease);
+  }
+
+  /* Keyboard focus must appear immediately, not animate from currentColor
+     (white on solid buttons is invisible against light card surfaces). */
+  .cp-btn:focus-visible,
+  .cp-icon-btn:focus-visible,
+  .cp-input:focus-visible,
+  .cp-select:focus-visible,
+  .cp-settings-nav-link:focus-visible {
+    outline: var(--focus-ring-cp-width) solid rgb(var(--ring));
+    outline-offset: var(--focus-ring-cp-offset);
+    transition-property: background-color, border-color, box-shadow, color;
   }
 
   /* -------------------------------------------------------------- */
@@ -688,15 +468,15 @@
   /* -------------------------------------------------------------- */
 
   .cp-table-wrap {
-    @apply overflow-x-auto rounded-lg border border-[rgb(var(--border))];
+    @apply overflow-x-auto rounded-[var(--radius-cp-md)] border border-[rgb(var(--border))];
   }
 
   .cp-table {
-    @apply w-full text-sm border-collapse;
+    @apply w-full text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] border-collapse;
   }
 
   .cp-table th {
-    @apply text-left text-xs text-[rgb(var(--muted))] font-medium uppercase tracking-wide border-b border-[rgb(var(--border))] bg-[rgb(var(--muted-surface))] py-2.5 px-3 whitespace-nowrap;
+    @apply text-left text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))] font-[weight:var(--weight-cp-medium)] normal-case tracking-[length:var(--tracking-cp-normal)] border-b border-[rgb(var(--border))] bg-[rgb(var(--muted-surface))] py-2.5 px-3 whitespace-nowrap;
   }
 
   .cp-table th[aria-sort] {
@@ -704,7 +484,7 @@
   }
 
   .cp-table td {
-    @apply py-2.5 px-3 border-b border-[rgb(var(--border))]/60 text-[rgb(var(--text))];
+    @apply py-2.5 px-3 border-b border-[rgb(var(--border)/0.6)] text-[rgb(var(--text))];
   }
 
   .cp-table tr:last-child td {
@@ -713,10 +493,13 @@
 
   .cp-table-row-link {
     @apply hover:bg-[rgb(var(--muted-surface))] transition-colors cursor-pointer;
+    transition-duration: var(--motion-duration-cp-fast);
+    transition-timing-function: var(--motion-ease);
   }
 
   .cp-table-row-offline {
-    @apply opacity-60;
+    /* Keep offline labels legible instead of fading all row content. */
+    background-color: rgb(var(--surface-sunken) / 0.5);
   }
 
   /* -------------------------------------------------------------- */
@@ -724,7 +507,7 @@
   /* -------------------------------------------------------------- */
 
   .cp-back-link {
-    @apply text-sm text-[rgb(var(--link))] hover:underline inline-flex items-center gap-1 min-h-6 py-0.5;
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--link))] hover:underline inline-flex items-center gap-1 min-h-6 py-0.5;
   }
 
   .cp-back-link .cp-icon {
@@ -732,40 +515,54 @@
   }
 
   .cp-row-highlighted {
-    @apply outline outline-2 outline-cp-accent;
+    outline: var(--focus-ring-cp-width) solid rgb(var(--ring));
   }
 
-  /* cp-table-link: a plain hostname/entity link inside a <td>, used
-     where no other link styling class applies (alerts history table,
-     costs table) — an unstyled <a> defaults to inline sizing with no
-     padding, which is both visually inconsistent with this app's
-     other links and fails WCAG 2.2 AA 2.5.8's 24x24 target-size
-     minimum (its box is exactly the text's line-height tall). */
   .cp-table-link {
     @apply inline-flex items-center min-h-6 py-0.5 text-[rgb(var(--link))] no-underline hover:underline;
   }
 
-  /* Mobile navbar overflow menu (SPEC-v0.7 §5, < 640px): Theme/
-     Settings/Add agent move into .cp-navbar-overflow-btn's dropdown
-     instead of each rendering its own always-visible navbar icon
-     button — bell and the user menu stay visible at every width.
-     Declared at the very end of this @layer block (rather than
-     alongside .cp-navbar-actions above) so this display override
-     reliably wins the cascade regardless of any other same-layer
-     rule's own position: Tailwind's @layer components/base gives
-     single-class selectors identical specificity, so source order is
-     the only tie-breaker, and .cp-icon-btn/.cp-btn's own
-     unconditional `display` would otherwise beat an earlier-declared
-     override. The two-class selectors below add a small specificity
-     margin as a second line of defense against a future reordering
-     of this file breaking the same way again. */
   .cp-icon-btn.cp-navbar-theme-btn,
   .cp-icon-btn.cp-navbar-settings-link,
   .cp-btn.cp-navbar-primary-btn {
+    /* Keep these after base button rules so mobile visibility wins. */
     @apply hidden sm:inline-flex;
   }
 
   .cp-icon-btn.cp-navbar-overflow-btn {
-    @apply inline-flex sm:hidden;
+    @apply inline-flex lg:hidden;
+  }
+
+  /* Route headings receive programmatic focus only so screen readers land
+     on the new page; they are not interactive, so no focus ring (Firefox
+     treats programmatic focus as :focus-visible). */
+  .cp-main h1[tabindex="-1"]:focus {
+    outline: none;
+  }
+
+  /* Channel health stays informational rather than crowding the first
+     mobile viewport. The full desktop treatment remains unchanged. */
+  /* Doubled class: input.css defines .cp-update-banner (flex-col below sm)
+     after this file is imported, so equal specificity would lose. */
+  @media (max-width: 639px) {
+    .cp-update-banner.cp-channel-health-banner {
+      @apply flex-row items-center gap-2 rounded-[var(--radius-cp-md)] px-3 py-2;
+    }
+
+    .cp-update-banner.cp-channel-health-banner > svg {
+      @apply h-4 w-4 shrink-0;
+    }
+
+    .cp-update-banner.cp-channel-health-banner .cp-update-banner-text {
+      @apply min-w-0 flex-1 line-clamp-2 text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)];
+    }
+
+    .cp-update-banner.cp-channel-health-banner .cp-btn {
+      @apply min-h-6 shrink-0 border-0 bg-transparent p-0 text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--link))] shadow-none;
+    }
+
+    .cp-update-banner.cp-channel-health-banner .cp-channel-health-dismiss {
+      @apply h-6 w-6 justify-center text-[rgb(var(--muted))];
+    }
   }
 }

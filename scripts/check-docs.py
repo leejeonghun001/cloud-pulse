@@ -16,7 +16,7 @@ Validates, across every tracked Markdown file in the repository:
    350; use ``--skip-length-cap`` while README.md is still being
    restructured by the docs stage, or ``--max-readme-lines N`` to
    override the cap).
-5. Every ``CP_*`` environment variable and CLI flag (``-name``/``--name``)
+5. Every ``CP_*`` environment variable and, with ``--check-flags``, CLI flag (``-name``/``--name``)
    mentioned in Markdown documentation actually exists somewhere in the
    repository's source (Go, shell, Python, PowerShell, JS) — catching
    documentation that drifted from the code (a renamed/removed flag, a
@@ -31,7 +31,10 @@ elsewhere with ``--repo-root``.
 from __future__ import annotations
 
 import argparse
+import ast
+import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -132,6 +135,21 @@ FLAG_ALLOWLIST = {
 
 MARKDOWN_LINK_EXCLUDE_SCHEMES = ("http://", "https://", "mailto:", "//")
 
+# CP_* names that are legitimately documented before their code lands.
+# A SPEC draft under docs/specs/ names the environment variables the
+# planned implementation will read, which is the whole point of writing
+# it down first — but check_env_and_flags cross-references every documented
+# CP_* against source, so an unimplemented variable would otherwise fail
+# the check. Each entry must name the SPEC that introduces it and must be
+# REMOVED in the same change that implements it; an entry left behind
+# after the variable ships would silently stop catching a later typo, so
+# keep this list empty by default.
+#
+# Format: "CP_NAME": "docs/specs/<file>.md" (the SPEC that introduces it).
+ENV_VAR_ALLOWLIST = {
+    "CP_TRAFFIC": "docs/specs/2026-10-03-per-process-traffic.md",
+}
+
 
 @dataclass
 class Issue:
@@ -155,26 +173,34 @@ class CheckResult:
         return not self.issues
 
 
+SKIP_DIRS = {".git", ".verification", "node_modules", "vendor", "dist", "bin", "data", "__pycache__"}
+
+
+def source_files(repo_root: Path) -> list[Path]:
+    """Use Git's nonignored source set, with a narrow no-.git fixture fallback.
+
+    An explicit fixture root beneath a real checkout must not accidentally
+    discover that checkout's files. Git is used only when this root has .git.
+    """
+    if (repo_root / ".git").exists():
+        listed = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+            capture_output=True, check=True,
+        )
+        paths = [repo_root / os.fsdecode(name) for name in listed.stdout.split(b"\0") if name]
+    else:
+        paths = []
+        for directory, directories, filenames in os.walk(repo_root, followlinks=False):
+            directories[:] = [name for name in directories if name not in SKIP_DIRS]
+            paths.extend(Path(directory) / name for name in filenames)
+    return sorted({path for path in paths
+                   if not any(part in SKIP_DIRS for part in path.relative_to(repo_root).parts)
+                   and path.is_file() and not path.is_symlink()})
+
+
 def find_markdown_files(repo_root: Path) -> list[Path]:
-    """Returns every tracked-looking Markdown file, skipping vendored
-    third-party docs and build/dependency directories."""
-    skip_dirs = {
-        ".git",
-        "node_modules",
-        "vendor",
-        "dist",
-        "bin",
-        "data",
-        "__pycache__",
-    }
-    results: list[Path] = []
-    for path in sorted(repo_root.rglob("*.md")):
-        if any(part in skip_dirs for part in path.relative_to(repo_root).parts):
-            continue
-        if "web/assets/vendor" in str(path.relative_to(repo_root)):
-            continue
-        results.append(path)
-    return results
+    """Current source Markdown only; ignored verification/cache docs are not source."""
+    return [path for path in source_files(repo_root) if path.suffix == ".md"]
 
 
 def github_slug(heading: str) -> str:
@@ -355,23 +381,78 @@ def collect_known_env_vars(repo_root: Path) -> set[str]:
     install scripts, internal/selfupdate, internal/notify's SSRF
     override, test harnesses, and Python verify scripts all read their
     own CP_* variables outside the main config loader."""
-    skip_dirs = {".git", "node_modules", "vendor", "dist", "bin", "data", "__pycache__"}
     known: set[str] = set()
     extra_files = {repo_root / ".githooks" / "pre-commit", repo_root / ".githooks" / "commit-msg"}
-    for path in repo_root.rglob("*"):
-        if not path.is_file():
-            continue
+    for path in source_files(repo_root):
         if path.suffix not in CODE_FILE_SUFFIXES and path not in extra_files:
             continue
-        if any(part in skip_dirs for part in path.relative_to(repo_root).parts):
-            continue
-        if "web/assets/vendor" in str(path.relative_to(repo_root)):
+        parts = path.relative_to(repo_root).parts
+        if "tests" in parts or "test" in parts or path.name.endswith("_test.go") or path.name.endswith(".test.mjs"):
+            # Literal fixture identifiers in unit tests are not implementation.
             continue
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
+        if path.name == "check-docs.py":
+            # The exception declaration is policy, not evidence that the
+            # variable exists in implementation. Strip precisely that AST
+            # assignment, not other real CP_* source references.
+            try:
+                tree = ast.parse(text)
+                lines = text.splitlines()
+                for node in tree.body:
+                    if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "ENV_VAR_ALLOWLIST" for target in node.targets):
+                        for index in range(node.lineno - 1, node.end_lineno):
+                            lines[index] = ""
+                text = "\n".join(lines)
+            except SyntaxError:
+                pass
         known.update(ENV_VAR_RE.findall(text))
+    return known
+
+
+def collect_custom_go_case_flags(text: str) -> set[str]:
+    """Recognize custom argument switch cases, not comments/help-string prose.
+
+    Tokenize comments and complete string literals first so flag-shaped text
+    inside a message cannot masquerade as a Go case comparison. Accepted cases
+    consist only of identifier/string equalities joined by || (with optional
+    parentheses), such as case a == "-h" || a == "--help":.
+    """
+    token_re = re.compile(
+        r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|`[^`]*`|'
+        r"'(?:\\.|[^'\\])*'|[A-Za-z_][A-Za-z0-9_]*|==|\|\||[^\s]"
+    )
+    tokens = [match.group(0) for match in token_re.finditer(text)
+              if not match.group(0).startswith(("//", "/*"))]
+    known: set[str] = set()
+    for index, token in enumerate(tokens):
+        if token != "case":
+            continue
+        end = index + 1
+        while end < len(tokens) and tokens[end] not in (":", "case", "{", "}"):
+            end += 1
+        if end == len(tokens) or tokens[end] != ":":
+            continue
+        clause = [item for item in tokens[index + 1:end] if item not in ("(", ")")]
+        accepted: list[str] = []
+        while clause:
+            if len(clause) < 3 or clause[1] != "==":
+                break
+            left, _, right = clause[:3]
+            identifier, literal = (left, right) if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", left) else (right, left)
+            flag = re.fullmatch(r'"(--?[a-z][a-z0-9-]*)"', literal)
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", identifier) or not flag:
+                break
+            accepted.append(flag.group(1))
+            clause = clause[3:]
+            if not clause:
+                known.update(accepted)
+                break
+            if clause[0] != "||" or len(clause) == 1:
+                break
+            clause = clause[1:]
     return known
 
 
@@ -387,11 +468,14 @@ def collect_known_flags(repo_root: Path) -> set[str]:
     flag_def_re = re.compile(
         r'\b[A-Za-z_][A-Za-z0-9_]*\.(?:String|Bool|Int|Int64|Uint|Duration|Float64)\(\s*"([a-zA-Z0-9-]+)"'
     )
-    for go_file in cmd_dir.rglob("*.go"):
+    for go_file in source_files(repo_root):
+        if go_file.suffix != ".go" or go_file.name.endswith("_test.go") or "cmd" != go_file.relative_to(repo_root).parts[0]:
+            continue
         text = go_file.read_text(encoding="utf-8")
         for name in flag_def_re.findall(text):
             known.add(f"-{name}")
             known.add(f"--{name}")
+        known.update(collect_custom_go_case_flags(text))
     return known
 
 
@@ -401,13 +485,30 @@ def check_env_and_flags(
     result: CheckResult,
     *,
     enabled: bool,
+    check_flags: bool = True,
 ) -> None:
     if not enabled:
         return
     known_env = collect_known_env_vars(repo_root)
     known_flags = collect_known_flags(repo_root)
-    if not known_env and not known_flags:
-        return
+    active_exceptions: dict[str, Path] = {}
+    for name, document in ENV_VAR_ALLOWLIST.items():
+        spec = repo_root / document
+        relative_spec = Path(document)
+        if relative_spec.is_absolute() or ".." in relative_spec.parts or relative_spec.parts[:2] != ("docs", "specs"):
+            result.add(spec, 1, f"env allowlist entry must map to a docs/specs draft: {name}")
+            continue
+        if name in known_env:
+            result.add(spec, 1, f"stale env allowlist entry: {name} is now referenced in implementation; remove its exception")
+            continue
+        if not spec.is_file():
+            result.add(spec, 1, f"stale env allowlist entry: {name} mapped draft does not exist")
+            continue
+        spec_text = spec.read_text(encoding="utf-8")
+        if not re.search(r"\bStatus:\s*(?:\*\*)?DRAFT\b", spec_text, re.IGNORECASE) or name not in ENV_VAR_RE.findall(spec_text):
+            result.add(spec, 1, f"stale env allowlist entry: {name} must appear in its mapped DRAFT document")
+            continue
+        active_exceptions[name] = spec
 
     for md_path in md_files:
         lines = md_path.read_text(encoding="utf-8").splitlines()
@@ -424,19 +525,21 @@ def check_env_and_flags(
                     in_fence = False
                 continue
             for env_var in ENV_VAR_RE.findall(line):
-                if known_env and env_var not in known_env:
+                if active_exceptions.get(env_var) == md_path:
+                    continue
+                if env_var not in known_env:
                     result.add(
                         md_path,
                         lineno,
                         f"documented env var not referenced anywhere in source: {env_var}",
                     )
-            if in_fence:
+            if in_fence or not check_flags:
                 continue
             for flag_match in FLAG_RE.finditer(line):
                 flag = flag_match.group(1)
                 if flag in FLAG_ALLOWLIST:
                     continue
-                if not known_flags or flag in known_flags:
+                if flag in known_flags:
                     continue
                 # A flag-looking token not in FLAG_ALLOWLIST and not
                 # defined by any cmd/*/main.go flag.String/Bool/...
@@ -496,7 +599,7 @@ def main(argv: list[str] | None = None) -> int:
     check_fence_languages(md_files, result)
     if not args.skip_length_cap:
         check_readme_length(repo_root, args.max_readme_lines, result)
-    check_env_and_flags(repo_root, md_files, result, enabled=True)
+    check_env_and_flags(repo_root, md_files, result, enabled=True, check_flags=args.check_flags)
 
     if result.issues:
         print(f"check-docs: {len(result.issues)} issue(s) found:", file=sys.stderr)

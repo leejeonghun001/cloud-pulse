@@ -133,6 +133,7 @@ export async function apiFetch(path, init = {}) {
   if (res.status === 401) {
     const { message, code } = await parseErrorBody(res);
     clearSessionToken();
+    clearHostsCache();
     unauthorizedHandler?.({ sessionExpired: code === "session_expired" });
     throw new ApiError(message, 401, code || "unauthorized");
   }
@@ -230,9 +231,60 @@ export function revokeOtherSessions(signal) {
 // Dashboard data endpoints (unchanged from v0.3.x, now session-authed)
 // ---------------------------------------------------------------------------
 
-/** getHosts fetches GET /api/v1/hosts. */
-export function getHosts(signal) {
-  return apiFetch("/api/v1/hosts", { signal });
+// The shell's command palette can reuse a recent response fetched by any
+// page. This remains a cache of successful, real API responses only; callers
+// that need a fresh fleet snapshot still call getHosts() below.
+let latestHostsResponse = null;
+let latestHostsAtMs = 0;
+let latestHostsRequestID = 0;
+let latestHostsAppliedID = 0;
+let hostsCacheGeneration = 0;
+
+/** Clears all host-list state when a session ends, so a later session never
+ * inherits a previous user's palette entries. */
+export function clearHostsCache() {
+  hostsCacheGeneration++;
+  latestHostsResponse = null;
+  latestHostsAtMs = 0;
+  latestHostsAppliedID = 0;
+}
+
+/** getHosts fetches GET /api/v1/hosts and publishes the successful response
+ * for short-lived consumers such as the command palette. */
+export async function getHosts(signal) {
+  const requestID = ++latestHostsRequestID;
+  const generation = hostsCacheGeneration;
+  const response = await apiFetch("/api/v1/hosts", { signal });
+  if (generation === hostsCacheGeneration && requestID >= latestHostsAppliedID) {
+    latestHostsResponse = response;
+    latestHostsAtMs = Date.now();
+    latestHostsAppliedID = requestID;
+  }
+  return response;
+}
+
+/**
+ * getRecentHosts returns the most recent successful getHosts response when
+ * it is younger than maxAgeMs, otherwise null. The timestamp is deliberately
+ * retained with the cache rather than implied by the UI refresh cadence.
+ * @param {number} maxAgeMs
+ * @returns {any|null}
+ */
+export function getRecentHosts(maxAgeMs) {
+  if (!latestHostsResponse || Date.now() - latestHostsAtMs >= maxAgeMs) return null;
+  return latestHostsResponse;
+}
+
+/**
+ * getRecentOrPendingHosts returns only a cache entry. It intentionally never
+ * shares an in-flight page request because that request can carry a page's
+ * AbortSignal and would make palette refreshes fail on navigation.
+ * @param {number} maxAgeMs
+ * @returns {Promise<any>|null}
+ */
+export function getRecentOrPendingHosts(maxAgeMs) {
+  const cached = getRecentHosts(maxAgeMs);
+  return cached ? Promise.resolve(cached) : null;
 }
 
 /** getHost fetches GET /api/v1/hosts/{id}. */
@@ -353,14 +405,21 @@ export function deleteNotifyChannel(id, signal) {
 }
 
 /** testNotifyChannel calls POST /api/v1/alerts/channels/{id}/test
- * (admin) for a saved channel. Returns {ok: boolean, error?: string}. */
+ * (admin) for a saved channel. An ok result means the provider accepted
+ * the send, not that a recipient received/read it. Does not update health. */
 export function testNotifyChannel(id, signal) {
   return apiFetch(`/api/v1/alerts/channels/${encodeURIComponent(id)}/test`, { method: "POST", signal });
 }
 
 /** testDraftNotifyChannel calls POST /api/v1/alerts/channels/test
- * (admin) with an unsaved channel configuration from the "Add channel"
- * dialog. Returns {ok: boolean, error?: string}. */
+ * (admin) with the current form, without saving it. On edit, the optional
+ * positive existing_channel_id must identify a channel of the same type;
+ * omitted secret fields (or "***") use only that channel's stored secrets.
+ * Edited destinations and replacement secrets remain draft values.
+ * Returns {ok: boolean, diagnosis?: Object, delivery?: string}; no config
+ * or credentials are returned, and recorded channel health is unchanged.
+ * @param {{name: string, type: string, config: Object<string,string>, existing_channel_id?: number}} channel
+ */
 export function testDraftNotifyChannel(channel, signal) {
   return apiFetch("/api/v1/alerts/channels/test", {
     method: "POST",

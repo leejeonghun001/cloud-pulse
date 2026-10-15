@@ -14,11 +14,15 @@ import {
   metricLabel,
   operatorLabel,
   formatThreshold,
+  formatMetricValue,
   formatDurationShort,
   hostScopeLabel,
   scopeLabel,
   isStorageScopedMetric,
   isThresholdlessMetric,
+  defaultRuleSeverity,
+  eventSeverity,
+  setDraftMetric,
   channelsLabel,
   ruleSummarySentence,
   presetByID,
@@ -71,6 +75,14 @@ test("formatThreshold: percent metrics", () => {
 test("formatThreshold: egress percent-of-limit metrics", () => {
   assert.equal(formatThreshold("egress_out_pct", 80), "80% of limit");
   assert.equal(formatThreshold("egress_in_pct", 95), "95% of limit");
+});
+
+test("formatMetricValue only adds known reading units", () => {
+  assert.equal(formatMetricValue("egress_out_pct", 85), "85.0%");
+  assert.equal(formatMetricValue("storage_usage_pct", 91.25), "91.3%");
+  assert.equal(formatMetricValue("load1", 2), "2.0");
+  assert.equal(formatMetricValue("unknown_metric", 2), "2.0");
+  assert.equal(formatMetricValue("cpu", null), "–");
 });
 
 test("formatThreshold: load1 has no unit suffix and trims trailing zeros", () => {
@@ -209,6 +221,31 @@ test("isThresholdlessMetric: host_down, agent_outdated, update_batch_failed are 
 test("isThresholdlessMetric: every other metric uses a threshold", () => {
   assert.equal(isThresholdlessMetric("cpu"), false);
   assert.equal(isThresholdlessMetric("storage_usage_pct"), false);
+});
+
+test("event severity maps snapshots and old-event fallback in one shared helper", () => {
+  assert.equal(eventSeverity({ metric: "cpu", severity: "critical" }), "critical");
+  assert.equal(eventSeverity({ metric: "host_down", severity: "warning" }), "warning");
+  assert.equal(eventSeverity({ metric: "host_down" }), "critical");
+  assert.equal(eventSeverity({ metric: "cpu" }), "warning");
+  assert.equal(eventSeverity({ metric: "cpu", severity: "unexpected" }), "warning");
+});
+
+test("defaultRuleSeverity keeps historical critical metrics critical", () => {
+  assert.equal(defaultRuleSeverity("host_down"), "critical");
+  assert.equal(defaultRuleSeverity("update_batch_failed"), "critical");
+  assert.equal(defaultRuleSeverity("cpu"), "warning");
+  assert.equal(defaultRuleSeverity("agent_outdated"), "warning");
+});
+
+test("editor severity default follows its metric until the selector is touched", () => {
+  const draft = { metric: "cpu", severity: defaultRuleSeverity("cpu"), severityTouched: false };
+  setDraftMetric(draft, "host_down");
+  assert.deepEqual(draft, { metric: "host_down", severity: "critical", severityTouched: false });
+  draft.severity = "critical";
+  draft.severityTouched = true;
+  setDraftMetric(draft, "cpu");
+  assert.deepEqual(draft, { metric: "cpu", severity: "critical", severityTouched: true });
 });
 
 test("PRESETS: every preset id is unique and rule is well-formed", () => {

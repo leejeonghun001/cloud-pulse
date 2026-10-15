@@ -42,7 +42,11 @@ export function channelHealthBanner(channelNames, onDismiss) {
   node.append(viewLink);
 
   if (onDismiss) {
-    const dismissBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button" }, text: t("health.banner_dismiss") });
+    const dismissBtn = el("button", {
+      class: "cp-btn cp-btn-secondary cp-btn-sm cp-channel-health-dismiss",
+      attrs: { type: "button", "aria-label": t("health.banner_dismiss") },
+    });
+    dismissBtn.append(icon("x"));
     dismissBtn.addEventListener("click", onDismiss);
     node.append(dismissBtn);
   }
@@ -60,7 +64,7 @@ export function channelHealthBanner(channelNames, onDismiss) {
  * previous state in place, matching main.js's pollVersion/
  * pollActiveAlerts "swallow and try again next tick" convention.
  * @param {(channelNames: string[]) => void} render
- * @param {{intervalMs?: number, isActive?: () => boolean}} [opts]
+ * @param {{intervalMs?: number, isActive?: () => boolean, isVisible?: () => boolean}} [opts]
  *   isActive lets the caller skip polling while signed out, mirroring
  *   pollActiveAlerts' authState.authenticated guard.
  * @returns {() => void} stop function
@@ -68,9 +72,11 @@ export function channelHealthBanner(channelNames, onDismiss) {
 export function startChannelHealthBannerPolling(render, opts = {}) {
   const intervalMs = opts.intervalMs ?? DEFAULT_POLL_MS;
   const isActive = opts.isActive ?? (() => true);
+  const isVisible = opts.isVisible ?? (() => !globalThis.document?.hidden);
+  let timer = null;
 
   async function poll() {
-    if (!isActive()) return;
+    if (!isActive() || !isVisible()) return;
     try {
       const report = await getChannelsHealth();
       render(report.banner_needed ? report.banner_channel_names || [] : []);
@@ -82,7 +88,24 @@ export function startChannelHealthBannerPolling(render, opts = {}) {
     }
   }
 
-  poll();
-  const timer = setInterval(poll, intervalMs);
-  return () => clearInterval(timer);
+  function start() {
+    if (timer !== null || !isVisible()) return;
+    void poll();
+    timer = setInterval(poll, intervalMs);
+  }
+  function pause() {
+    if (timer !== null) clearInterval(timer);
+    timer = null;
+  }
+  const onVisibilityChange = () => {
+    if (isVisible()) start();
+    else pause();
+  };
+
+  start();
+  globalThis.document?.addEventListener?.("visibilitychange", onVisibilityChange);
+  return () => {
+    pause();
+    globalThis.document?.removeEventListener?.("visibilitychange", onVisibilityChange);
+  };
 }
