@@ -51,6 +51,11 @@
     overflow-wrap: anywhere;
   }
 
+  .cp-costs-status-hint {
+    @apply m-0 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--text))];
+    overflow-wrap: anywhere;
+  }
+
   .cp-costs-provider-notes {
     @apply flex flex-col gap-1 pt-2.5 mt-auto border-t border-[rgb(var(--border))];
   }

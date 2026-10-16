@@ -13,8 +13,9 @@ An `AlertRule` has:
 
 - **Metric**: `cpu` | `memory` | `disk` | `load1` | `egress_out_pct` |
   `egress_in_pct` | `host_down` | `storage_usage_pct` |
-  `agent_outdated` | `update_batch_failed` (the last two are SPEC-v0.8
-  §3-1's rollout alerts — see their own section below).
+  `agent_outdated` | `update_batch_failed` (SPEC-v0.8 §3-1's rollout
+  alerts) | `cost_mtd` | `cost_forecast` (cost budgets) — the last four
+  have their own sections below.
 - **Severity**: `warning` or `critical`. Omitted severity defaults to
   `critical` for `host_down` and `update_batch_failed` and `warning` for
   every other metric. Upgrading keeps what each rule was already delivered
@@ -24,8 +25,9 @@ An `AlertRule` has:
   snapshots its rule severity when it fires, so later edits do not alter
   alert history.
 - **Scope**: a specific host (or account, for `storage_usage_pct` — see
-  [storage.md](storage.md#polling-and-alerting)), or `""` for "every
-  host/account." `update_batch_failed` has no scope at all — it always
+  [storage.md](storage.md#polling-and-alerting); or billing provider
+  `aws`/`oci`, for the cost metrics), or `""` for "every
+  host/account/provider." `update_batch_failed` has no scope at all — it always
   applies to every remote-update batch.
 - **Operator/threshold**: `>` or `>=` against the metric's own unit
   (percent for cpu/memory/disk/egress/storage; a raw load-average
@@ -88,6 +90,21 @@ set — only a new UTC calendar month resets eligibility.
 `storage_usage_pct` rules use the general state machine above but
 default to a once-per-day re-notification cadence via
 `cooldown_sec`.
+
+## Cost budget alerts
+
+`cost_mtd` fires when a billing provider's month-to-date cost reaches
+the threshold; `cost_forecast` when its month-end forecast does. The
+threshold is an amount in that provider's own billing currency (USD for
+AWS, the tenancy's currency for OCI) — figures are never converted
+between currencies, so a rule scoped to "every provider" compares each
+provider's own amount against the same number. `duration_sec` is
+ignored and the default `cooldown_sec` is one day. Rules are checked
+whenever new figures are stored (a hub poll or an agent's OCI report)
+and on every 30-second alert tick, so a rule created between polls
+fires within a tick. A provider that has never collected successfully
+is skipped. Preview (`POST /api/v1/alerts/rules/{id}/preview`) returns
+a provider-keyed map for these rules.
 
 ## Rollout alerts (SPEC-v0.8 §3-1)
 

@@ -170,6 +170,9 @@ func (s *Server) runAlertEvalLoop(ctx context.Context) {
 				s.logger.Error("scheduler: alert evaluation failed", "error", err)
 			}
 			s.evaluateAgentOutdatedAlerts(ctx, now)
+			// Also here, not only when new figures arrive: a budget rule
+			// created or edited between polls is checked within a tick.
+			s.evaluateCostAlerts(ctx, now)
 		}
 	}
 }

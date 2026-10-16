@@ -8,7 +8,7 @@ import { showToast } from "../ui/toast.js";
 import { formatDuration } from "../core/format.js";
 import { getBilling, refreshBilling, ApiError, RateLimitError, localizeApiError } from "../core/api.js";
 import { formatUSD } from "../core/currency.js";
-import { freshnessViewModel, hostCostDisplayAmounts } from "../core/billing-view.js";
+import { freshnessViewModel, hostCostDisplayAmounts, providerStatusHint } from "../core/billing-view.js";
 import { t } from "../core/i18n.js";
 
 /** localUtcOffsetMinutes returns the browser's current UTC offset in
@@ -46,9 +46,58 @@ export function mountCostsPage(container, { announce }) {
   const controller = new AbortController();
   let generation = 0;
 
+  /** @type {HTMLElement|null} */
+  let content = null;
+
+  // The first load shows a skeleton; later (auto-)refreshes fetch first
+  // and swap the content in place, so the page neither flickers nor
+  // loses scroll/focus every poll, and a failed background refresh
+  // keeps the last good figures on screen.
   async function refresh() {
     const current = ++generation;
-    clearChildren(container);
+    const firstLoad = !content || !content.isConnected;
+    if (firstLoad) {
+      clearChildren(container);
+      content = buildShell();
+    }
+    const target = content;
+
+    let view;
+    try {
+      view = await getBilling(controller.signal);
+    } catch (err) {
+      if (err?.name === "AbortError" || controller.signal.aborted || current !== generation) return;
+      if (!firstLoad) return;
+      clearChildren(target);
+      target.setAttribute("aria-busy", "false");
+      target.append(errorState({
+        title: t("costs.page_title"),
+        message: t("costs.load_failed", { reason: describeError(err) }),
+        onRetry: refresh,
+      }));
+      return;
+    }
+    if (controller.signal.aborted || current !== generation) return;
+    const active = document.activeElement;
+    const focusedID = active && target.contains?.(active) ? active.id : "";
+    clearChildren(target);
+    target.setAttribute("aria-busy", "false");
+
+    target.append(
+      providerCardsSection({
+        snapshots: view.snapshots || [],
+        intervalSeconds: view.interval_seconds || 0,
+        signal: controller.signal,
+        announce,
+        onRefreshed: refresh,
+      }),
+    );
+    target.append(hostCostTable(view.hosts || [], view.display_currency, view.snapshots || []));
+    if (focusedID) document.getElementById(focusedID)?.focus();
+  }
+
+  /** buildShell renders the page header and a skeleton content area. */
+  function buildShell() {
     const root = el("div", { class: "cp-costs-page" });
     const header = el("header", { class: "cp-costs-header" });
     header.append(el("h1", { class: "cp-page-title", text: t("costs.page_title") }));
@@ -63,35 +112,7 @@ export function mountCostsPage(container, { announce }) {
     content.append(skeletonCards(2), el("span", { class: "sr-only", attrs: { role: "status" }, text: t("costs.loading") }));
     root.append(content);
     container.append(root);
-
-    let view;
-    try {
-      view = await getBilling(controller.signal);
-    } catch (err) {
-      if (err?.name === "AbortError" || controller.signal.aborted || current !== generation) return;
-      clearChildren(content);
-      content.setAttribute("aria-busy", "false");
-      content.append(errorState({
-        title: t("costs.page_title"),
-        message: t("costs.load_failed", { reason: describeError(err) }),
-        onRetry: refresh,
-      }));
-      return;
-    }
-    if (controller.signal.aborted || current !== generation) return;
-    clearChildren(content);
-    content.setAttribute("aria-busy", "false");
-
-    content.append(
-      providerCardsSection({
-        snapshots: view.snapshots || [],
-        intervalSeconds: view.interval_seconds || 0,
-        signal: controller.signal,
-        announce,
-        onRefreshed: refresh,
-      }),
-    );
-    content.append(hostCostTable(view.hosts || [], view.display_currency, view.snapshots || []));
+    return content;
   }
 
   function teardown() {
@@ -209,6 +230,9 @@ function providerCard(snap, intervalSeconds) {
     card.append(el("p", { class: "cp-muted-small", text: snap.status_detail || t("costs.not_connected") }));
     card.append(el("p", { class: "cp-muted-small", text: t("costs.amounts_unavailable") }));
   }
+
+  const hint = providerStatusHint(snap);
+  if (hint) card.append(el("p", { class: "cp-costs-status-hint", text: t(hint.key, hint.params) }));
 
   if (snap.source_host) {
     notes.append(el("p", { class: "cp-muted-small", text: t("costs.collected_by_agent", { host: snap.source_host }) }));

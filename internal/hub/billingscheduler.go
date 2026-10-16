@@ -154,6 +154,7 @@ func (s *Server) collectBillingOnce(ctx context.Context) {
 	if _, err := s.opts.Billing.run(ctx, interval); err != nil {
 		s.logger.Error("billing: scheduled collection failed", "error", err)
 	}
+	s.evaluateCostAlerts(ctx, s.opts.now())
 	s.opts.Billing.refreshGate().Record()
 }
 

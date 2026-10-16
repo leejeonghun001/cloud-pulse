@@ -39,6 +39,15 @@ type RolloutAlertEvaluator interface {
 	EvaluateUpdateBatch(ctx context.Context, now time.Time, outcome alerting.UpdateBatchOutcome) error
 }
 
+// CostAlertEvaluator is an optional capability an AlertEngine
+// implementation may additionally provide: evaluating the account-scoped
+// cost_mtd/cost_forecast budget rules against provider cost snapshots.
+// Checked via a type assertion for the same reason as
+// StorageAlertEvaluator.
+type CostAlertEvaluator interface {
+	EvaluateCost(ctx context.Context, now time.Time, providers []alerting.CloudCostInput) error
+}
+
 // alertEngineAdapter adapts a *alerting.Engine to this package's
 // AlertEngine interface. The method sets are already identical
 // (Evaluate/Preview with the same signatures), so this is a type
@@ -81,6 +90,12 @@ func (a alertEngineAdapter) Preview(ctx context.Context, now time.Time, rule mod
 // engine's own EvaluateStorage.
 func (a alertEngineAdapter) EvaluateStorage(ctx context.Context, now time.Time, accounts []alerting.StorageAccountUsage) error {
 	return a.engine.EvaluateStorage(ctx, now, accounts)
+}
+
+// EvaluateCost implements hub.CostAlertEvaluator, delegating to the
+// underlying engine.
+func (a alertEngineAdapter) EvaluateCost(ctx context.Context, now time.Time, providers []alerting.CloudCostInput) error {
+	return a.engine.EvaluateCost(ctx, now, providers)
 }
 
 // EvaluateAgentOutdated implements hub.RolloutAlertEvaluator (see

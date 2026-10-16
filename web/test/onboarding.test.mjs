@@ -91,7 +91,7 @@ function overviewRenderer(overrides = {}) {
     currentMonth: () => "2026-10", getStoredDirection: () => "out", setStoredDirection() {},
     getItem: (_key, fallback) => fallback, getJSON: (_key, fallback) => fallback, setJSON() {}, setItem() {},
     createDropdown() {}, dropdownSeparator: () => new Element("div"),
-    getEgress: async () => ({ hosts: [] }), getBuckets: async () => ({ buckets: [], collectors: [] }), getStorageAccounts: async () => ({ accounts: [] }), loadDisplayCurrency: async () => null,
+    getEgress: async () => ({ hosts: [] }), getBuckets: async () => ({ buckets: [], collectors: [] }), getStorageAccounts: async () => ({ accounts: [] }), getBilling: async () => null, loadDisplayCurrency: async () => null,
     buildEgressSection: () => new Element("div"), buildBucketsSection: () => ({ node: new Element("div"), charts: [] }), buildStorageAccountsSection: () => new Element("div"),
     outdatedAgentCount: () => 0, ApiError: class extends Error {}, ...overrides,
   });
@@ -549,4 +549,27 @@ test("onboarding styles wrap EN/KO labels without changing tokens or adding deco
   assert.match(css, /\.cp-add-agent-dialog \.cp-btn-group\s*\{[^}]*flex-wrap/);
   assert.match(css, /\.cp-install-command-actions \.cp-btn\s*\{[^}]*whitespace-normal/);
   assert.doesNotMatch(css, /@keyframes|animation:/);
+});
+
+test("overview spend panel shows per-currency totals, failing providers and a setup pointer", async () => {
+  const { spendSummary } = await import("../assets/js/core/billing-view.js");
+  const { formatUSD } = await import("../assets/js/core/currency.js");
+  const code = overviewSource.replace(/^import[\s\S]*?;\s*$/gm, "").replace(/^export\s+/gm, "");
+  const renderSpend = runInNewContext(`${code}\nrenderSpend`, { ...components, t, icon, document: globalThis.document, spendSummary, formatUSD });
+  const host = new Element("div");
+
+  renderSpend(host, null);
+  assert.equal(host.hidden, true, "billing off on the hub hides the panel");
+
+  renderSpend(host, { snapshots: [{ provider: "aws", status: "not_installed", last_success_at: 0 }] });
+  assert.equal(host.hidden, false);
+  assert.ok(host.textContent.includes(t("overview.spend_not_connected")));
+
+  renderSpend(host, { snapshots: [
+    { provider: "oci", status: "ok", currency: "SGD", mtd_cost: 1.5, forecast_cost: 3, last_success_at: 9, source_host: "box" },
+    { provider: "aws", status: "permission_denied", currency: "USD", mtd_cost: 0, forecast_cost: 0, last_success_at: 0 },
+  ] });
+  assert.ok(host.textContent.includes(formatUSD(1.5, "SGD", { taxNote: false })));
+  assert.ok(host.textContent.includes(t("overview.spend_attention", { providers: "AWS" })));
+  assert.ok(!host.textContent.includes(t("overview.spend_not_connected")));
 });

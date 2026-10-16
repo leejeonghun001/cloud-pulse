@@ -26,7 +26,7 @@ func (e *Engine) Evaluate(ctx context.Context, now time.Time, hosts []models.Hos
 
 	var firstErr error
 	for _, rule := range rules {
-		if !rule.Enabled {
+		if !rule.Enabled || !hostEvaluated(rule.Metric) {
 			continue
 		}
 		for _, host := range scopedHosts(rule, hosts) {
@@ -46,6 +46,10 @@ func (e *Engine) Evaluate(ctx context.Context, now time.Time, hosts []models.Hos
 // without altering any persisted state.
 func (e *Engine) Preview(ctx context.Context, now time.Time, rule models.AlertRule, hosts []models.HostSnapshot) (map[string]bool, error) {
 	out := make(map[string]bool, len(hosts))
+	if !hostEvaluated(rule.Metric) {
+		// Not a per-host condition: nothing to preview against hosts.
+		return out, nil
+	}
 	for _, host := range scopedHosts(rule, hosts) {
 		value, ok, err := e.metricValue(ctx, now, rule, host)
 		if err != nil {
@@ -58,6 +62,20 @@ func (e *Engine) Preview(ctx context.Context, now time.Time, rule models.AlertRu
 		out[host.HostID] = conditionSatisfiedNow(rule, value) && e.sustainedOverWindow(ctx, now, rule, host)
 	}
 	return out, nil
+}
+
+// hostEvaluated reports whether Evaluate handles metric. Account-,
+// rollout- and batch-scoped metrics have their own evaluators
+// (EvaluateStorage, EvaluateCost, EvaluateAgentOutdated,
+// EvaluateUpdateBatch); passing them through the per-host path would
+// only fail with "unknown metric" on every tick.
+func hostEvaluated(metric models.AlertMetric) bool {
+	switch metric {
+	case models.AlertMetricStorageUsagePct, models.AlertMetricAgentOutdated, models.AlertMetricUpdateBatchFailed,
+		models.AlertMetricCostMTD, models.AlertMetricCostForecast:
+		return false
+	}
+	return true
 }
 
 // scopedHosts filters hosts to those rule applies to: every host when

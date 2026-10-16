@@ -268,7 +268,7 @@ function buildPaletteItems() {
       label: host.hostname || host.id,
       group: t("nav.palette_group_hosts"),
       iconName: "server",
-      hint: host.status === "up" ? "Up" : "Down",
+      hint: host.status === "up" ? t("host.status_up") : t("host.status_down"),
       onSelect: () => router.navigate(`#/host/${encodeURIComponent(host.id)}`),
     });
   }
@@ -278,7 +278,7 @@ function buildPaletteItems() {
       label: t("nav.toggle_theme"),
       group: t("nav.palette_group_actions"),
       iconName: "sun",
-      onSelect: () => document.querySelector(".cp-icon-btn[aria-label='Toggle theme']")?.click(),
+      onSelect: () => shell.toggleTheme(),
     },
     {
       id: "action-add-agent",
@@ -299,7 +299,7 @@ function buildPaletteItems() {
       label: t("common.sign_out"),
       group: t("nav.palette_group_actions"),
       iconName: "logOut",
-      onSelect: () => document.querySelector(".cp-icon-btn[aria-label='User menu']")?.click(),
+      onSelect: () => shell.signOut(),
     }
   );
   return items;

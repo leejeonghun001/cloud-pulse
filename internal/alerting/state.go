@@ -201,7 +201,11 @@ func ruleSeverity(rule models.AlertRule) models.AlertSeverity {
 // to load — each such skip is logged but never fails the overall
 // evaluation.
 func (e *Engine) notifyEvent(ctx context.Context, now time.Time, rule models.AlertRule, host models.HostSnapshot, ev models.AlertEvent, severity Severity) {
-	msg := buildMessage(e.notifyLanguage(ctx), rule, ev, severity)
+	unit := metricUnit(rule.Metric)
+	if host.Unit != "" {
+		unit = host.Unit
+	}
+	msg := buildMessageWithUnit(e.notifyLanguage(ctx), rule, ev, severity, unit)
 	if img := e.buildChartImage(ctx, now, rule, host, ev); img != nil {
 		msg.Image = img
 		msg.ImageName = chartImageName
@@ -223,12 +227,21 @@ func (e *Engine) notifyEvent(ctx context.Context, now time.Time, rule models.Ale
 
 // buildMessage renders ev/rule into a notification Message in lang.
 func buildMessage(lang i18n.Lang, rule models.AlertRule, ev models.AlertEvent, severity Severity) Message {
-	unit := metricUnit(rule.Metric)
+	return buildMessageWithUnit(lang, rule, ev, severity, metricUnit(rule.Metric))
+}
+
+// buildMessageWithUnit is buildMessage with an explicit unit suffix.
+// Cost amounts are shown with two decimals.
+func buildMessageWithUnit(lang i18n.Lang, rule models.AlertRule, ev models.AlertEvent, severity Severity, unit string) Message {
+	format := formatValue
+	if IsCostMetric(rule.Metric) {
+		format = formatAmount
+	}
 	params := map[string]string{
 		"host":      ev.Hostname,
 		"rule":      rule.Name,
-		"value":     formatValue(ev.Value),
-		"threshold": formatValue(ev.Threshold),
+		"value":     format(ev.Value),
+		"threshold": format(ev.Threshold),
 		"unit":      unit,
 	}
 	textKey := "alert.firing"
@@ -251,8 +264,8 @@ func buildMessage(lang i18n.Lang, rule models.AlertRule, ev models.AlertEvent, s
 		Fields: []Field{
 			{Name: i18n.T(lang, "alert.field_host", nil), Value: ev.Hostname},
 			{Name: i18n.T(lang, "alert.field_metric", nil), Value: string(ev.Metric)},
-			{Name: i18n.T(lang, "alert.field_value", nil), Value: formatValue(ev.Value) + unit},
-			{Name: i18n.T(lang, "alert.field_threshold", nil), Value: formatValue(ev.Threshold) + unit},
+			{Name: i18n.T(lang, "alert.field_value", nil), Value: format(ev.Value) + unit},
+			{Name: i18n.T(lang, "alert.field_threshold", nil), Value: format(ev.Threshold) + unit},
 			{Name: i18n.T(lang, "alert.field_state", nil), Value: string(ev.State)},
 		},
 	}
@@ -270,6 +283,10 @@ func metricUnit(metric models.AlertMetric) string {
 
 func formatValue(v float64) string {
 	return fmt.Sprintf("%.1f", v)
+}
+
+func formatAmount(v float64) string {
+	return fmt.Sprintf("%.2f", v)
 }
 
 // isModelsNotFound reports whether err wraps models.ErrNotFound.

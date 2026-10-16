@@ -173,3 +173,61 @@ export function hostCostDisplayAmounts(hostCost, displayCurrency) {
     totalForecast: formatDisplayAmount(hostCost.total_forecast, displayCurrency, opts),
   };
 }
+
+/**
+ * providerStatusHint returns the i18n key (and params) of a "what to do
+ * next" hint for a provider snapshot that isn't "ok", or null. The hint
+ * depends on where collection runs: the hub's own CLI, or an agent's
+ * instance-principal query (snapshot.source_host).
+ * @param {{provider: string, status: string, source_host?: string}} snap
+ * @returns {{key: string, params: Object}|null}
+ */
+export function providerStatusHint(snap) {
+  if (!snap || snap.status === "ok") return null;
+  const host = snap.source_host || "";
+  if (snap.provider === "oci" && host) {
+    const status = ["not_installed", "not_configured", "auth_failed", "permission_denied"].includes(snap.status) ? snap.status : "error";
+    return { key: `costs.hint_oci_agent_${status}`, params: { host } };
+  }
+  if (snap.provider === "aws" && ["not_installed", "not_configured", "auth_failed", "permission_denied"].includes(snap.status)) {
+    return { key: `costs.hint_aws_${snap.status}`, params: {} };
+  }
+  if (snap.provider === "oci" && snap.status !== "error") {
+    return { key: "costs.hint_oci_hub", params: {} };
+  }
+  return { key: "costs.hint_retry", params: {} };
+}
+
+/**
+ * spendSummary condenses provider snapshots into the Overview's "this
+ * month" view. Figures are summed per currency only — providers report
+ * in their own billing currency (USD, SGD, ...) and are never converted
+ * into one another. A provider counts once it has ever collected
+ * successfully; one that is set up but currently failing (an agent
+ * reporting, credentials present, or past figures) is listed under
+ * `attention`, while one that was simply never set up is not.
+ * @param {Array<Object>} snapshots models.CloudCostSnapshot JSON objects
+ * @returns {{totals: Array<{currency: string, mtd: number, forecast: number, providers: string[]}>, attention: string[], stale: boolean}}
+ */
+export function spendSummary(snapshots) {
+  /** @type {Map<string, {currency: string, mtd: number, forecast: number, providers: string[]}>} */
+  const byCurrency = new Map();
+  const attention = [];
+  let stale = false;
+  for (const snap of snapshots || []) {
+    const hasFigures = (snap.last_success_at || 0) > 0;
+    if (hasFigures) {
+      const currency = snap.currency || "USD";
+      const row = byCurrency.get(currency) || { currency, mtd: 0, forecast: 0, providers: [] };
+      row.mtd += Number(snap.mtd_cost) || 0;
+      row.forecast += Number(snap.forecast_cost) || 0;
+      row.providers.push(snap.provider);
+      byCurrency.set(currency, row);
+      stale ||= Boolean(snap.stale);
+    }
+    const setUp = hasFigures || Boolean(snap.source_host) || ["auth_failed", "permission_denied", "error"].includes(snap.status);
+    if (snap.status !== "ok" && setUp) attention.push(snap.provider);
+  }
+  const totals = [...byCurrency.values()].sort((a, b) => a.currency.localeCompare(b.currency));
+  return { totals, attention, stale };
+}

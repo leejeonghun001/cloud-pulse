@@ -49,7 +49,7 @@ setLang("en");
 
 test("METRICS/OPERATORS cover every models enum value", () => {
   const values = METRICS.map((m) => m.value);
-  assert.deepEqual(values, ["cpu", "memory", "disk", "load1", "egress_out_pct", "egress_in_pct", "host_down", "storage_usage_pct", "agent_outdated", "update_batch_failed"]);
+  assert.deepEqual(values, ["cpu", "memory", "disk", "load1", "egress_out_pct", "egress_in_pct", "host_down", "storage_usage_pct", "agent_outdated", "update_batch_failed", "cost_mtd", "cost_forecast"]);
   assert.deepEqual(OPERATORS.map((o) => o.value), [">", ">="]);
 });
 
@@ -270,6 +270,7 @@ test("PRESETS covers every SPEC-v0.5/v0.7/v0.8 preset sentence", () => {
     "Host offline for 2 minutes",
     "Storage account above 90% of quota",
     "Agent behind latest release for 14 days",
+    "Monthly budget forecast",
     "Remote update batch has a failure",
   ]);
 });
@@ -349,4 +350,23 @@ test("ruleSummarySentence renders Korean text when lang is ko", () => {
   } finally {
     setLang("en");
   }
+});
+
+test("cost rules: provider scope, currency threshold, no sustained duration", async () => {
+  const { isCostScopedMetric, scopeLabel, formatThreshold, formatMetricValue, ruleSummarySentence, presetByID, COST_DEFAULT_COOLDOWN_SEC } = await import("../assets/js/core/alerts.js");
+  assert.equal(isCostScopedMetric("cost_forecast"), true);
+  assert.equal(isCostScopedMetric("cpu"), false);
+  assert.equal(scopeLabel("cost_mtd", ""), "any billing provider");
+  assert.equal(scopeLabel("cost_mtd", "oci"), "OCI");
+  assert.equal(formatThreshold("cost_forecast", 20), "20 (billing currency)");
+  assert.equal(formatMetricValue("cost_mtd", 12.345), "12.35");
+  const sentence = ruleSummarySentence({ metric: "cost_forecast", host_id: "oci", operator: ">=", threshold: 20, duration_sec: 600, channel_ids: [] });
+  assert.ok(sentence.includes("OCI") && sentence.includes("20 (billing currency)") && !sentence.includes("10 minutes"), sentence);
+  assert.equal(presetByID("cost-forecast-budget").rule.cooldown_sec, COST_DEFAULT_COOLDOWN_SEC);
+});
+
+test("formatDurationShort localizes days", async () => {
+  const { formatDurationShort } = await import("../assets/js/core/alerts.js");
+  assert.equal(formatDurationShort(86400), "1 day");
+  assert.equal(formatDurationShort(14 * 86400), "14 days");
 });

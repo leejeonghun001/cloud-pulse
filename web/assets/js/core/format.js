@@ -2,6 +2,7 @@
 // No DOM access here; every function takes primitives and returns a
 // string or number so it can be unit-tested with node --test without a
 // browser environment.
+import { t } from "./i18n.js";
 
 /** Binary (IEC) byte unit suffixes, ascending from bytes. */
 const IEC_UNITS = ["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
@@ -123,7 +124,7 @@ export function formatRelativeTime(thenMs, nowMs = Date.now()) {
   const future = diffMs < 0;
   const absSeconds = Math.floor(Math.abs(diffMs) / 1000);
 
-  if (absSeconds < 1) return "just now";
+  if (absSeconds < 1) return localized("common.just_now", {}, "just now");
 
   let value;
   let unit;
@@ -141,7 +142,20 @@ export function formatRelativeTime(thenMs, nowMs = Date.now()) {
     unit = "d";
   }
 
-  return future ? `in ${value}${unit}` : `${value}${unit} ago`;
+  const params = { n: value };
+  return future
+    ? localized(`common.rel_future_${unit}`, params, `in ${value}${unit}`)
+    : localized(`common.rel_past_${unit}`, params, `${value}${unit} ago`);
+}
+
+/**
+ * localized returns t(key, params), or fallback when no catalog has the
+ * key yet (t returns the key itself) — formatting must stay readable
+ * before catalogs load and in catalog-free unit tests.
+ */
+function localized(key, params, fallback) {
+  const out = t(key, params);
+  return out === key ? fallback : out;
 }
 
 /**

@@ -33,6 +33,9 @@ import {
   bestDurationParts,
   defaultRuleSeverity,
   isStorageScopedMetric,
+  isCostScopedMetric,
+  COST_PROVIDERS,
+  COST_DEFAULT_COOLDOWN_SEC,
   isThresholdlessMetric,
   setDraftMetric,
 } from "../../core/alerts.js";
@@ -251,6 +254,10 @@ function openRuleDialog({ rule, channels, hosts, storageAccounts = [], signal, a
           durationValue: parts.value,
           durationUnit: parts.unit,
         });
+        if (preset.rule.cooldown_sec) {
+          const cooldown = bestDurationParts(preset.rule.cooldown_sec);
+          Object.assign(draft, { cooldownValue: cooldown.value, cooldownUnit: cooldown.unit });
+        }
         setDraftMetric(draft, preset.rule.metric);
         rerenderForm();
       });
@@ -390,14 +397,23 @@ function buildRuleForm(draft, hosts, storageAccounts, channels, onChange, onFull
   metricSelect.addEventListener("change", () => {
     setDraftMetric(draft, metricSelect.value);
     draft.hostID = "";
+    // A budget breach doesn't need hourly pings: move an untouched
+    // default cooldown to the hub's daily default for cost rules.
+    if (isCostScopedMetric(draft.metric) && durationSecFromParts(draft.cooldownValue, draft.cooldownUnit) === DEFAULT_COOLDOWN_SEC) {
+      const cooldown = bestDurationParts(COST_DEFAULT_COOLDOWN_SEC);
+      Object.assign(draft, { cooldownValue: cooldown.value, cooldownUnit: cooldown.unit });
+    }
     onFullChange();
   });
   row1.append(metricNode);
 
   const scopeIsStorage = isStorageScopedMetric(draft.metric);
-  const hostOptions = scopeIsStorage
-    ? [{ value: "", label: t("alert_rules.all_connected_storage_accounts") }, ...storageAccounts.map((a) => ({ value: a.id, label: a.name }))]
-    : [{ value: "", label: t("alert_rules.all_hosts") }, ...hosts.map((h) => ({ value: h.id, label: h.hostname }))];
+  const scopeIsCost = isCostScopedMetric(draft.metric);
+  const hostOptions = scopeIsCost
+    ? [{ value: "", label: t("alerts.scope_any_provider") }, ...COST_PROVIDERS.map((p) => ({ value: p.value, label: p.name }))]
+    : scopeIsStorage
+      ? [{ value: "", label: t("alert_rules.all_connected_storage_accounts") }, ...storageAccounts.map((a) => ({ value: a.id, label: a.name }))]
+      : [{ value: "", label: t("alert_rules.all_hosts") }, ...hosts.map((h) => ({ value: h.id, label: h.hostname }))];
   const { node: hostNode, select: hostSelect } = selectField({
     id: "cp-rule-host",
     label: t("alert_rules.scope_label"),
@@ -442,18 +458,26 @@ function buildRuleForm(draft, hosts, storageAccounts, channels, onChange, onFull
     const thresholdField = el("div", { class: "cp-field" });
     thresholdField.append(el("label", { class: "cp-label", attrs: { for: "cp-rule-threshold" }, text: t("alert_rules.threshold_label") }));
     const thresholdInput = /** @type {HTMLInputElement} */ (
-      el("input", { class: "cp-input", attrs: { id: "cp-rule-threshold", type: "number", step: "0.1", min: "0", value: String(draft.threshold) } })
+      el("input", { class: "cp-input", attrs: { id: "cp-rule-threshold", type: "number", step: scopeIsCost ? "0.01" : "0.1", min: "0", value: String(draft.threshold) } })
     );
     thresholdInput.addEventListener("input", () => {
       draft.threshold = Number(thresholdInput.value);
       onChange();
     });
     thresholdField.append(thresholdInput);
+    if (scopeIsCost) {
+      thresholdInput.setAttribute("aria-describedby", "cp-rule-threshold-hint");
+      thresholdField.append(el("p", { class: "cp-muted-small", attrs: { id: "cp-rule-threshold-hint" }, text: t("alert_rules.cost_threshold_hint") }));
+    }
     row2.append(thresholdField);
   }
   frag.append(row2);
 
-  frag.append(durationField("cp-rule-duration", t("alert_rules.duration_label"), draft, "durationValue", "durationUnit", onChange));
+  // Cost figures change at most once per poll; the hub ignores a
+  // sustained-duration for them, so don't offer one.
+  if (!scopeIsCost) {
+    frag.append(durationField("cp-rule-duration", t("alert_rules.duration_label"), draft, "durationValue", "durationUnit", onChange));
+  }
   frag.append(durationField("cp-rule-cooldown", t("alert_rules.cooldown_label"), draft, "cooldownValue", "cooldownUnit", onChange));
 
   const notifyResolvedField = el("label", { class: "cp-checkbox-field" });

@@ -411,6 +411,8 @@ var validAlertMetrics = map[models.AlertMetric]bool{
 	models.AlertMetricEgressInPct:     true,
 	models.AlertMetricHostDown:        true,
 	models.AlertMetricStorageUsagePct: true,
+	models.AlertMetricCostMTD:         true,
+	models.AlertMetricCostForecast:    true,
 }
 
 var validAlertOperators = map[models.AlertOperator]bool{
@@ -440,7 +442,7 @@ func validateRuleRequest(req ruleRequest) (models.AlertRule, map[string]string) 
 	}
 	metric := models.AlertMetric(req.Metric)
 	if !validAlertMetrics[metric] {
-		details["metric"] = "must be one of cpu, memory, disk, load1, egress_out_pct, egress_in_pct, host_down, storage_usage_pct"
+		details["metric"] = "must be one of cpu, memory, disk, load1, egress_out_pct, egress_in_pct, host_down, storage_usage_pct, cost_mtd, cost_forecast"
 	}
 	severity := models.AlertSeverity(req.Severity)
 	if severity == "" {
@@ -468,14 +470,21 @@ func validateRuleRequest(req ruleRequest) (models.AlertRule, map[string]string) 
 			if !isDecimalAccountID(req.HostID) {
 				details["host_id"] = "must be a storage account id (decimal integer)"
 			}
+		} else if isCostMetric(metric) {
+			if req.HostID != string(models.CloudBillingAWS) && req.HostID != string(models.CloudBillingOCI) {
+				details["host_id"] = "must be a billing provider (aws, oci) or empty for every provider"
+			}
 		} else if !models.ValidHostID(req.HostID) {
 			details["host_id"] = "invalid host id"
 		}
 	}
 
 	cooldown := alertingDefaultCooldownSec
-	if metric == models.AlertMetricStorageUsagePct {
+	if metric == models.AlertMetricStorageUsagePct || isCostMetric(metric) {
 		cooldown = alertingStorageDefaultCooldownSec
+	}
+	if isCostMetric(metric) && req.Threshold < 0 {
+		details["threshold"] = "must not be negative"
 	}
 	if req.CooldownSec != nil {
 		cooldown = *req.CooldownSec
@@ -498,6 +507,12 @@ func validateRuleRequest(req ruleRequest) (models.AlertRule, map[string]string) 
 		NotifyResolved: req.NotifyResolved,
 		ChannelIDs:     channelIDs,
 	}, details
+}
+
+// isCostMetric reports whether metric is a provider-cost budget metric,
+// whose HostID scope is a billing provider rather than a host.
+func isCostMetric(metric models.AlertMetric) bool {
+	return metric == models.AlertMetricCostMTD || metric == models.AlertMetricCostForecast
 }
 
 // isDecimalAccountID reports whether s is a plain non-negative decimal
@@ -634,6 +649,10 @@ func (s *Server) previewRule(w http.ResponseWriter, r *http.Request, rule models
 
 	ctx := r.Context()
 	now := s.opts.now()
+	if isCostMetric(rule.Metric) {
+		s.previewCostRule(w, r, rule)
+		return
+	}
 	hosts, err := s.hostSnapshots(ctx, now)
 	if err != nil {
 		s.logger.Error("build host snapshots for preview failed", "error", err)
@@ -646,6 +665,29 @@ func (s *Server) previewRule(w http.ResponseWriter, r *http.Request, rule models
 		s.logger.Error("preview rule failed", "rule_id", rule.ID, "error", err)
 		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// previewCostRule reports, per billing provider with figures, whether a
+// cost_mtd/cost_forecast rule's condition holds right now.
+func (s *Server) previewCostRule(w http.ResponseWriter, r *http.Request, rule models.AlertRule) {
+	snapshots, err := s.store.ListCloudCostSnapshots(r.Context())
+	if err != nil {
+		s.logger.Error("list cost snapshots for preview failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
+		return
+	}
+	result := make(map[string]bool)
+	for _, snap := range snapshots {
+		if snap.LastSuccessAt == 0 || (rule.HostID != "" && rule.HostID != string(snap.Provider)) {
+			continue
+		}
+		value := snap.MTDCost
+		if rule.Metric == models.AlertMetricCostForecast {
+			value = snap.ForecastCost
+		}
+		result[string(snap.Provider)] = value > rule.Threshold || (rule.Operator == models.AlertOperatorGTE && value == rule.Threshold)
 	}
 	writeJSON(w, http.StatusOK, result)
 }

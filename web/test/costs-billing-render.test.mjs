@@ -379,3 +379,25 @@ test("Billing loading/error/retry and empty plans/history do not imply a connect
     handle.teardown();
   });
 });
+
+test("Costs background refreshes swap content in place and keep the last figures on failure", async () => {
+  await withHarness(async ({ container, responses }) => {
+    billingResponses(responses);
+    const handle = mountCostsPage(container, {});
+    await handle.refresh();
+    const content = byClass(container, "cp-costs-content")[0];
+    assert.equal(byClass(container, "cp-costs-provider-card").length, 1);
+
+    responses.set("GET /api/v1/billing", () => Response.json({ error: "hub restarting" }, { status: 503 }));
+    await handle.refresh();
+    assert.equal(byClass(container, "cp-costs-content")[0], content, "the page shell is reused, not rebuilt");
+    assert.equal(byClass(container, "cp-costs-provider-card").length, 1, "last good figures stay visible");
+    assert.equal(byClass(container, "cp-error-state").length, 0);
+
+    responses.set("GET /api/v1/billing", { interval_seconds: 43200, snapshots: [snapshot({ mtd_cost: 99 })], hosts: [] });
+    await handle.refresh();
+    assert.equal(byClass(container, "cp-costs-content")[0], content);
+    assert.equal(content.getAttribute("aria-busy"), "false");
+    assert.ok(container.textContent.includes(formatUSD(99, "USD", { taxNote: false })));
+  });
+});

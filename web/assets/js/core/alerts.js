@@ -28,6 +28,26 @@ export const METRICS = [
   { value: "storage_usage_pct", get label() { return t("alerts.metric_storage_usage_pct"); }, unit: "% of quota" },
   { value: "agent_outdated", get label() { return t("alerts.metric_agent_outdated"); }, unit: "" },
   { value: "update_batch_failed", get label() { return t("alerts.metric_update_batch_failed"); }, unit: "" },
+  { value: "cost_mtd", get label() { return t("alerts.metric_cost_mtd"); }, unit: "currency" },
+  { value: "cost_forecast", get label() { return t("alerts.metric_cost_forecast"); }, unit: "currency" },
+];
+
+/**
+ * isCostScopedMetric reports whether metric is a provider-cost budget
+ * metric, whose AlertRule.HostID holds a billing provider ("aws"/"oci",
+ * "" for every provider) and whose threshold is an amount in that
+ * provider's billing currency. Its duration is ignored by the hub.
+ * @param {string} metric
+ * @returns {boolean}
+ */
+export function isCostScopedMetric(metric) {
+  return metric === "cost_mtd" || metric === "cost_forecast";
+}
+
+/** COST_PROVIDERS are the billing providers a cost rule can scope to. */
+export const COST_PROVIDERS = [
+  { value: "aws", name: "AWS" },
+  { value: "oci", name: "OCI" },
 ];
 
 /**
@@ -152,6 +172,7 @@ export function formatThreshold(metric, threshold) {
   if (unit === "% of limit") return t("alerts.threshold_pct_of_limit", { value: numText });
   if (unit === "% of quota") return t("alerts.threshold_pct_of_quota", { value: numText });
   if (unit === "%") return t("alerts.threshold_pct", { value: numText });
+  if (unit === "currency") return t("alerts.threshold_amount", { value: numText });
   return numText;
 }
 
@@ -169,6 +190,7 @@ export function formatMetricValue(metric, value) {
   const num = Number.isFinite(value) ? value.toFixed(1) : "–";
   if (num === "–") return num;
   const unit = metricByValue(metric)?.unit;
+  if (unit === "currency") return value.toFixed(2);
   return unit?.startsWith("%") ? `${num}%` : num;
 }
 
@@ -189,8 +211,7 @@ export function formatMetricValue(metric, value) {
 export function formatDurationShort(seconds) {
   const s = Math.max(0, Math.floor(Number(seconds) || 0));
   if (s % 86400 === 0 && s >= 86400) {
-    const d = s / 86400;
-    return `${d} day${d === 1 ? "" : "s"}`;
+    return t("alerts.duration_days", { count: s / 86400 });
   }
   if (s % 3600 === 0 && s >= 3600) {
     return t("alerts.duration_hours", { count: s / 3600 });
@@ -228,6 +249,10 @@ export function hostScopeLabel(hostID, hostnameByID) {
  * @returns {string}
  */
 export function scopeLabel(metric, scopeID, hostnameByID, storageAccountNameByID) {
+  if (isCostScopedMetric(metric)) {
+    if (!scopeID) return t("alerts.scope_any_provider");
+    return COST_PROVIDERS.find((p) => p.value === scopeID)?.name || scopeID;
+  }
   if (isStorageScopedMetric(metric)) {
     if (!scopeID) return t("alerts.scope_any_storage_account");
     return storageAccountNameByID?.(scopeID) || scopeID;
@@ -291,7 +316,7 @@ export function ruleSummarySentence(rule, { hostnameByID, channelNameByID = () =
   const label = lowerFirstWord(metricLabel(rule.metric));
   const op = operatorLabel(rule.operator);
   const threshold = formatThreshold(rule.metric, rule.threshold);
-  if (rule.duration_sec > 0) {
+  if (rule.duration_sec > 0 && !isCostScopedMetric(rule.metric)) {
     return t("alerts.rule_sentence_sustained", { label, scope, op, threshold, duration, channels });
   }
   return t("alerts.rule_sentence_immediate", { label, scope, op, threshold, channels });
@@ -376,6 +401,11 @@ export const PRESETS = [
     get rule() { return { name: t("alerts.preset_agent_outdated_14d"), metric: "agent_outdated", host_id: "", operator: ">", threshold: 0, duration_sec: AGENT_OUTDATED_DEFAULT_DURATION_SEC }; },
   },
   {
+    id: "cost-forecast-budget",
+    get label() { return t("alerts.preset_cost_forecast_budget"); },
+    get rule() { return { name: t("alerts.preset_cost_forecast_budget"), metric: "cost_forecast", host_id: "", operator: ">=", threshold: 10, duration_sec: 0, cooldown_sec: COST_DEFAULT_COOLDOWN_SEC }; },
+  },
+  {
     id: "update-batch-failed",
     get label() { return t("alerts.preset_update_batch_failed"); },
     get rule() { return { name: t("alerts.preset_update_batch_failed"), metric: "update_batch_failed", host_id: "", operator: ">", threshold: 0, duration_sec: 0 }; },
@@ -395,6 +425,10 @@ export function presetByID(id) {
  * alertroutes.go's alertingDefaultCooldownSec), applied by the rule
  * editor's form default when creating a new rule. */
 export const DEFAULT_COOLDOWN_SEC = 3600;
+
+/** COST_DEFAULT_COOLDOWN_SEC mirrors the hub's once-a-day re-notify
+ * default for cost rules: a budget breach doesn't need hourly pings. */
+export const COST_DEFAULT_COOLDOWN_SEC = 86400;
 
 /**
  * validateRuleForm validates a rule-editor form's field values,

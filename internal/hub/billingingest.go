@@ -44,7 +44,9 @@ func (s *Server) ingestAgentCloudCost(ctx context.Context, hostID string, snap m
 	interval := s.resolveBillingInterval(ctx)
 	if _, err := billing.PersistSnapshot(ctx, s.store, clean, now, interval); err != nil {
 		s.logger.Error("ingest: persist agent cloud cost failed", "host_id", hostID, "error", err)
+		return
 	}
+	s.evaluateCostAlerts(ctx, now)
 }
 
 // sanitizeAgentCloudCost validates an agent-reported snapshot and

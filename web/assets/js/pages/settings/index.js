@@ -79,8 +79,13 @@ const DEFAULT_SECTION = "general";
  * @returns {string}
  */
 export function resolveSection(sectionParam) {
-  return SECTIONS.some((s) => s.id === sectionParam) ? sectionParam : DEFAULT_SECTION;
+  const id = SECTION_ALIASES[sectionParam] || sectionParam;
+  return SECTIONS.some((s) => s.id === id) ? id : DEFAULT_SECTION;
 }
+
+/** SECTION_ALIASES keeps older links working: "limits" was the
+ * Traffic section's earlier route name. */
+const SECTION_ALIASES = { limits: "traffic" };
 
 /** Keeps the active item visible in the horizontally scrollable mobile tab row. */
 export function scrollActiveSettingsTab(activeLink) {

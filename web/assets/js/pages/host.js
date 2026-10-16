@@ -304,7 +304,7 @@ export function renderHostEgressCard(host, hostID, egress) {
   headRow.append(
     el("a", {
       class: "cp-back-link",
-      attrs: { href: `#/settings/limits?host=${encodeURIComponent(hostID)}` },
+      attrs: { href: `#/settings/traffic?host=${encodeURIComponent(hostID)}` },
       text: t("host.edit_limits"),
     }),
   );

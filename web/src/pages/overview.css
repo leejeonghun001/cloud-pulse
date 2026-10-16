@@ -8,6 +8,23 @@
   /* Stat cards row                                                  */
   /* -------------------------------------------------------------- */
 
+  .cp-spend-card { @apply p-3.5 sm:p-4 gap-3 min-w-0; }
+  .cp-spend-head { @apply flex items-center justify-between gap-3 flex-wrap; }
+  .cp-spend-totals { @apply m-0 grid grid-cols-1 gap-3 min-w-0 sm:grid-cols-2 xl:grid-cols-3; }
+  .cp-spend-total { @apply flex flex-col gap-0.5 min-w-0 rounded-[var(--radius-cp-md)] bg-[rgb(var(--muted-surface))] p-3; }
+  .cp-spend-total dd { @apply m-0; }
+  .cp-spend-providers {
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))];
+  }
+  .cp-spend-value {
+    @apply text-[length:var(--text-cp-xl)] leading-[length:var(--leading-cp-tight)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))] tabular-nums;
+    overflow-wrap: anywhere;
+  }
+  .cp-spend-note {
+    @apply m-0 text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] text-[rgb(var(--muted))];
+  }
+  .cp-spend-note-attention { @apply text-[rgb(var(--status-warning-fg))]; }
+
   .cp-stat-cards {
     @apply grid gap-3;
     grid-template-columns: repeat(2, minmax(0, 1fr));

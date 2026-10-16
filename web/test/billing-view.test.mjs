@@ -289,3 +289,35 @@ test("hostCostDisplayAmounts: plan_id of 0/falsy still counts as 'no plan'", () 
   );
   assert.equal(amounts.networkMTD, null);
 });
+
+test("providerStatusHint points each failure at where collection runs", async () => {
+  const { providerStatusHint } = await import("../assets/js/core/billing-view.js");
+  assert.equal(providerStatusHint({ provider: "oci", status: "ok", source_host: "a" }), null);
+  assert.deepEqual(providerStatusHint({ provider: "oci", status: "permission_denied", source_host: "box" }), { key: "costs.hint_oci_agent_permission_denied", params: { host: "box" } });
+  assert.deepEqual(providerStatusHint({ provider: "oci", status: "error", source_host: "box" }), { key: "costs.hint_oci_agent_error", params: { host: "box" } });
+  assert.equal(providerStatusHint({ provider: "oci", status: "not_installed" }).key, "costs.hint_oci_hub");
+  assert.equal(providerStatusHint({ provider: "oci", status: "error" }).key, "costs.hint_retry");
+  assert.equal(providerStatusHint({ provider: "aws", status: "permission_denied" }).key, "costs.hint_aws_permission_denied");
+  assert.equal(providerStatusHint({ provider: "aws", status: "error" }).key, "costs.hint_retry");
+});
+
+test("spendSummary sums per currency and flags set-up providers that fail", async () => {
+  const { spendSummary } = await import("../assets/js/core/billing-view.js");
+  const got = spendSummary([
+    { provider: "aws", status: "ok", currency: "USD", mtd_cost: 10, forecast_cost: 30, last_success_at: 5 },
+    { provider: "oci", status: "error", currency: "SGD", mtd_cost: 2, forecast_cost: 4, last_success_at: 5, source_host: "box", stale: true },
+  ]);
+  assert.deepEqual(got.totals, [
+    { currency: "SGD", mtd: 2, forecast: 4, providers: ["oci"] },
+    { currency: "USD", mtd: 10, forecast: 30, providers: ["aws"] },
+  ]);
+  assert.deepEqual(got.attention, ["oci"]);
+  assert.equal(got.stale, true);
+
+  const unset = spendSummary([
+    { provider: "aws", status: "not_installed", last_success_at: 0 },
+    { provider: "oci", status: "error", last_success_at: 0, source_host: "box" },
+  ]);
+  assert.deepEqual(unset.totals, []);
+  assert.deepEqual(unset.attention, ["oci"], "a never-set-up AWS is not an alarm; a failing OCI agent is");
+});

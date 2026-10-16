@@ -5,8 +5,9 @@
 // SPEC-v0.4 §4 on top of the v0.3.x data layer (zero feature loss:
 // egress split, hub-override badges, update badges, buckets free tier,
 // 15s refresh + visibility pause + AbortController all preserved).
-import { getHosts, getEgress, getBuckets, getStorageAccounts, ApiError } from "../core/api.js";
-import { formatDisplayAmount } from "../core/currency.js";
+import { getHosts, getEgress, getBuckets, getStorageAccounts, getBilling, ApiError } from "../core/api.js";
+import { formatDisplayAmount, formatUSD } from "../core/currency.js";
+import { spendSummary } from "../core/billing-view.js";
 import { loadDisplayCurrency } from "../core/display-currency.js";
 import {
   el,
@@ -122,11 +123,13 @@ export function mountOverviewPage(container, { announce, onAddAgent }) {
   const bannerHost = el("div");
   bannerHost.hidden = true;
   const statCardsHost = el("div", { class: "cp-stat-cards" });
+  const spendHost = el("div", { class: "cp-spend-host" });
+  spendHost.hidden = true;
   const systemsCard = el("section", { class: "cp-card cp-systems-card", attrs: { "aria-labelledby": "cp-systems-heading" } });
   const egressHost = el("div", { class: "cp-egress-host" });
   const bucketsHost = el("div", { class: "cp-buckets-host" });
   const storageAccountsHost = el("div", { class: "cp-storage-accounts-host" });
-  container.append(bannerHost, statCardsHost, systemsCard, egressHost, bucketsHost, storageAccountsHost);
+  container.append(bannerHost, spendHost, statCardsHost, systemsCard, egressHost, bucketsHost, storageAccountsHost);
 
   function showBanner(message, retry = false) {
     bannerHost.hidden = false;
@@ -215,12 +218,19 @@ export function mountOverviewPage(container, { announce, onAddAgent }) {
             if (err?.name === "AbortError") throw err;
             return { accounts: [] };
           }),
-        ]).then(([egress, buckets, storageAccounts]) => ({
+          // Spend is supplementary: a billing failure must not blank the
+          // fleet view, so it degrades to "no figures" instead.
+          getBilling(controller.signal).catch((err) => {
+            if (err?.name === "AbortError") throw err;
+            return null;
+          }),
+        ]).then(([egress, buckets, storageAccounts, billing]) => ({
           month: state.month,
           fetchedAtMs: Date.now(),
           egress,
           buckets,
           storageAccounts,
+          billing,
         }));
       const [hostsResp, displayCurrency, cloudSnapshot] = await Promise.all([
         getHosts(controller.signal),
@@ -248,6 +258,7 @@ export function mountOverviewPage(container, { announce, onAddAgent }) {
       renderSystemsCardBody();
       // No hosts means no measured fleet CPU/rates. The confirmed host count
       // lives beside the onboarding guide; don't present placeholder metrics.
+      renderSpend(spendHost, cloudSnapshot.billing);
       statCardsHost.hidden = state.hosts.length === 0;
       if (state.hosts.length === 0) clearChildren(statCardsHost);
       else renderStatCards(statCardsHost, hostsResp, cloudSnapshot.buckets, nowMs);
@@ -307,6 +318,60 @@ export function mountOverviewPage(container, { announce, onAddAgent }) {
   }
 
   return { refresh, teardown };
+}
+
+// ---------------------------------------------------------------------------
+// This month's cloud spend
+// ---------------------------------------------------------------------------
+
+const PROVIDER_LABELS = { aws: "AWS", oci: "OCI" };
+
+/**
+ * renderSpend shows this month's provider-reported spend, one figure per
+ * billing currency, linking to the Costs page. Hidden when billing is off
+ * on the hub (billing null or no snapshots at all); a hub where no
+ * provider is connected yet gets a one-line pointer to set one up.
+ */
+export function renderSpend(host, billing) {
+  clearChildren(host);
+  const snapshots = billing?.snapshots || [];
+  host.hidden = snapshots.length === 0;
+  if (host.hidden) return;
+  const { totals, attention, stale } = spendSummary(snapshots);
+
+  const section = el("section", { class: "cp-card cp-spend-card", attrs: { "aria-labelledby": "cp-spend-heading" } });
+  const head = el("div", { class: "cp-spend-head" });
+  head.append(el("h2", { class: "cp-card-title", attrs: { id: "cp-spend-heading" }, text: t("overview.spend_title") }));
+  head.append(el("a", { class: "cp-back-link", attrs: { href: "#/costs" }, text: t("overview.spend_view_costs") }));
+  section.append(head);
+
+  if (totals.length === 0 && attention.length === 0) {
+    const empty = el("p", { class: "cp-muted-small" });
+    empty.append(el("span", { text: `${t("overview.spend_not_connected")} ` }));
+    empty.append(el("a", { attrs: { href: "#/settings/billing" }, text: t("overview.spend_connect") }));
+    section.append(empty);
+    host.append(section);
+    return;
+  }
+
+  const list = el("dl", { class: "cp-spend-totals" });
+  for (const row of totals) {
+    const item = el("div", { class: "cp-spend-total" });
+    item.append(el("dt", { class: "cp-spend-providers", text: row.providers.map((p) => PROVIDER_LABELS[p] || p.toUpperCase()).join(" + ") }));
+    item.append(el("dd", { class: "cp-spend-value", text: formatUSD(row.mtd, row.currency, { taxNote: false }) }));
+    item.append(el("dd", { class: "cp-muted-small", text: t("overview.spend_forecast", { amount: formatUSD(row.forecast, row.currency, { taxNote: false }) }) }));
+    list.append(item);
+  }
+  if (totals.length > 0) section.append(list);
+
+  const notes = [];
+  if (attention.length > 0) {
+    notes.push(t("overview.spend_attention", { providers: attention.map((p) => PROVIDER_LABELS[p] || p.toUpperCase()).join(", ") }));
+  }
+  if (stale) notes.push(t("costs.stale_data"));
+  notes.push(t("costs.excl_tax"));
+  section.append(el("p", { class: attention.length > 0 ? "cp-spend-note cp-spend-note-attention" : "cp-spend-note", text: notes.join(" · ") }));
+  host.append(section);
 }
 
 // ---------------------------------------------------------------------------
@@ -442,8 +507,8 @@ function buildOptionalNextSteps() {
   section.append(el("h3", { attrs: { id: "cp-optional-next-steps" }, text: t("overview.optional_next_steps") }));
   const list = el("ul", { attrs: { role: "list" } });
   const steps = [
-    ["database", t("overview.optional_storage"), "https://github.com/leejeonghun001/cloud-pulse/blob/main/docs/storage.md"],
-    ["gauge", t("overview.optional_limits"), "#/settings/limits"],
+    ["database", t("overview.optional_storage"), "#/settings/storage"],
+    ["gauge", t("overview.optional_limits"), "#/settings/traffic"],
     ["bell", t("overview.optional_notifications"), "#/settings/notifications"],
   ];
   for (const [iconName, label, href] of steps) {

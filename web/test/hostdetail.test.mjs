@@ -147,7 +147,7 @@ test("traffic keeps reported exceeded amounts/projections, hub override, unlimit
   const bar = all(root).find((node) => node.attributes?.role === "progressbar");
   assert.equal(bar.attributes["aria-valuenow"], "1024");
   assert.equal(bar.attributes["aria-valuetext"], "2.0 KiB / 1.0 KiB");
-  assert.equal(all(root).find((node) => node.tagName === "a").attributes.href, "#/settings/limits?host=host%20%2F%20%23");
+  assert.equal(all(root).find((node) => node.tagName === "a").attributes.href, "#/settings/traffic?host=host%20%2F%20%23");
   verifyNames(root);
   const unknown = detail.detailTrafficDirection(null, "out");
   assert.equal(byClass(unknown, "cp-bar-fill").length, 0);

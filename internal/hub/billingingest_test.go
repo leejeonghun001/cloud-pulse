@@ -1,11 +1,14 @@
 package hub
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/leejeonghun001/cloud-pulse/internal/alerting"
 	"github.com/leejeonghun001/cloud-pulse/internal/billing"
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
 )
@@ -87,5 +90,84 @@ func TestIngest_AgentCloudCostIgnoredWithBillingOff(t *testing.T) {
 	store, _ := postAgentCloudCost(t, false, models.CloudCostSnapshot{Provider: models.CloudBillingOCI, Status: models.CloudBillingOK, MTDCost: 1})
 	if len(store.cloudCostSnapshots) != 0 {
 		t.Errorf("snapshots = %+v, want none stored with CP_BILLING=off", store.cloudCostSnapshots)
+	}
+}
+
+// fakeCostAlertEngine records EvaluateCost calls.
+type fakeCostAlertEngine struct {
+	mu    sync.Mutex
+	calls [][]alerting.CloudCostInput
+}
+
+func (f *fakeCostAlertEngine) Evaluate(context.Context, time.Time, []models.HostSnapshot) error {
+	return nil
+}
+
+func (f *fakeCostAlertEngine) Preview(context.Context, time.Time, models.AlertRule, []models.HostSnapshot) (map[string]bool, error) {
+	return nil, nil
+}
+
+func (f *fakeCostAlertEngine) EvaluateCost(_ context.Context, _ time.Time, providers []alerting.CloudCostInput) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, providers)
+	return nil
+}
+
+func TestIngest_AgentCloudCostEvaluatesCostAlerts(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	engine := &fakeCostAlertEngine{}
+	opts := testOptions()
+	opts.Now = fixedNow(now)
+	opts.Alerting = engine
+	opts.Billing = &BillingRuntime{Collector: billing.New(store, billing.Options{Runner: &noopRunner{}, DataDir: t.TempDir()})}
+	// A provider that never collected must not reach the evaluator.
+	store.cloudCostSnapshots[models.CloudBillingAWS] = models.CloudCostSnapshot{Provider: models.CloudBillingAWS, Status: models.CloudBillingNotInstalled}
+	s := newTestServer(t, opts, store)
+
+	body, err := json.Marshal(models.AgentReport{
+		Host:    sampleHostInfo("oci-box"),
+		Samples: []models.Sample{{Timestamp: now.Unix(), CPUPercent: 1}},
+		CloudCost: &models.CloudCostSnapshot{
+			Provider: models.CloudBillingOCI, Status: models.CloudBillingOK, Currency: "SGD", MTDCost: 3, ForecastCost: 6,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal report: %v", err)
+	}
+	rec := doRequest(t, s.Handler(), http.MethodPost, "/api/v1/agent/report", "203.0.113.1:1234", opts.AgentToken, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	if len(engine.calls) != 1 {
+		t.Fatalf("EvaluateCost calls = %d, want 1", len(engine.calls))
+	}
+	want := []alerting.CloudCostInput{{Provider: models.CloudBillingOCI, Currency: "SGD", MTD: 3, Forecast: 6}}
+	if got := engine.calls[0]; len(got) != 1 || got[0] != want[0] {
+		t.Errorf("EvaluateCost providers = %+v, want %+v", got, want)
+	}
+}
+
+func TestValidateRuleRequest_CostMetrics(t *testing.T) {
+	t.Parallel()
+	rule, details := validateRuleRequest(ruleRequest{Name: "budget", Metric: "cost_forecast", Operator: ">=", Threshold: 20, HostID: "oci"})
+	if len(details) != 0 {
+		t.Fatalf("details = %v, want none", details)
+	}
+	if rule.CooldownSec != 86400 {
+		t.Errorf("CooldownSec = %d, want the daily default 86400", rule.CooldownSec)
+	}
+	for _, bad := range []ruleRequest{
+		{Name: "x", Metric: "cost_mtd", Operator: ">=", HostID: "gcp"},
+		{Name: "x", Metric: "cost_mtd", Operator: ">=", Threshold: -1},
+	} {
+		if _, details := validateRuleRequest(bad); len(details) == 0 {
+			t.Errorf("validateRuleRequest(%+v) accepted, want a validation error", bad)
+		}
 	}
 }

@@ -95,12 +95,13 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent, onNavigate 
     themeBtn.append(icon(iconName, { title: t("nav.theme_label", { theme: pref }) }));
   }
   renderThemeIcon();
-  themeBtn.addEventListener("click", () => {
+  function toggleTheme() {
     const next = cycleTheme(getStoredTheme());
     setStoredTheme(next);
     applyTheme(next);
     renderThemeIcon();
-  });
+  }
+  themeBtn.addEventListener("click", toggleTheme);
   themeBtn.classList.add("cp-navbar-theme-btn");
   actions.append(themeBtn);
 
@@ -110,6 +111,16 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent, onNavigate 
   });
   settingsLink.append(icon("settings"));
   actions.append(settingsLink);
+
+  async function signOut() {
+    try {
+      await logout();
+    } catch {
+      // Best-effort: proceed to clear local state regardless.
+    }
+    clearSessionToken();
+    onSignOut();
+  }
 
   const userBtn = /** @type {HTMLButtonElement} */ (
     el("button", { class: "cp-icon-btn", attrs: { type: "button", "aria-label": t("nav.user_menu") } })
@@ -131,15 +142,7 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent, onNavigate 
         dropdownItem({
           label: t("common.sign_out"),
           icon: icon("logOut"),
-          onClick: async () => {
-            try {
-              await logout();
-            } catch {
-              // Best-effort: proceed to clear local state regardless.
-            }
-            clearSessionToken();
-            onSignOut();
-          },
+          onClick: signOut,
         }),
       );
       return frag;
@@ -278,7 +281,7 @@ export function mountShell({ onSignOut, getPaletteItems, onAddAgent, onNavigate 
     bellBadge.classList.toggle("cp-navbar-bell-badge-warning", count > 0 && tone === "warning");
   }
 
-  return { mainEl, bannerHost, liveRegionEl, setUsername, setNavVisible, setActiveAlerts, setActiveRoute, openShortcuts: () => shortcuts.open() };
+  return { mainEl, bannerHost, liveRegionEl, setUsername, setNavVisible, setActiveAlerts, setActiveRoute, openShortcuts: () => shortcuts.open(), toggleTheme, signOut };
 }
 
 const PRIMARY_NAV = Object.freeze([

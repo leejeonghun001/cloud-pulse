@@ -67,6 +67,14 @@ const (
 	// simple "have we already notified this batch ID" check, not a
 	// sustained-window/cooldown one).
 	AlertMetricUpdateBatchFailed AlertMetric = "update_batch_failed"
+	// AlertMetricCostMTD and AlertMetricCostForecast are budget alerts on
+	// a billing provider's month-to-date cost and month-end forecast,
+	// in the provider's own currency. Account-scoped like
+	// storage_usage_pct: AlertRule.HostID holds a CloudBillingProvider
+	// ("aws"/"oci"), "" meaning every provider. DurationSec is ignored.
+	// See internal/alerting/cost.go.
+	AlertMetricCostMTD      AlertMetric = "cost_mtd"
+	AlertMetricCostForecast AlertMetric = "cost_forecast"
 )
 
 // AlertOperator is the comparison an alert rule's threshold is evaluated
@@ -294,4 +302,8 @@ type HostSnapshot struct {
 	// (DurationSec == 0) evaluation of cpu/memory/disk/load1.
 	Latest *Sample
 	Egress EgressUsage
+	// Unit, when set, replaces the metric's default unit in
+	// notifications — account-scoped cost alerts use it for the
+	// provider's currency (" SGD").
+	Unit string
 }

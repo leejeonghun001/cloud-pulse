@@ -83,6 +83,7 @@ func (s *Server) handlePostBillingRefresh(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
+	s.evaluateCostAlerts(ctx, s.opts.now())
 	writeJSON(w, http.StatusOK, map[string]any{"snapshots": snapshots})
 }
 
