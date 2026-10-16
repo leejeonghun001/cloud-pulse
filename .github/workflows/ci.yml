@@ -304,7 +304,7 @@ jobs:
 
       - name: Upload prepublish report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: prepublish-report
           path: /tmp/prepublish-report.md
@@ -409,7 +409,7 @@ jobs:
 
       - name: Upload UI audit report + screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ui-audit-report
           path: /tmp/ui-audit-out
@@ -767,7 +767,7 @@ jobs:
 
       - name: Upload logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-e2e-logs-${{ matrix.os }}
           path: |
