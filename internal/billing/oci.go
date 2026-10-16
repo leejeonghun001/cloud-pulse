@@ -49,15 +49,50 @@ func BuildOCIEnv(homeDir, pathEnv, configFile, profile string) []string {
 
 // ociUsageOutput mirrors the slice of `oci usage-api usage-summary
 // request-summarized-usages` JSON output cloud-pulse reads: a "data"
-// list of usage-summary items, each carrying a computedAmount and
-// (since we always group by resourceId) a resourceId field. See
-// notes/v06-billing.md for the citation.
+// object whose "items" are usage summaries. The CLI renames the REST
+// API's camelCase fields to kebab-case ("computed-amount",
+// "resource-id"); both spellings are accepted, as is a bare "data" list.
 type ociUsageOutput struct {
-	Data []struct {
-		ComputedAmount float64 `json:"computedAmount"`
-		ResourceID     string  `json:"resourceId"`
-		Currency       string  `json:"currency"`
-	} `json:"data"`
+	Data ociUsageData `json:"data"`
+}
+
+type ociUsageData struct {
+	Items []ociUsageItem `json:"items"`
+}
+
+// UnmarshalJSON accepts "data" as either {"items": [...]} (the CLI's
+// shape) or a bare list.
+func (d *ociUsageData) UnmarshalJSON(b []byte) error {
+	if len(b) > 0 && b[0] == '[' {
+		return json.Unmarshal(b, &d.Items)
+	}
+	type plain ociUsageData
+	return json.Unmarshal(b, (*plain)(d))
+}
+
+type ociUsageItem struct {
+	ComputedAmount      *float64 `json:"computed-amount"`
+	ComputedAmountCamel *float64 `json:"computedAmount"`
+	ResourceID          string   `json:"resource-id"`
+	ResourceIDCamel     string   `json:"resourceId"`
+	Currency            string   `json:"currency"`
+}
+
+func (i ociUsageItem) amount() float64 {
+	switch {
+	case i.ComputedAmount != nil:
+		return *i.ComputedAmount
+	case i.ComputedAmountCamel != nil:
+		return *i.ComputedAmountCamel
+	}
+	return 0
+}
+
+func (i ociUsageItem) resourceID() string {
+	if i.ResourceID != "" {
+		return i.ResourceID
+	}
+	return i.ResourceIDCamel
 }
 
 // CollectOCI runs `oci usage-api usage-summary request-summarized-usages`
@@ -114,13 +149,13 @@ func CollectOCI(ctx context.Context, runner CommandRunner, cfg OCIConfig, now ti
 	var mtdCost float64
 	currency := "USD"
 	perResource := make(map[string]float64)
-	for _, item := range out.Data {
-		mtdCost += item.ComputedAmount
+	for _, item := range out.Data.Items {
+		mtdCost += item.amount()
 		if item.Currency != "" {
 			currency = item.Currency
 		}
-		if item.ResourceID != "" {
-			perResource[item.ResourceID] += item.ComputedAmount
+		if id := item.resourceID(); id != "" {
+			perResource[id] += item.amount()
 		}
 	}
 

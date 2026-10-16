@@ -175,3 +175,26 @@ func TestCollectOCI_DayBoundsAreUTCMidnightOnNonUTCHost(t *testing.T) {
 		t.Errorf("--time-usage-ended = %q, want 2026-10-01T00:00:00Z", got)
 	}
 }
+
+// TestCollectOCI_CLIKebabCaseOutput uses the shape the real `oci` CLI
+// prints: a "data" object with "items" and kebab-case keys, including
+// rows without a resource ID.
+func TestCollectOCI_CLIKebabCaseOutput(t *testing.T) {
+	runner := &fakeRunner{Default: Result{ExitCode: 0, Stdout: []byte(`{"data":{"group-by":["resourceId"],"items":[
+		{"computed-amount":2.5,"resource-id":"ocid1.instance.oc1..a","currency":"SGD"},
+		{"computed-amount":1.25,"resource-id":"ocid1.instance.oc1..a","currency":"SGD"},
+		{"computed-amount":0.75,"resource-id":null,"currency":"SGD"},
+		{"computed-amount":null,"resource-id":"ocid1.bootvolume.oc1..b","currency":"SGD"}
+	]}}`)}}
+	snap := CollectOCI(context.Background(), runner, OCIConfig{TenancyID: "ocid1.tenancy.oc1..xyz", HomeDir: t.TempDir()}, fixedNow("2026-09-15T00:00:00Z"))
+
+	if snap.Status != models.CloudBillingOK {
+		t.Fatalf("Status = %q, want ok", snap.Status)
+	}
+	if snap.MTDCost != 4.5 || snap.Currency != "SGD" {
+		t.Errorf("MTDCost/Currency = %v %q, want 4.5 SGD", snap.MTDCost, snap.Currency)
+	}
+	if snap.PerResource["ocid1.instance.oc1..a"] != 3.75 {
+		t.Errorf("PerResource[a] = %v, want 3.75", snap.PerResource["ocid1.instance.oc1..a"])
+	}
+}

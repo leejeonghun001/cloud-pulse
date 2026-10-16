@@ -56,7 +56,7 @@ const STEPS = [
       `CP_OCI_TENANCY_ID=${tenancy}`,
       "EOF",
       "sudo systemctl restart cloud-pulse-agent",
-      'journalctl -u cloud-pulse-agent -n 50 --no-pager | grep "oci billing"',
+      'sudo journalctl -u cloud-pulse-agent -n 50 --no-pager | grep "oci billing"',
     ].join("\n"),
   },
   { key: "hub" },
