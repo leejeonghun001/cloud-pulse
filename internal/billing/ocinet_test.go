@@ -53,3 +53,14 @@ func TestCollectOCINetwork_PermissionDeniedAndUnknownTarget(t *testing.T) {
 		t.Errorf("usage = %+v calls = %d, want not_configured without CLI calls", got, len(none.Calls))
 	}
 }
+
+// TestCollectOCINetwork_EmptyOutputIsMissingMetricsPolicy: the CLI exits
+// 0 with no output when Monitoring hides every metric the instance may
+// not read, which is what a missing "read metrics" policy looks like.
+func TestCollectOCINetwork_EmptyOutputIsMissingMetricsPolicy(t *testing.T) {
+	runner := &fakeRunner{Default: Result{ExitCode: 0, Stdout: []byte("\n")}}
+	got := CollectOCINetwork(context.Background(), runner, OCINetworkConfig{CompartmentID: "c", VNICIDs: []string{"v"}, HomeDir: t.TempDir()}, fixedNow("2026-10-19T00:00:00Z"))
+	if got.Status != models.CloudBillingPermissionDenied || !strings.Contains(got.StatusDetail, "read metrics") {
+		t.Errorf("usage = %+v, want permission_denied naming the read metrics policy", got)
+	}
+}

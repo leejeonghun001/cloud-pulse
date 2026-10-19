@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -112,6 +113,14 @@ func runOCIMetricSum(ctx context.Context, runner CommandRunner, cfg OCINetworkCo
 	if res.NotFound || res.TimedOut || res.ExitCode != 0 {
 		c := classify(res)
 		return 0, &models.CloudNetworkUsage{Status: c.Status, StatusDetail: c.Detail}
+	}
+	// The CLI prints nothing for an empty result, and Monitoring hides
+	// metrics the caller may not read instead of refusing: with no
+	// "read metrics" policy a running instance's VNIC metrics just come
+	// back empty. A running VNIC always emits them, so treat empty
+	// output as that missing permission rather than a parse failure.
+	if len(bytes.TrimSpace(res.Stdout)) == 0 {
+		return 0, &models.CloudNetworkUsage{Status: models.CloudBillingPermissionDenied, StatusDetail: "no VNIC metrics visible; the \"read metrics\" policy is likely missing"}
 	}
 	var parsed ociMetricOutput
 	if err := json.Unmarshal(res.Stdout, &parsed); err != nil {

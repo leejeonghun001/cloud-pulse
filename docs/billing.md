@@ -170,7 +170,9 @@ agent's own interface counters. It counts every byte through the VNIC,
 internal VCN traffic included, so it is a cross-check rather than the
 billed internet egress. Without the `read metrics` policy it reports
 `permission_denied` and the page says which statement to add; costs
-are unaffected.
+are unaffected. Monitoring does not refuse such a query — it hides the
+metrics the instance may not read, so the CLI exits 0 with empty
+output; cloud-pulse reads that as the missing policy.
 
 On the hub, keep `CP_BILLING` on and leave `CP_OCI_TENANCY_ID` unset:
 while the stored OCI snapshot is agent-reported, the hub's own poll
