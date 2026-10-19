@@ -271,7 +271,7 @@
     "status_down": "오프라인",
     "provider_traffic_title": "OCI 측정값 (VNIC)",
     "provider_traffic_no_data": "이번 달 OCI 측정값이 아직 없습니다.",
-    "provider_traffic_permission": "인스턴스가 VNIC 지표를 읽을 권한이 없습니다. 비용 조회와 같은 동적 그룹에 \"Allow dynamic-group … to read metrics in tenancy\" 정책을 추가하세요. 반영까지 몇 분 걸립니다.",
+    "provider_traffic_permission": "OCI가 이 인스턴스의 VNIC 지표를 돌려주지 않았습니다. 비용 조회와 같은 동적 그룹에 \"Allow dynamic-group … to read metrics in tenancy\" 정책이 있는지 확인하세요. 새 정책은 반영까지 몇 분 걸립니다.",
     "provider_traffic_failed": "최근 OCI 조회가 실패했습니다: {detail}",
     "provider_traffic_note": "VNIC를 지난 모든 트래픽이며 VCN 내부 트래픽도 포함됩니다. 과금 대상 인터넷 송신량과는 다릅니다",
     "provider_traffic_updated": "{relative} 갱신",

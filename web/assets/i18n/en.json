@@ -271,7 +271,7 @@
     "status_down": "Down",
     "provider_traffic_title": "Measured by OCI (VNIC)",
     "provider_traffic_no_data": "No OCI measurement for this month yet.",
-    "provider_traffic_permission": "The instance can't read its VNIC metrics. Add the policy \"Allow dynamic-group … to read metrics in tenancy\" (the same dynamic group as for costs); it takes a few minutes to apply.",
+    "provider_traffic_permission": "OCI returned no VNIC metrics for this instance. Check that the policy \"Allow dynamic-group … to read metrics in tenancy\" exists (the same dynamic group as for costs); new policies take a few minutes to apply.",
     "provider_traffic_failed": "The latest OCI query failed: {detail}",
     "provider_traffic_note": "Every byte through the VNIC, internal VCN traffic included — not the billed internet egress",
     "provider_traffic_updated": "updated {relative}",

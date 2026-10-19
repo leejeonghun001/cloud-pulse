@@ -162,7 +162,7 @@ merges it exactly like a hub-collected snapshot, so last-success values
 survive a failed query. A hub with `CP_BILLING=off` ignores it.
 
 Each collection also reads the instance's own month-to-date traffic
-from OCI Monitoring (`oci_vnic` namespace: `VnicFromNetworkBytes` in,
+from OCI Monitoring (`oci_vcn` namespace: `VnicFromNetworkBytes` in,
 `VnicToNetworkBytes` out, summed per day from the start of the UTC
 month), finding its compartment and VNICs through instance metadata.
 The host detail page shows it as "Measured by OCI (VNIC)" beside the
@@ -172,7 +172,10 @@ billed internet egress. Without the `read metrics` policy it reports
 `permission_denied` and the page says which statement to add; costs
 are unaffected. Monitoring does not refuse such a query — it hides the
 metrics the instance may not read, so the CLI exits 0 with empty
-output; cloud-pulse reads that as the missing policy.
+output; cloud-pulse reports that as the likely missing policy. To see
+what the instance can read, list its metrics with
+`oci monitoring metric list --compartment-id <compartment> --compartment-id-in-subtree true --all --auth instance_principal`;
+VNIC traffic lives in the `oci_vcn` namespace.
 
 On the hub, keep `CP_BILLING` on and leave `CP_OCI_TENANCY_ID` unset:
 while the stored OCI snapshot is agent-reported, the hub's own poll

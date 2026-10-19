@@ -32,7 +32,7 @@ func TestCollectOCINetwork_SumsVNICMetricsForTheMonth(t *testing.T) {
 	for _, want := range []string{
 		`VnicFromNetworkBytes[1d]{resourceId = "ocid1.vnic.oc1..v"}.sum()`,
 		"--start-time 2026-10-01T00:00:00Z", "--end-time 2026-10-19T06:00:00Z",
-		"--namespace oci_vnic", "--auth instance_principal",
+		"--namespace oci_vcn", "--auth instance_principal",
 	} {
 		if !strings.Contains(args, want) {
 			t.Errorf("args %q missing %q", args, want)

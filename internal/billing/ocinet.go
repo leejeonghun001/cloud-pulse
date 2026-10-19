@@ -44,7 +44,7 @@ type ociMetricPoint struct {
 }
 
 // CollectOCINetwork sums an instance's VNIC traffic for the current UTC
-// month from OCI Monitoring (namespace oci_vnic): VnicFromNetworkBytes
+// month from OCI Monitoring (namespace oci_vcn): VnicFromNetworkBytes
 // is inbound, VnicToNetworkBytes outbound. These are OCI's own counters
 // for every byte through the VNIC, internal VCN traffic included — not
 // the billed internet egress. now is injected for tests.
@@ -75,7 +75,7 @@ func CollectOCINetwork(ctx context.Context, runner CommandRunner, cfg OCINetwork
 			args := []string{
 				"monitoring", "metric-data", "summarize-metrics-data",
 				"--compartment-id", cfg.CompartmentID,
-				"--namespace", "oci_vnic",
+				"--namespace", "oci_vcn",
 				"--query-text", fmt.Sprintf(`%s[1d]{resourceId = "%s"}.sum()`, metric, vnic),
 				"--start-time", monthStart.Format("2006-01-02T15:04:05Z"),
 				"--end-time", end.Format("2006-01-02T15:04:05Z"),
@@ -114,13 +114,12 @@ func runOCIMetricSum(ctx context.Context, runner CommandRunner, cfg OCINetworkCo
 		c := classify(res)
 		return 0, &models.CloudNetworkUsage{Status: c.Status, StatusDetail: c.Detail}
 	}
-	// The CLI prints nothing for an empty result, and Monitoring hides
-	// metrics the caller may not read instead of refusing: with no
-	// "read metrics" policy a running instance's VNIC metrics just come
-	// back empty. A running VNIC always emits them, so treat empty
-	// output as that missing permission rather than a parse failure.
+	// The CLI prints nothing for an empty result. Monitoring hides
+	// metrics the caller may not read rather than refusing, so a missing
+	// "read metrics" policy looks exactly like this — as does a VNIC with
+	// no data yet. Report it as such instead of a parse failure.
 	if len(bytes.TrimSpace(res.Stdout)) == 0 {
-		return 0, &models.CloudNetworkUsage{Status: models.CloudBillingPermissionDenied, StatusDetail: "no VNIC metrics visible; the \"read metrics\" policy is likely missing"}
+		return 0, &models.CloudNetworkUsage{Status: models.CloudBillingPermissionDenied, StatusDetail: "no VNIC metrics returned; check the \"read metrics\" policy"}
 	}
 	var parsed ociMetricOutput
 	if err := json.Unmarshal(res.Stdout, &parsed); err != nil {
