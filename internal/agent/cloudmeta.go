@@ -226,3 +226,52 @@ func readSmallBody(resp *http.Response) (string, error) {
 func decodeJSONLimited(r io.Reader, v any) error {
 	return json.NewDecoder(io.LimitReader(r, maxCloudMetaBodyBytes)).Decode(v)
 }
+
+// OCINetworkTarget is what the agent needs to query its own VNIC
+// metrics: the instance's compartment and VNIC OCIDs.
+type OCINetworkTarget struct {
+	CompartmentID string
+	VNICIDs       []string
+}
+
+// ociNetworkTarget reads the instance's compartment (GET
+// /opc/v2/instance/) and VNICs (GET /opc/v2/vnics/) from OCI instance
+// metadata v2, returning a zero target on any failure.
+func ociNetworkTarget(ctx context.Context, client *http.Client, baseURL string) OCINetworkTarget {
+	var inst struct {
+		CompartmentID string `json:"compartmentId"`
+	}
+	if !ociMetadataGet(ctx, client, baseURL+"/opc/v2/instance/", &inst) || inst.CompartmentID == "" {
+		return OCINetworkTarget{}
+	}
+	var vnics []struct {
+		VNICID string `json:"vnicId"`
+	}
+	if !ociMetadataGet(ctx, client, baseURL+"/opc/v2/vnics/", &vnics) {
+		return OCINetworkTarget{}
+	}
+	target := OCINetworkTarget{CompartmentID: inst.CompartmentID}
+	for _, v := range vnics {
+		if v.VNICID != "" {
+			target.VNICIDs = append(target.VNICIDs, v.VNICID)
+		}
+	}
+	return target
+}
+
+// ociMetadataGet GETs one OCI metadata v2 URL into v, reporting success.
+func ociMetadataGet(ctx context.Context, client *http.Client, url string, v any) bool {
+	callCtx, cancel := context.WithTimeout(ctx, cloudMetaTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(callCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Authorization", "Bearer Oracle")
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode == http.StatusOK && decodeJSONLimited(resp.Body, v) == nil
+}

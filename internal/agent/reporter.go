@@ -175,6 +175,7 @@ func (r *Reporter) Flush(ctx context.Context, host models.HostInfo) error {
 	inv := r.inventory.next(ctx, r.logger)
 	updateStatus := pendingUpdateStatus(ctx, r.logger)
 	cloudCost := r.cloudCost.Pending()
+	cloudNet := r.cloudCost.PendingNetwork()
 	first := true
 	for {
 		batch := r.peekBatch()
@@ -185,12 +186,14 @@ func (r *Reporter) Flush(ctx context.Context, host models.HostInfo) error {
 		var reportInv *models.Inventory
 		var reportUpdateStatus *models.AgentUpdateStatus
 		var reportCloudCost *models.CloudCostSnapshot
+		var reportCloudNet *models.CloudNetworkUsage
 		if first {
 			reportInv = inv
 			reportUpdateStatus = updateStatus
 			reportCloudCost = cloudCost
+			reportCloudNet = cloudNet
 		}
-		status, serverTimeMs, latestVersion, updateRequest, t0, t1, err := r.postBatch(ctx, host, batch, reportInv, reportUpdateStatus, reportCloudCost)
+		status, serverTimeMs, latestVersion, updateRequest, t0, t1, err := r.postBatch(ctx, host, batch, reportInv, reportUpdateStatus, reportCloudCost, reportCloudNet)
 		if err != nil {
 			return fmt.Errorf("agent: flush: %w", err)
 		}
@@ -206,6 +209,9 @@ func (r *Reporter) Flush(ctx context.Context, host models.HostInfo) error {
 			}
 			if first && reportCloudCost != nil {
 				r.cloudCost.MarkSent(reportCloudCost)
+			}
+			if first && reportCloudNet != nil {
+				r.cloudCost.MarkNetworkSent(reportCloudNet)
 			}
 			if first && updateRequest != nil {
 				handleUpdateRequest(ctx, r.logger, updateRequest)
@@ -261,8 +267,8 @@ func (r *Reporter) dropBatch(n int) {
 // timestamps bracketing the request, for clock offset estimation. A
 // non-nil error indicates the request could not be completed (network
 // error, non-HTTP failure); it does not indicate an HTTP error status.
-func (r *Reporter) postBatch(ctx context.Context, host models.HostInfo, batch []models.Sample, inv *models.Inventory, updateStatus *models.AgentUpdateStatus, cloudCost *models.CloudCostSnapshot) (status int, serverTimeMs int64, latestVersion string, updateRequest *models.UpdateRequest, t0, t1 time.Time, err error) {
-	report := models.AgentReport{Host: host, Samples: batch, Inventory: inv, UpdateStatus: updateStatus, CloudCost: cloudCost}
+func (r *Reporter) postBatch(ctx context.Context, host models.HostInfo, batch []models.Sample, inv *models.Inventory, updateStatus *models.AgentUpdateStatus, cloudCost *models.CloudCostSnapshot, cloudNet *models.CloudNetworkUsage) (status int, serverTimeMs int64, latestVersion string, updateRequest *models.UpdateRequest, t0, t1 time.Time, err error) {
+	report := models.AgentReport{Host: host, Samples: batch, Inventory: inv, UpdateStatus: updateStatus, CloudCost: cloudCost, CloudNetwork: cloudNet}
 	body, err := json.Marshal(report)
 	if err != nil {
 		return 0, 0, "", nil, time.Time{}, time.Time{}, fmt.Errorf("agent: marshal report: %w", err)

@@ -171,3 +171,45 @@ func TestValidateRuleRequest_CostMetrics(t *testing.T) {
 		}
 	}
 }
+
+func TestIngest_AgentCloudNetworkStoredAndKeptOnFailure(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	opts := testOptions()
+	opts.Now = fixedNow(now)
+	s := newTestServer(t, opts, store)
+
+	post := func(u models.CloudNetworkUsage) {
+		body, err := json.Marshal(models.AgentReport{
+			Host:         sampleHostInfo("oci-box"),
+			Samples:      []models.Sample{{Timestamp: now.Unix(), CPUPercent: 1}},
+			CloudNetwork: &u,
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if rec := doRequest(t, s.Handler(), http.MethodPost, "/api/v1/agent/report", "203.0.113.1:1234", opts.AgentToken, body); rec.Code != http.StatusOK {
+			t.Fatalf("status = %d", rec.Code)
+		}
+	}
+
+	post(models.CloudNetworkUsage{Provider: models.CloudBillingOCI, Month: "2026-10", InBytes: 24e9, OutBytes: 5e9, Status: models.CloudBillingOK})
+	post(models.CloudNetworkUsage{Provider: models.CloudBillingOCI, Status: models.CloudBillingPermissionDenied, StatusDetail: "CLI reported a permission error"})
+
+	got := store.cloudNetwork["oci-box"]
+	if got.Status != models.CloudBillingPermissionDenied || got.Month != "2026-10" || got.InBytes != 24e9 || got.LastSuccessAt != now.Unix() {
+		t.Fatalf("stored = %+v, want the failure status over the last good figures", got)
+	}
+
+	rec := doRequest(t, s.Handler(), http.MethodGet, "/api/v1/hosts/oci-box", "127.0.0.1:1", opts.UIToken, nil)
+	summary := decodeJSON[models.HostSummary](t, rec.Body)
+	if summary.CloudNetwork == nil || summary.CloudNetwork.OutBytes != 5e9 {
+		t.Errorf("host summary cloud_network = %+v, want the stored usage", summary.CloudNetwork)
+	}
+
+	post(models.CloudNetworkUsage{Provider: models.CloudBillingAWS, Month: "2026-10", Status: models.CloudBillingOK})
+	if store.cloudNetwork["oci-box"].Provider != models.CloudBillingOCI {
+		t.Error("a non-OCI usage must be dropped")
+	}
+}

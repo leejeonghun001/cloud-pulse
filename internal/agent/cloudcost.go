@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -33,6 +34,10 @@ type OCICostCollectorOptions struct {
 	Runner billing.CommandRunner
 	// Now returns the current time; nil uses time.Now.
 	Now func() time.Time
+	// Network, when non-nil, overrides how the instance's compartment
+	// and VNICs are discovered (OCI instance metadata by default).
+	// Tests inject a fixed target.
+	Network func(ctx context.Context) OCINetworkTarget
 }
 
 // OCICostCollector queries the OCI Usage API from the agent's own host
@@ -43,8 +48,10 @@ type OCICostCollectorOptions struct {
 type OCICostCollector struct {
 	opts OCICostCollectorOptions
 
-	mu      sync.Mutex
-	pending *models.CloudCostSnapshot
+	mu         sync.Mutex
+	pending    *models.CloudCostSnapshot
+	pendingNet *models.CloudNetworkUsage
+	target     OCINetworkTarget
 }
 
 // NewOCICostCollector returns a collector for opts, filling defaults.
@@ -57,6 +64,11 @@ func NewOCICostCollector(opts OCICostCollectorOptions) *OCICostCollector {
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
+	}
+	if opts.Network == nil {
+		opts.Network = func(ctx context.Context) OCINetworkTarget {
+			return ociNetworkTarget(ctx, http.DefaultClient, ociBaseURL(currentCloudMetaOverrides()))
+		}
 	}
 	return &OCICostCollector{opts: opts}
 }
@@ -101,6 +113,58 @@ func (c *OCICostCollector) CollectOnce(ctx context.Context) {
 	c.mu.Lock()
 	c.pending = &snap
 	c.mu.Unlock()
+
+	c.collectNetwork(ctx, home)
+}
+
+// collectNetwork queries the instance's VNIC traffic for the month and
+// stores it as the pending network usage. The compartment/VNIC lookup
+// is cached after its first success.
+func (c *OCICostCollector) collectNetwork(ctx context.Context, home string) {
+	if len(c.target.VNICIDs) == 0 {
+		c.target = c.opts.Network(ctx)
+	}
+	usage := billing.CollectOCINetwork(ctx, c.opts.Runner, billing.OCINetworkConfig{
+		CompartmentID: c.target.CompartmentID,
+		VNICIDs:       c.target.VNICIDs,
+		Env:           billing.BuildOCIEnv(home, ociCLIPath, "", ""),
+		HomeDir:       home,
+		Auth:          c.opts.Auth,
+		CLI:           c.opts.CLI,
+	}, c.opts.Now())
+	if ctx.Err() != nil {
+		return
+	}
+	if usage.Status == models.CloudBillingOK {
+		c.opts.Logger.InfoContext(ctx, "oci network: collected", "month", usage.Month, "in_bytes", usage.InBytes, "out_bytes", usage.OutBytes)
+	} else {
+		c.opts.Logger.WarnContext(ctx, "oci network: collection failed", "status", usage.Status, "detail", usage.StatusDetail)
+	}
+	c.mu.Lock()
+	c.pendingNet = &usage
+	c.mu.Unlock()
+}
+
+// PendingNetwork returns the network usage waiting to be sent, or nil.
+func (c *OCICostCollector) PendingNetwork() *models.CloudNetworkUsage {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pendingNet
+}
+
+// MarkNetworkSent clears the pending network usage if it is still u.
+func (c *OCICostCollector) MarkNetworkSent(u *models.CloudNetworkUsage) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pendingNet == u {
+		c.pendingNet = nil
+	}
 }
 
 // Pending returns the snapshot waiting to be sent, or nil.

@@ -71,6 +71,10 @@ type AgentReport struct {
 	// agents with agent-side billing off; a hub older than this field
 	// ignores it.
 	CloudCost *CloudCostSnapshot `json:"cloud_cost,omitempty"`
+	// CloudNetwork carries the host's provider-measured monthly traffic
+	// (OCI VNIC metrics), sent like CloudCost; a hub older than this
+	// field ignores it.
+	CloudNetwork *CloudNetworkUsage `json:"cloud_network,omitempty"`
 }
 
 // IngestResponse is returned by the hub after processing an AgentReport.

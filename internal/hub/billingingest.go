@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"math"
+	"regexp"
 	"time"
 	"unicode/utf8"
 
@@ -57,10 +58,7 @@ func sanitizeAgentCloudCost(snap models.CloudCostSnapshot) (models.CloudCostSnap
 	if snap.Provider != models.CloudBillingOCI {
 		return models.CloudCostSnapshot{}, false
 	}
-	switch snap.Status {
-	case models.CloudBillingOK, models.CloudBillingNotInstalled, models.CloudBillingNotConfigured,
-		models.CloudBillingAuthFailed, models.CloudBillingPermissionDenied, models.CloudBillingError:
-	default:
+	if !validCloudStatus(snap.Status) {
 		return models.CloudCostSnapshot{}, false
 	}
 	switch snap.ForecastMethod {
@@ -79,16 +77,7 @@ func sanitizeAgentCloudCost(snap models.CloudCostSnapshot) (models.CloudCostSnap
 			return models.CloudCostSnapshot{}, false
 		}
 	}
-	detail := snap.StatusDetail
-	if !utf8.ValidString(detail) {
-		detail = ""
-	}
-	if len(detail) > maxAgentCostDetail {
-		detail = detail[:maxAgentCostDetail]
-		for !utf8.ValidString(detail) {
-			detail = detail[:len(detail)-1]
-		}
-	}
+	detail := truncateUTF8(snap.StatusDetail, maxAgentCostDetail)
 	return models.CloudCostSnapshot{
 		Provider:       snap.Provider,
 		Status:         snap.Status,
@@ -107,4 +96,75 @@ func sanitizeAgentCloudCost(snap models.CloudCostSnapshot) (models.CloudCostSnap
 // month-to-date total negative.
 func validAmount(v float64) bool {
 	return !math.IsNaN(v) && !math.IsInf(v, 0) && math.Abs(v) <= maxAgentCostAmount
+}
+
+// maxAgentNetworkBytes bounds a reported monthly byte count (~1 EiB).
+const maxAgentNetworkBytes = 1 << 60
+
+var monthPattern = regexp.MustCompile(`^\d{4}-(0[1-9]|1[0-2])$`)
+
+// ingestAgentCloudNetwork stores a host's provider-measured monthly
+// traffic (OCI VNIC metrics) reported by its own agent. A failed attempt
+// keeps the last successful month and byte counts, like cost snapshots.
+// Supplementary to the report: invalid input is dropped, storage
+// errors are logged.
+func (s *Server) ingestAgentCloudNetwork(ctx context.Context, hostID string, u models.CloudNetworkUsage, now time.Time) {
+	if !validAgentCloudNetwork(u) {
+		s.logger.Warn("ingest: dropping invalid agent cloud network usage", "host_id", hostID)
+		return
+	}
+	clean := models.CloudNetworkUsage{
+		Provider:      u.Provider,
+		Month:         u.Month,
+		InBytes:       u.InBytes,
+		OutBytes:      u.OutBytes,
+		Status:        u.Status,
+		StatusDetail:  truncateUTF8(u.StatusDetail, maxAgentCostDetail),
+		LastAttemptAt: now.Unix(),
+	}
+	if clean.Status == models.CloudBillingOK {
+		clean.LastSuccessAt = now.Unix()
+	} else if prev, err := s.store.GetHostCloudNetwork(ctx, hostID); err == nil {
+		clean.Month, clean.InBytes, clean.OutBytes, clean.LastSuccessAt = prev.Month, prev.InBytes, prev.OutBytes, prev.LastSuccessAt
+	} else {
+		clean.Month, clean.InBytes, clean.OutBytes = "", 0, 0
+	}
+	if err := s.store.SetHostCloudNetwork(ctx, hostID, clean); err != nil {
+		s.logger.Error("ingest: persist agent cloud network failed", "host_id", hostID, "error", err)
+	}
+}
+
+func validAgentCloudNetwork(u models.CloudNetworkUsage) bool {
+	if u.Provider != models.CloudBillingOCI || !validCloudStatus(u.Status) {
+		return false
+	}
+	if u.Status == models.CloudBillingOK && !monthPattern.MatchString(u.Month) {
+		return false
+	}
+	return u.InBytes <= maxAgentNetworkBytes && u.OutBytes <= maxAgentNetworkBytes
+}
+
+func validCloudStatus(status models.CloudBillingStatus) bool {
+	switch status {
+	case models.CloudBillingOK, models.CloudBillingNotInstalled, models.CloudBillingNotConfigured,
+		models.CloudBillingAuthFailed, models.CloudBillingPermissionDenied, models.CloudBillingError:
+		return true
+	}
+	return false
+}
+
+// truncateUTF8 drops invalid UTF-8 entirely and cuts s to at most max
+// bytes on a rune boundary.
+func truncateUTF8(s string, max int) string {
+	if !utf8.ValidString(s) {
+		return ""
+	}
+	if len(s) <= max {
+		return s
+	}
+	s = s[:max]
+	for !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return s
 }

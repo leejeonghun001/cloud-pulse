@@ -193,4 +193,7 @@ type HostSummary struct {
 	// cost summary (SPEC-v0.6 §1/§3), omitted when billing is disabled
 	// or no cost data is available yet for this host.
 	Cost *HostCost `json:"cost,omitempty"`
+	// CloudNetwork is the host's provider-measured monthly traffic,
+	// omitted when its agent has never reported one.
+	CloudNetwork *CloudNetworkUsage `json:"cloud_network,omitempty"`
 }

@@ -113,7 +113,11 @@ a step-by-step guide that fills in the commands below from your OCIDs.
 
    ```text
    Allow dynamic-group CostReader to read usage-reports in tenancy
+   Allow dynamic-group CostReader to read metrics in tenancy
    ```
+
+   The second statement is only needed for the instance's monthly VNIC
+   traffic (below); costs work without it.
 
    For a dynamic group in a non-Default identity domain, write
    `'<domain>'/'CostReader'`.
@@ -156,6 +160,17 @@ agent report; the hub validates it (OCI only, known status, finite
 amounts, bounded size), records the reporting host as `source_host`, and
 merges it exactly like a hub-collected snapshot, so last-success values
 survive a failed query. A hub with `CP_BILLING=off` ignores it.
+
+Each collection also reads the instance's own month-to-date traffic
+from OCI Monitoring (`oci_vnic` namespace: `VnicFromNetworkBytes` in,
+`VnicToNetworkBytes` out, summed per day from the start of the UTC
+month), finding its compartment and VNICs through instance metadata.
+The host detail page shows it as "Measured by OCI (VNIC)" beside the
+agent's own interface counters. It counts every byte through the VNIC,
+internal VCN traffic included, so it is a cross-check rather than the
+billed internet egress. Without the `read metrics` policy it reports
+`permission_denied` and the page says which statement to add; costs
+are unaffected.
 
 On the hub, keep `CP_BILLING` on and leave `CP_OCI_TENANCY_ID` unset:
 while the stored OCI snapshot is agent-reported, the hub's own poll

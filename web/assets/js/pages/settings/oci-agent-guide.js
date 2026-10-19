@@ -26,7 +26,10 @@ const STEPS = [
   },
   {
     key: "policy",
-    code: ({ group }) => `Allow dynamic-group ${group} to read usage-reports in tenancy`,
+    code: ({ group }) => [
+      `Allow dynamic-group ${group} to read usage-reports in tenancy`,
+      `Allow dynamic-group ${group} to read metrics in tenancy`,
+    ].join("\n"),
   },
   {
     key: "cli",

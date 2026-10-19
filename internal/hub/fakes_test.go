@@ -27,14 +27,15 @@ type fakeStore struct {
 	settings map[string]string            // key: setting key
 	sessions map[string]models.Session    // key: IDHash
 
-	alertRules  map[int64]models.AlertRule
-	nextRuleID  int64
-	channels    map[int64]models.NotifyChannel
-	nextChanID  int64
-	alertStates map[string]models.AlertState // key: ruleID+"|"+hostID
-	alertEvents map[int64]models.AlertEvent
-	nextEventID int64
-	inventories map[string]models.Inventory // key: hostID
+	alertRules   map[int64]models.AlertRule
+	nextRuleID   int64
+	channels     map[int64]models.NotifyChannel
+	nextChanID   int64
+	alertStates  map[string]models.AlertState // key: ruleID+"|"+hostID
+	alertEvents  map[int64]models.AlertEvent
+	nextEventID  int64
+	inventories  map[string]models.Inventory         // key: hostID
+	cloudNetwork map[string]models.CloudNetworkUsage // key: hostID
 
 	cloudCostSnapshots map[models.CloudBillingProvider]models.CloudCostSnapshot
 
@@ -79,6 +80,7 @@ func newFakeStore() *fakeStore {
 		alertStates:        make(map[string]models.AlertState),
 		alertEvents:        make(map[int64]models.AlertEvent),
 		inventories:        make(map[string]models.Inventory),
+		cloudNetwork:       make(map[string]models.CloudNetworkUsage),
 		cloudCostSnapshots: make(map[models.CloudBillingProvider]models.CloudCostSnapshot),
 		updateJobs:         make(map[int64]models.UpdateJob),
 		pricingPlans:       make(map[int64]models.PricingPlan),
@@ -723,6 +725,33 @@ func (f *fakeStore) SetHostInventory(_ context.Context, hostID string, inv model
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.inventories[hostID] = inv
+	return nil
+}
+
+func (f *fakeStore) GetHostCloudNetwork(_ context.Context, hostID string) (models.CloudNetworkUsage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	u, ok := f.cloudNetwork[hostID]
+	if !ok {
+		return models.CloudNetworkUsage{}, models.ErrNotFound
+	}
+	return u, nil
+}
+
+func (f *fakeStore) ListHostCloudNetwork(_ context.Context) (map[string]models.CloudNetworkUsage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]models.CloudNetworkUsage, len(f.cloudNetwork))
+	for k, v := range f.cloudNetwork {
+		out[k] = v
+	}
+	return out, nil
+}
+
+func (f *fakeStore) SetHostCloudNetwork(_ context.Context, hostID string, u models.CloudNetworkUsage) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cloudNetwork[hostID] = u
 	return nil
 }
 

@@ -169,6 +169,9 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	if report.CloudCost != nil {
 		s.ingestAgentCloudCost(ctx, report.Host.ID, *report.CloudCost, now)
 	}
+	if report.CloudNetwork != nil {
+		s.ingestAgentCloudNetwork(ctx, report.Host.ID, *report.CloudNetwork, now)
+	}
 
 	resp := models.IngestResponse{
 		Accepted:      inserted,
@@ -233,6 +236,11 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	costByProvider, networkEstimator := s.hostCostInputs(ctx)
+	cloudNetwork, err := s.store.ListHostCloudNetwork(ctx)
+	if err != nil {
+		// Supplementary like inventory: list hosts without it.
+		s.logger.Error("list host cloud network failed", "error", err)
+	}
 
 	summaries := make([]models.HostSummary, 0, len(records))
 	for _, rec := range records {
@@ -243,6 +251,9 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 		}
 		summary := s.buildHostSummary(rec, limitsByHost[rec.Info.ID], tx, rx, now, s.opts.OfflineAfter, inv)
 		s.attachHostCost(&summary, costByProvider, networkEstimator)
+		if u, ok := cloudNetwork[rec.Info.ID]; ok {
+			summary.CloudNetwork = &u
+		}
 		summaries = append(summaries, summary)
 	}
 
@@ -298,6 +309,11 @@ func (s *Server) handleGetHost(w http.ResponseWriter, r *http.Request) {
 	summary := s.buildHostSummary(rec, limits, tx, rx, now, s.opts.OfflineAfter, inv)
 	costByProvider, networkEstimator := s.hostCostInputs(ctx)
 	s.attachHostCost(&summary, costByProvider, networkEstimator)
+	if u, err := s.store.GetHostCloudNetwork(ctx, id); err == nil {
+		summary.CloudNetwork = &u
+	} else if !isNotFound(err) {
+		s.logger.Error("get host cloud network failed", "host_id", id, "error", err)
+	}
 	writeJSON(w, http.StatusOK, summary)
 }
 

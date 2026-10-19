@@ -231,6 +231,20 @@
   .cp-detail-agent-copy { @apply shrink-0 min-h-10 min-w-10; }
   .cp-detail-agent-panel .cp-agent-update-legacy-note { @apply w-full mt-0; }
 
+  .cp-provider-traffic { @apply flex flex-col gap-1.5 border-t border-[rgb(var(--border))] pt-3 mt-1 min-w-0; }
+  .cp-provider-traffic-title {
+    @apply m-0 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))];
+  }
+  .cp-provider-traffic-values { @apply m-0 grid grid-cols-2 gap-3 max-w-md; }
+  .cp-provider-traffic-values dd { @apply m-0; }
+  .cp-provider-traffic-value {
+    @apply text-[length:var(--text-cp-lg)] leading-[length:var(--leading-cp-tight)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))] tabular-nums;
+  }
+  .cp-provider-traffic-hint {
+    @apply m-0 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--status-warning-fg))];
+    overflow-wrap: anywhere;
+  }
+
   .cp-detail-activity-card { @apply gap-4; }
   .cp-detail-activity-card .cp-activity-timeline { @apply gap-4; }
 

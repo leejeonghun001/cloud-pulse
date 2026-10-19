@@ -119,7 +119,7 @@ export function mountHostDetailPage(container, hostID, { announce, copyToClipboa
       breadcrumbCurrent.textContent = summary.host.hostname || summary.host.id;
       state.summaryLoaded = true;
       if (focusedControl) Array.from(headerHost.querySelectorAll("[id]")).find((node) => node.id === focusedControl)?.focus({ preventScroll: true });
-      renderHostEgressCard(egressHost, hostID, summary.egress);
+      renderHostEgressCard(egressHost, hostID, summary.egress, summary.cloud_network);
       renderAgentUpdatePanel(agentUpdateHost, summary.update, announce, copyToClipboard);
       renderHostCostCard(costHost, summary.cost, summary.cost ? await loadDisplayCurrency(controller.signal) : null);
       renderDisksTable(disksHost, summary.latest?.disks);
@@ -296,7 +296,7 @@ function buildLayoutToggle(current, onChange) {
   return group;
 }
 
-export function renderHostEgressCard(host, hostID, egress) {
+export function renderHostEgressCard(host, hostID, egress, cloudNetwork) {
   clearChildren(host);
   const card = el("section", { class: "cp-card cp-detail-traffic-card", attrs: { "aria-labelledby": "cp-detail-traffic-heading" } });
   const headRow = el("div", { class: "cp-detail-section-head" });
@@ -311,7 +311,39 @@ export function renderHostEgressCard(host, hostID, egress) {
   const grid = el("div", { class: "cp-detail-traffic-grid" });
   grid.append(detailTrafficDirection(egress, "out"), detailTrafficDirection(egress, "in"));
   card.append(headRow, grid);
+  if (cloudNetwork) card.append(providerTrafficBlock(cloudNetwork, egress?.month));
   host.append(card);
+}
+
+/**
+ * providerTrafficBlock shows the month's traffic as the cloud provider
+ * measures it (OCI VNIC metrics, reported by the host's agent) beside
+ * the agent's own interface counters above, so a mismatch is visible.
+ * A failed query keeps the last good figures and says how to fix it.
+ */
+function providerTrafficBlock(usage, agentMonth) {
+  const block = el("div", { class: "cp-provider-traffic" });
+  block.append(el("h3", { class: "cp-provider-traffic-title", text: t("host.provider_traffic_title") }));
+  const current = usage.last_success_at > 0 && (!agentMonth || usage.month === agentMonth);
+  if (current) {
+    const list = el("dl", { class: "cp-provider-traffic-values" });
+    for (const [label, bytes] of [[t("host.egress_outbound_label"), usage.out_bytes], [t("host.egress_inbound_label"), usage.in_bytes]]) {
+      const item = el("div");
+      item.append(el("dt", { class: "cp-muted-small", text: label }), el("dd", { class: "cp-provider-traffic-value", text: formatBytes(bytes) }));
+      list.append(item);
+    }
+    block.append(list);
+  } else {
+    block.append(el("p", { class: "cp-muted-small", text: t("host.provider_traffic_no_data") }));
+  }
+  if (usage.status !== "ok") {
+    const key = usage.status === "permission_denied" ? "host.provider_traffic_permission" : "host.provider_traffic_failed";
+    block.append(el("p", { class: "cp-provider-traffic-hint", text: t(key, { detail: usage.status_detail || usage.status }) }));
+  }
+  const notes = [t("host.provider_traffic_note")];
+  if (usage.last_success_at > 0) notes.push(t("host.provider_traffic_updated", { relative: formatRelativeTimeFromUnixSeconds(usage.last_success_at) }));
+  block.append(el("p", { class: "cp-muted-small", text: notes.join(" · ") }));
+  return block;
 }
 
 function renderAgentUpdatePanel(host, update, announce, copyToClipboard) {

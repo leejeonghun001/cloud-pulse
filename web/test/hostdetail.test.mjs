@@ -495,3 +495,22 @@ test("inventory short health/state/protocol columns remain intact while long cel
   assert.match(css, /\.cp-detail-services \.cp-detail-container-table\s*\{\s*min-width: 56rem;/);
   assert.match(css, /\.cp-detail-services \.cp-table td\s*\{[^}]*overflow-wrap: anywhere/);
 });
+
+test("traffic card shows OCI-measured VNIC traffic and a fix for missing metric permission", () => {
+  setLang("en");
+  const egress = { month: "2026-10", tx_bytes: 0, limit_bytes: 0, level: "ok", rx_bytes: 0, rx_limit_bytes: 0, rx_level: "ok" };
+  const root = element("div");
+  renderer().api.renderHostEgressCard(root, "h", egress, { provider: "oci", month: "2026-10", in_bytes: 2048, out_bytes: 1024, status: "ok", last_success_at: Math.floor(Date.now() / 1000) - 60 });
+  assert.match(text(root), /Measured by OCI \(VNIC\)/);
+  assert.match(text(root), /1\.0 KiB/);
+  assert.match(text(root), /2\.0 KiB/);
+
+  const denied = element("div");
+  renderer().api.renderHostEgressCard(denied, "h", egress, { provider: "oci", month: "", in_bytes: 0, out_bytes: 0, status: "permission_denied", last_success_at: 0 });
+  assert.match(text(denied), /No OCI measurement for this month yet/);
+  assert.match(text(denied), /read metrics in tenancy/);
+
+  const none = element("div");
+  renderer().api.renderHostEgressCard(none, "h", egress);
+  assert.doesNotMatch(text(none), /Measured by OCI/);
+});

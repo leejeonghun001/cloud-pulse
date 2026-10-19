@@ -203,6 +203,14 @@ type Store interface {
 	// SetHostInventory replaces the stored inventory snapshot for
 	// hostID with inv (one row per host; upsert on host_id).
 	SetHostInventory(ctx context.Context, hostID string, inv models.Inventory) error
+	// GetHostCloudNetwork returns a host's provider-measured monthly
+	// traffic, or models.ErrNotFound.
+	GetHostCloudNetwork(ctx context.Context, hostID string) (models.CloudNetworkUsage, error)
+	// ListHostCloudNetwork returns every host's provider-measured
+	// monthly traffic keyed by host ID.
+	ListHostCloudNetwork(ctx context.Context) (map[string]models.CloudNetworkUsage, error)
+	// SetHostCloudNetwork upserts a host's provider-measured traffic.
+	SetHostCloudNetwork(ctx context.Context, hostID string, u models.CloudNetworkUsage) error
 
 	// --- Cloud billing (SPEC-v0.6 §1) ---
 

@@ -169,3 +169,22 @@ type BillingView struct {
 	// setting (see DisplayCurrencySettings).
 	DisplayCurrency DisplayCurrencySettings `json:"display_currency"`
 }
+
+// CloudNetworkUsage is a host's month-to-date network traffic as its
+// cloud provider measures it (OCI: VNIC metrics from OCI Monitoring),
+// collected by the host's own agent. It counts every byte through the
+// VNIC, internal traffic included, so it is a cross-check of the
+// agent's interface counters, not the provider's billed egress.
+type CloudNetworkUsage struct {
+	Provider CloudBillingProvider `json:"provider"`
+	// Month is the UTC calendar month ("2006-01") the bytes cover.
+	Month        string             `json:"month"`
+	InBytes      uint64             `json:"in_bytes"`
+	OutBytes     uint64             `json:"out_bytes"`
+	Status       CloudBillingStatus `json:"status"`
+	StatusDetail string             `json:"status_detail,omitempty"`
+	// LastSuccessAt / LastAttemptAt are hub-assigned unix seconds. A
+	// failed attempt keeps the last successful Month/InBytes/OutBytes.
+	LastSuccessAt int64 `json:"last_success_at"`
+	LastAttemptAt int64 `json:"last_attempt_at"`
+}
