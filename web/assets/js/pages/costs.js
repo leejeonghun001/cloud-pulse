@@ -140,8 +140,17 @@ function providerCardsSection({ snapshots, intervalSeconds, signal, announce, on
   refreshBtn.addEventListener("click", async () => {
     refreshBtn.disabled = true;
     try {
-      await refreshBilling(signal);
-      announce?.(t("costs.billing_refreshed"));
+      const result = await refreshBilling(signal);
+      const agents = result?.agent_refresh_requested || [];
+      if (agents.length > 0) {
+        // Agent-collected providers answer on the agent's next report;
+        // the page's own 15s refresh picks the new figures up.
+        const message = t("costs.agent_refresh_requested", { hosts: agents.join(", ") });
+        showToast({ message });
+        announce?.(message);
+      } else {
+        announce?.(t("costs.billing_refreshed"));
+      }
       await onRefreshed();
       document.getElementById("cp-costs-refresh")?.focus();
     } catch (err) {

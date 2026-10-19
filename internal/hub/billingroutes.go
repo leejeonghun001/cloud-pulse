@@ -3,6 +3,7 @@ package hub
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 
 	"github.com/leejeonghun001/cloud-pulse/internal/billing"
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
@@ -59,32 +60,64 @@ func (s *Server) handleGetBilling(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, view)
 }
 
-// handlePostBillingRefresh serves POST /api/v1/billing/refresh (admin):
-// runs the billing collector immediately, subject to a 10-minute
-// throttle (SPEC-v0.6 §1).
+// handlePostBillingRefresh serves POST /api/v1/billing/refresh (admin).
+// Providers collected by an agent (OCI via instance principal) are
+// refreshed by asking that agent to query again on its next report
+// (throttled per host by agentRefreshMinInterval); the hub's own CLI
+// collection runs when its 10-minute throttle allows (SPEC-v0.6 §1:
+// AWS Cost Explorer bills per call). 429 only when neither could run.
 func (s *Server) handlePostBillingRefresh(w http.ResponseWriter, r *http.Request) {
 	if s.opts.Billing == nil {
 		writeJSON(w, http.StatusNotImplemented, models.APIError{Error: "billing is not enabled on this hub", Code: "billing_not_enabled"})
 		return
 	}
-
-	allowed, retryAfter := s.opts.Billing.refreshAllowed()
-	if !allowed {
-		rateLimited(w, int(retryAfter.Seconds()))
-		return
-	}
-
 	ctx := r.Context()
-	interval := s.resolveBillingInterval(ctx)
-	snapshots, err := s.opts.Billing.run(ctx, interval)
-	s.opts.Billing.refreshGate().Record()
+	now := s.opts.now()
+
+	stored, err := s.store.ListCloudCostSnapshots(ctx)
 	if err != nil {
-		s.logger.Error("billing: manual refresh failed", "error", err)
+		s.logger.Error("billing: list snapshots for refresh failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
 		return
 	}
-	s.evaluateCostAlerts(ctx, s.opts.now())
-	writeJSON(w, http.StatusOK, map[string]any{"snapshots": snapshots})
+	var agentHosts []string
+	for _, snap := range stored {
+		if snap.SourceHost != "" && !slices.Contains(agentHosts, snap.SourceHost) {
+			agentHosts = append(agentHosts, snap.SourceHost)
+		}
+	}
+	requested, agentRetry := s.opts.Billing.requestAgentRefresh(agentHosts, now)
+
+	allowed, hubRetry := s.opts.Billing.refreshAllowed()
+	if !allowed && len(requested) == 0 {
+		retry := hubRetry
+		if agentRetry > 0 && agentRetry < retry {
+			retry = agentRetry
+		}
+		rateLimited(w, int(retry.Seconds()))
+		return
+	}
+
+	snapshots := stored
+	if allowed {
+		interval := s.resolveBillingInterval(ctx)
+		snapshots, err = s.opts.Billing.run(ctx, interval)
+		s.opts.Billing.refreshGate().Record()
+		if err != nil {
+			s.logger.Error("billing: manual refresh failed", "error", err)
+			writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
+			return
+		}
+		s.evaluateCostAlerts(ctx, now)
+	}
+	if requested == nil {
+		requested = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"snapshots":               snapshots,
+		"hub_polled":              allowed,
+		"agent_refresh_requested": requested,
+	})
 }
 
 // AuditActionBillingIntervalChange records a change to the hub-side

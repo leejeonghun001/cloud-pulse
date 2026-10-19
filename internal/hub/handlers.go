@@ -180,6 +180,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		ServerTimeMs:  s.opts.now().UnixMilli(),
 		LatestVersion: s.updateStatusSnapshot().latestVersion,
 		UpdateRequest: s.applyUpdateIngest(ctx, report),
+		CloudRefresh:  s.opts.Billing != nil && s.opts.Billing.takeAgentRefresh(report.Host.ID),
 	}
 	writeJSON(w, http.StatusOK, resp)
 

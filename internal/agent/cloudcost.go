@@ -52,7 +52,13 @@ type OCICostCollector struct {
 	pending    *models.CloudCostSnapshot
 	pendingNet *models.CloudNetworkUsage
 	target     OCINetworkTarget
+	refresh    chan struct{}
 }
+
+// agentRefreshMinGap is the shortest time between two collections when
+// the hub asks for an early refresh; the OCI APIs are free, this only
+// stops a burst of requests from becoming a burst of CLI runs.
+const agentRefreshMinGap = time.Minute
 
 // NewOCICostCollector returns a collector for opts, filling defaults.
 func NewOCICostCollector(opts OCICostCollectorOptions) *OCICostCollector {
@@ -70,19 +76,41 @@ func NewOCICostCollector(opts OCICostCollectorOptions) *OCICostCollector {
 			return ociNetworkTarget(ctx, http.DefaultClient, ociBaseURL(currentCloudMetaOverrides()))
 		}
 	}
-	return &OCICostCollector{opts: opts}
+	return &OCICostCollector{opts: opts, refresh: make(chan struct{}, 1)}
 }
 
 // Run collects once immediately, then every Interval, until ctx is
 // canceled.
 func (c *OCICostCollector) Run(ctx context.Context) {
 	for {
+		started := time.Now()
 		c.CollectOnce(ctx)
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(c.opts.Interval):
+		case <-c.refresh:
+			if wait := agentRefreshMinGap - time.Since(started); wait > 0 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(wait):
+				}
+			}
 		}
+	}
+}
+
+// RequestRefresh asks Run to collect now rather than at the next
+// interval (the hub relays a dashboard "Refresh now"). Non-blocking; a
+// request while one is already queued is a no-op.
+func (c *OCICostCollector) RequestRefresh() {
+	if c == nil {
+		return
+	}
+	select {
+	case c.refresh <- struct{}{}:
+	default:
 	}
 }
 

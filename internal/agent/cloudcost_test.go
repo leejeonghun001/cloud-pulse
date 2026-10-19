@@ -148,3 +148,23 @@ func (scriptedOCIRunner) Run(_ context.Context, _ string, _ []string, _ string, 
 	}
 	return billing.Result{Stdout: []byte(`{"data":[{"aggregated-datapoints":[{"value":700}]}]}`)}, nil
 }
+
+func TestReporter_CloudRefreshResponseQueuesACollection(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(models.IngestResponse{Accepted: 1, CloudRefresh: true})
+	}))
+	defer srv.Close()
+
+	cc := NewOCICostCollector(OCICostCollectorOptions{Interval: time.Hour, Runner: &fakeOCIRunner{}, Network: func(context.Context) OCINetworkTarget { return OCINetworkTarget{} }})
+	r := NewReporter(ReporterOptions{HubURL: srv.URL, Token: "tok", CloudCost: cc})
+	r.Enqueue(models.Sample{Timestamp: 1})
+	if err := r.Flush(t.Context(), models.HostInfo{ID: "h1"}); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	select {
+	case <-cc.refresh:
+	default:
+		t.Fatal("a cloud_refresh response should queue an early collection")
+	}
+}

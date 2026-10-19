@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -211,5 +212,45 @@ func TestIngest_AgentCloudNetworkStoredAndKeptOnFailure(t *testing.T) {
 	post(models.CloudNetworkUsage{Provider: models.CloudBillingAWS, Month: "2026-10", Status: models.CloudBillingOK})
 	if store.cloudNetwork["oci-box"].Provider != models.CloudBillingOCI {
 		t.Error("a non-OCI usage must be dropped")
+	}
+}
+
+func TestBillingRefresh_RelaysToAgentOnItsNextReport(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	opts := testOptions()
+	opts.Now = fixedNow(now)
+	opts.Billing = &BillingRuntime{Collector: billing.New(store, billing.Options{Runner: &noopRunner{}, DataDir: t.TempDir()}), Now: func() time.Time { return now }}
+	store.cloudCostSnapshots[models.CloudBillingOCI] = models.CloudCostSnapshot{Provider: models.CloudBillingOCI, Status: models.CloudBillingOK, SourceHost: "oci-box", LastSuccessAt: 1}
+	s := newTestServer(t, opts, store)
+
+	refresh := func() *httptest.ResponseRecorder {
+		return doRequest(t, s.Handler(), http.MethodPost, "/api/v1/billing/refresh", "127.0.0.1:1", testUIToken, nil)
+	}
+	report := func() models.IngestResponse {
+		body, _ := json.Marshal(models.AgentReport{Host: sampleHostInfo("oci-box"), Samples: []models.Sample{{Timestamp: now.Unix()}}})
+		rec := doRequest(t, s.Handler(), http.MethodPost, "/api/v1/agent/report", "203.0.113.1:1234", opts.AgentToken, body)
+		return decodeJSON[models.IngestResponse](t, rec.Body)
+	}
+
+	rec := refresh()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("first refresh status = %d, want 200", rec.Code)
+	}
+	got := decodeJSON[map[string]any](t, rec.Body)
+	if req, _ := got["agent_refresh_requested"].([]any); len(req) != 1 || req[0] != "oci-box" {
+		t.Errorf("agent_refresh_requested = %v, want [oci-box]", got["agent_refresh_requested"])
+	}
+	if !report().CloudRefresh {
+		t.Error("the agent's next report should carry cloud_refresh")
+	}
+	if report().CloudRefresh {
+		t.Error("cloud_refresh must be handed out once")
+	}
+
+	// Both the hub (10 min) and this agent (2 min) were just refreshed.
+	if rec := refresh(); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("immediate second refresh status = %d, want 429", rec.Code)
 	}
 }

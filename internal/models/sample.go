@@ -96,6 +96,11 @@ type IngestResponse struct {
 	// (HostInfo.RemoteUpdate.OptedIn false, checked by the hub before
 	// setting this field).
 	UpdateRequest *UpdateRequest `json:"update_request,omitempty"`
+	// CloudRefresh asks an agent that collects provider costs itself
+	// (CP_OCI_BILLING) to query again now instead of at its next
+	// interval — set once after a dashboard "Refresh now". Agents
+	// without agent-side billing ignore it.
+	CloudRefresh bool `json:"cloud_refresh,omitempty"`
 }
 
 // TimeResponse is returned by the hub's time-sync endpoint so agents can

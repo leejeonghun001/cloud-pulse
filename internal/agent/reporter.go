@@ -301,6 +301,9 @@ func (r *Reporter) postBatch(ctx context.Context, host models.HostInfo, batch []
 			serverTimeMs = ir.ServerTimeMs
 			latestVersion = ir.LatestVersion
 			updateRequest = ir.UpdateRequest
+			if ir.CloudRefresh {
+				r.cloudCost.RequestRefresh()
+			}
 		}
 		_, _ = io.Copy(io.Discard, resp.Body) // drain any remainder so the connection can be reused
 		return resp.StatusCode, serverTimeMs, latestVersion, updateRequest, t0, t1, nil

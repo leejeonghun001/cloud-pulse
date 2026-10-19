@@ -203,8 +203,12 @@ host that doesn't match shows `matched: false`.
 ## API and UI
 
 `GET /api/v1/billing` returns every provider's snapshot plus per-host
-combined cost. `POST /api/v1/billing/refresh` (admin) triggers an
-immediate poll, rate-limited to once per 10 minutes. The dashboard's
+combined cost. `POST /api/v1/billing/refresh` (admin) re-runs the
+hub's own CLI collection, at most once per 10 minutes (AWS bills each
+call), and asks every agent that collects a provider itself to query
+again on its next report (at most once per 2 minutes per agent; the
+OCI APIs are free). It answers `429` only when neither could run; the
+response lists the agents asked in `agent_refresh_requested`. The dashboard's
 **Costs** page shows a provider card per cloud (noting the agent for an
 agent-collected snapshot) and a per-host cost table; Settings → Billing
 exposes status/staleness, the interval selector, the AWS resource-level

@@ -53,6 +53,55 @@ type BillingRuntime struct {
 	// runMu serializes collector runs so a manual refresh and the
 	// background scheduler tick never race on the same CLI/HOME dir.
 	runMu poller.RunMutex
+
+	// agentMu guards the agent-side refresh bookkeeping: hosts with a
+	// "query again now" request waiting for their next report, and when
+	// each host was last asked (agentRefreshMinInterval throttle).
+	agentMu          sync.Mutex
+	agentPending     map[string]bool
+	agentLastRequest map[string]time.Time
+}
+
+// agentRefreshMinInterval throttles "Refresh now" requests relayed to
+// one agent. Its OCI queries are free, unlike the hub's AWS Cost
+// Explorer calls (billingRefreshMinInterval), so the gap is short.
+const agentRefreshMinInterval = 2 * time.Minute
+
+// requestAgentRefresh queues a refresh for each host not asked within
+// agentRefreshMinInterval, returning the hosts queued and, when some
+// were throttled, the shortest wait until one could be asked again.
+func (b *BillingRuntime) requestAgentRefresh(hosts []string, now time.Time) (requested []string, retryAfter time.Duration) {
+	b.agentMu.Lock()
+	defer b.agentMu.Unlock()
+	if b.agentPending == nil {
+		b.agentPending = make(map[string]bool)
+		b.agentLastRequest = make(map[string]time.Time)
+	}
+	for _, h := range hosts {
+		if last, ok := b.agentLastRequest[h]; ok {
+			if wait := agentRefreshMinInterval - now.Sub(last); wait > 0 {
+				if retryAfter == 0 || wait < retryAfter {
+					retryAfter = wait
+				}
+				continue
+			}
+		}
+		b.agentLastRequest[h] = now
+		b.agentPending[h] = true
+		requested = append(requested, h)
+	}
+	return requested, retryAfter
+}
+
+// takeAgentRefresh reports, once, whether hostID has a refresh queued.
+func (b *BillingRuntime) takeAgentRefresh(hostID string) bool {
+	b.agentMu.Lock()
+	defer b.agentMu.Unlock()
+	if !b.agentPending[hostID] {
+		return false
+	}
+	delete(b.agentPending, hostID)
+	return true
 }
 
 // networkEstimator returns b.NetworkEstimator, defaulting to

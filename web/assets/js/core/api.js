@@ -586,8 +586,10 @@ export function getBilling(signal) {
   return apiFetch("/api/v1/billing", { signal });
 }
 
-/** refreshBilling calls POST /api/v1/billing/refresh (admin); throws
- * RateLimitError if called within the 10-minute throttle window. */
+/** refreshBilling calls POST /api/v1/billing/refresh (admin): the hub
+ * re-runs its own CLI collection (at most every 10 minutes) and asks
+ * agents that collect a provider themselves to query again. Throws
+ * RateLimitError when neither could run. */
 export function refreshBilling(signal) {
   return apiFetch("/api/v1/billing/refresh", { method: "POST", signal });
 }

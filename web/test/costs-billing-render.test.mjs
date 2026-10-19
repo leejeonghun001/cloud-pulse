@@ -36,6 +36,7 @@ class TestNode {
   get isConnected() { return this === this.ownerDocument.body || Boolean(this.parentNode?.isConnected); }
   append(...children) { for (const child of children) { child.parentNode = this; this.children.push(child); } }
   removeChild(child) { this.children.splice(this.children.indexOf(child), 1); child.parentNode = null; }
+  remove() { this.parentNode?.removeChild(this); }
   setAttribute(name, value) { this.attributes[name] = String(value); if (name === "value") this.value = String(value); }
   removeAttribute(name) { delete this.attributes[name]; }
   getAttribute(name) { return this.attributes[name] ?? null; }
@@ -399,5 +400,19 @@ test("Costs background refreshes swap content in place and keep the last figures
     assert.equal(byClass(container, "cp-costs-content")[0], content);
     assert.equal(content.getAttribute("aria-busy"), "false");
     assert.ok(container.textContent.includes(formatUSD(99, "USD", { taxNote: false })));
+  });
+});
+
+test("Costs Refresh now tells the user which agent was asked to query again", async () => {
+  await withHarness(async ({ document, container, responses, requests }) => {
+    billingResponses(responses, { snapshots: [snapshot({ provider: "oci", currency: "SGD", source_host: "ted-vinc" })] });
+    responses.set("POST /api/v1/billing/refresh", { snapshots: [], hub_polled: false, agent_refresh_requested: ["ted-vinc"] });
+    const announced = [];
+    const handle = mountCostsPage(container, { announce: (text) => announced.push(text) });
+    await handle.refresh();
+    await document.getElementById("cp-costs-refresh").emit("click");
+    assert.ok(requests.some((r) => r.path === "/api/v1/billing/refresh" && r.method === "POST"));
+    assert.deepEqual(announced, [t("costs.agent_refresh_requested", { hosts: "ted-vinc" })]);
+    assert.ok(document.body.textContent.includes(t("costs.agent_refresh_requested", { hosts: "ted-vinc" })));
   });
 });
