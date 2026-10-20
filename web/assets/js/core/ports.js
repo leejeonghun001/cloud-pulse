@@ -112,7 +112,7 @@ export const DOCKER_STATUS_INFO = {
     return {
       title: t("host.docker_access_denied"),
       message: t("host.docker_access_denied_message"),
-      fixCommand: "curl -fsSL https://raw.githubusercontent.com/leejeonghun001/cloud-pulse/main/scripts/install-agent.sh | sudo bash -s -- --reinstall --docker",
+      fixCommand: "sudo usermod -aG docker cloud-pulse && sudo systemctl restart cloud-pulse-agent",
     };
   },
   get error() {

@@ -459,7 +459,10 @@ function renderDockerSection(docker) {
     box.append(icon(docker.status === "permission_denied" ? "triangleAlert" : "box"));
     const textCol = el("div");
     textCol.append(el("p", { class: "cp-services-status-title", text: info.title }));
-    textCol.append(el("p", { class: "cp-muted-small", text: docker.error || info.message }));
+    // The explanation first; the agent's raw error (e.g. "dial unix
+    // /var/run/docker.sock: connect: permission denied") as a detail.
+    textCol.append(el("p", { class: "cp-muted-small", text: info.message || docker.error }));
+    if (docker.error && info.message) textCol.append(el("p", { class: "cp-muted-small cp-services-status-detail", text: docker.error }));
     if (info.fixCommand) {
       const pre = el("pre", { class: "cp-code-block cp-code-block-wrap" });
       pre.append(el("code", { text: info.fixCommand }));

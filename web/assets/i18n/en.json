@@ -222,7 +222,7 @@
     "docker_not_detected": "Docker not detected",
     "docker_not_detected_message": "No Docker (or Podman) Engine API socket was found on this host.",
     "docker_access_denied": "Docker access denied",
-    "docker_access_denied_message": "The agent doesn't have permission to reach the Docker socket. Re-run the agent installer with --docker to add it to the docker group (docker group access is root-equivalent).",
+    "docker_access_denied_message": "The agent's user (cloud-pulse) can't open the Docker socket. Add it to the docker group and restart the agent with the command below — or re-run the agent installer with --docker. Membership of the docker group is root-equivalent on this host.",
     "docker_collection_failed": "Docker collection failed",
     "docker_collection_failed_message": "The agent reached the Docker socket but the last collection attempt failed.",
     "docker_not_supported": "Docker monitoring not supported",

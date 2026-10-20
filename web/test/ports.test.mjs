@@ -122,8 +122,8 @@ test("DOCKER_STATUS_INFO covers every models.DockerStatus value", () => {
 
 test("dockerStatusInfo: permission_denied carries the exact fix command", () => {
   const info = dockerStatusInfo("permission_denied");
-  assert.match(info.fixCommand, /install-agent\.sh/);
-  assert.match(info.fixCommand, /--docker/);
+  assert.match(info.fixCommand, /usermod -aG docker cloud-pulse/);
+  assert.match(info.fixCommand, /systemctl restart cloud-pulse-agent/);
 });
 
 test("dockerStatusInfo: unavailable/error/unsupported have no single fix command", () => {
