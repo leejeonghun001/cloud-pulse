@@ -16,9 +16,12 @@ import (
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
 )
 
-// dockerAPIVersion is the Docker Engine API version path segment this
-// client speaks, matching SPEC-v0.5 §C's "v1.41+" requirement. Podman's
-// Docker-compatible socket also implements this API surface.
+// dockerAPIVersion is the Docker Engine API version this client prefers,
+// matching SPEC-v0.5 §C's "v1.41+" requirement; Podman's
+// Docker-compatible socket implements it too. Newer daemons can refuse
+// it (Engine 29 requires at least 1.44), so collect negotiates: see
+// negotiateAPIVersion. The fields this client reads are unchanged in
+// every later API version.
 const dockerAPIVersion = "v1.41"
 
 // dockerRequestTimeout bounds each individual request the client makes
@@ -118,12 +121,12 @@ func (c *dockerClient) collect(ctx context.Context) models.DockerInfo {
 		return models.DockerInfo{Status: models.DockerStatusError, Error: err.Error(), Containers: []models.Container{}}
 	}
 
-	version, err := c.apiVersion(ctx)
+	version, minVersion, err := c.apiVersion(ctx)
 	if err != nil {
 		return dockerInfoFromError(err)
 	}
 
-	containers, err := c.listContainers(ctx)
+	containers, err := c.listContainers(ctx, negotiateAPIVersion(version, minVersion))
 	if err != nil {
 		return dockerInfoFromError(err)
 	}
@@ -154,16 +157,70 @@ func dockerInfoFromError(err error) models.DockerInfo {
 	return models.DockerInfo{Status: models.DockerStatusError, Error: err.Error(), Containers: []models.Container{}}
 }
 
-// apiVersion calls GET /version and returns the daemon's reported API
-// version.
-func (c *dockerClient) apiVersion(ctx context.Context) (string, error) {
+// apiVersion calls GET /version without a version prefix — accepted by
+// every Docker and Podman release, whatever API range it supports — and
+// returns the daemon's current and minimum API versions.
+func (c *dockerClient) apiVersion(ctx context.Context) (version, minVersion string, err error) {
 	var resp struct {
-		APIVersion string `json:"ApiVersion"`
+		APIVersion    string `json:"ApiVersion"`
+		MinAPIVersion string `json:"MinAPIVersion"`
 	}
-	if err := c.getJSON(ctx, "/version", &resp); err != nil {
-		return "", err
+	if err := c.getJSON(ctx, "", "/version", &resp); err != nil {
+		return "", "", err
 	}
-	return resp.APIVersion, nil
+	return resp.APIVersion, resp.MinAPIVersion, nil
+}
+
+// negotiateAPIVersion picks the API version path segment to use with a
+// daemon reporting version/minVersion: the preferred dockerAPIVersion
+// when the daemon accepts it, else the daemon's minimum (when 1.41 is
+// too old for it) or its own version (when 1.41 is too new). Unknown or
+// unparsable values keep the preferred version.
+func negotiateAPIVersion(version, minVersion string) string {
+	preferred := strings.TrimPrefix(dockerAPIVersion, "v")
+	if minVersion != "" && compareAPIVersions(minVersion, preferred) > 0 {
+		return "v" + minVersion
+	}
+	if version != "" && compareAPIVersions(version, preferred) < 0 {
+		return "v" + version
+	}
+	return dockerAPIVersion
+}
+
+// compareAPIVersions compares "major.minor" API versions, returning -1,
+// 0 or 1; an unparsable side compares equal so the caller keeps its
+// default.
+func compareAPIVersions(a, b string) int {
+	parse := func(v string) (int, int, bool) {
+		major, minor, ok := strings.Cut(v, ".")
+		if !ok {
+			return 0, 0, false
+		}
+		ma, err1 := strconv.Atoi(major)
+		mi, err2 := strconv.Atoi(minor)
+		return ma, mi, err1 == nil && err2 == nil
+	}
+	aMa, aMi, okA := parse(a)
+	bMa, bMi, okB := parse(b)
+	if !okA || !okB {
+		return 0
+	}
+	switch {
+	case aMa != bMa:
+		return cmpInt(aMa, bMa)
+	default:
+		return cmpInt(aMi, bMi)
+	}
+}
+
+func cmpInt(a, b int) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
 }
 
 // dockerContainerJSON mirrors the fields this client reads from GET
@@ -191,9 +248,9 @@ type dockerPortJSON struct {
 // listContainers calls GET /containers/json?all=1 and converts the
 // response into models.Container, capped at
 // models.MaxInventoryContainers.
-func (c *dockerClient) listContainers(ctx context.Context) ([]models.Container, error) {
+func (c *dockerClient) listContainers(ctx context.Context, apiVersion string) ([]models.Container, error) {
 	var raw []dockerContainerJSON
-	if err := c.getJSON(ctx, "/containers/json?all=1", &raw); err != nil {
+	if err := c.getJSON(ctx, apiVersion, "/containers/json?all=1", &raw); err != nil {
 		return nil, err
 	}
 
@@ -267,12 +324,16 @@ func parseHealthFromStatus(status string) string {
 	}
 }
 
-// getJSON performs a GET request against path (relative to the
-// versioned API root) over the client's unix-socket transport and
-// decodes a 2xx JSON response into out. Non-2xx responses produce an
-// error including the status code and a truncated response body.
-func (c *dockerClient) getJSON(ctx context.Context, path string, out any) error {
-	url := "http://unix/" + dockerAPIVersion + path
+// getJSON performs a GET request against path under the apiVersion
+// root ("v1.44"; "" for the unversioned root) over the client's
+// unix-socket transport and decodes a 2xx JSON response into out.
+// Non-2xx responses produce an error including the status code and a
+// truncated response body.
+func (c *dockerClient) getJSON(ctx context.Context, apiVersion, path string, out any) error {
+	url := "http://unix" + path
+	if apiVersion != "" {
+		url = "http://unix/" + apiVersion + path
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("agent: docker: build request: %w", err)

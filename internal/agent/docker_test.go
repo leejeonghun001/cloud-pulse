@@ -43,7 +43,7 @@ func newFakeDockerServer(t *testing.T, sockPath string, handler http.Handler) {
 func fakeDockerHandler(t *testing.T, version string, containers []dockerContainerJSON) http.Handler {
 	t.Helper()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/"+dockerAPIVersion+"/version", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/version", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"ApiVersion": version})
 	})
@@ -191,7 +191,7 @@ func TestDockerClient_Collect_ContainerCap(t *testing.T) {
 func TestDockerClient_Collect_ServerErrorStatus(t *testing.T) {
 	sockPath := shortSocketPath(t, "docker.sock")
 	mux := http.NewServeMux()
-	mux.HandleFunc("/"+dockerAPIVersion+"/version", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/version", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte("boom"))
 	})
@@ -295,4 +295,42 @@ func shortSocketPath(t *testing.T, name string) string {
 		t.Fatalf("socket path %q is %d bytes, want < 104", path, len(path))
 	}
 	return path
+}
+
+// TestDockerClient_Collect_NegotiatesNewerMinimumAPI reproduces Docker
+// Engine 29, which rejects API 1.41 ("client version 1.41 is too old.
+// Minimum supported API version is 1.44").
+func TestDockerClient_Collect_NegotiatesNewerMinimumAPI(t *testing.T) {
+	sockPath := shortSocketPath(t, "docker.sock")
+	mux := http.NewServeMux()
+	mux.HandleFunc("/version", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"ApiVersion": "1.52", "MinAPIVersion": "1.44"})
+	})
+	mux.HandleFunc("/v1.44/containers/json", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]dockerContainerJSON{{ID: "abc", Names: []string{"/web"}, Image: "nginx", State: "running"}})
+	})
+	mux.HandleFunc("/v1.41/", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"message":"client version 1.41 is too old. Minimum supported API version is 1.44"}`))
+	})
+	newFakeDockerServer(t, sockPath, mux)
+
+	info := newDockerClient(sockPath).collect(context.Background())
+	if info.Status != models.DockerStatusOK || len(info.Containers) != 1 || info.Version != "1.52" {
+		t.Fatalf("info = %+v, want ok with the container via API 1.44", info)
+	}
+}
+
+func TestNegotiateAPIVersion(t *testing.T) {
+	for _, tc := range []struct{ version, min, want string }{
+		{"1.52", "1.44", "v1.44"},
+		{"1.45", "1.24", "v1.41"},
+		{"1.40", "1.12", "v1.40"},
+		{"", "", "v1.41"},
+		{"garbage", "x", "v1.41"},
+	} {
+		if got := negotiateAPIVersion(tc.version, tc.min); got != tc.want {
+			t.Errorf("negotiateAPIVersion(%q, %q) = %q, want %q", tc.version, tc.min, got, tc.want)
+		}
+	}
 }
