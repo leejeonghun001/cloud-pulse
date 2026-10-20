@@ -93,8 +93,11 @@ default to a once-per-day re-notification cadence via
 
 ## Cost budget alerts
 
-`cost_mtd` fires when a billing provider's month-to-date cost reaches
+`cost_mtd` fires when a billing account's month-to-date cost reaches
 the threshold; `cost_forecast` when its month-end forecast does. The
+scope is `""` (every account), a provider (`aws`, `oci`: each of its
+accounts) or one account (`oci:<tenancy OCID>`, `aws:<account ID>`);
+each account fires and resolves on its own. The
 threshold is an amount in that provider's own billing currency (USD for
 AWS, the tenancy's currency for OCI) — figures are never converted
 between currencies, so a rule scoped to "every provider" compares each

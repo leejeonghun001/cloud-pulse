@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -27,7 +28,7 @@ func (f *fakeOCIRunner) Run(_ context.Context, _ string, _ []string, name string
 	return f.res, nil
 }
 
-func TestOCICostCollector_SentOnceThenCleared(t *testing.T) {
+func TestCloudCostCollector_SentOnceThenCleared(t *testing.T) {
 	t.Parallel()
 
 	var mu sync.Mutex
@@ -47,7 +48,7 @@ func TestOCICostCollector_SentOnceThenCleared(t *testing.T) {
 	defer srv.Close()
 
 	runner := &fakeOCIRunner{res: billing.Result{ExitCode: 0, Stdout: []byte(`{"data":[{"computedAmount":4,"resourceId":"ocid1.instance.oc1..a","currency":"USD"}]}`)}}
-	cc := NewOCICostCollector(OCICostCollectorOptions{
+	cc := NewCloudCostCollector(CloudCostCollectorOptions{
 		TenancyID: "ocid1.tenancy.oc1..t",
 		Auth:      "instance_principal",
 		Interval:  time.Hour,
@@ -86,7 +87,7 @@ func TestOCICostCollector_SentOnceThenCleared(t *testing.T) {
 	}
 }
 
-func TestOCICostCollector_ReportsVNICTraffic(t *testing.T) {
+func TestCloudCostCollector_ReportsVNICTraffic(t *testing.T) {
 	t.Parallel()
 
 	var mu sync.Mutex
@@ -104,7 +105,7 @@ func TestOCICostCollector_ReportsVNICTraffic(t *testing.T) {
 	defer srv.Close()
 
 	runner := &scriptedOCIRunner{}
-	cc := NewOCICostCollector(OCICostCollectorOptions{
+	cc := NewCloudCostCollector(CloudCostCollectorOptions{
 		TenancyID: "ocid1.tenancy.oc1..t",
 		Auth:      "instance_principal",
 		Interval:  time.Hour,
@@ -156,7 +157,7 @@ func TestReporter_CloudRefreshResponseQueuesACollection(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cc := NewOCICostCollector(OCICostCollectorOptions{Interval: time.Hour, Runner: &fakeOCIRunner{}, Network: func(context.Context) OCINetworkTarget { return OCINetworkTarget{} }})
+	cc := NewCloudCostCollector(CloudCostCollectorOptions{Interval: time.Hour, Runner: &fakeOCIRunner{}, Network: func(context.Context) OCINetworkTarget { return OCINetworkTarget{} }})
 	r := NewReporter(ReporterOptions{HubURL: srv.URL, Token: "tok", CloudCost: cc})
 	r.Enqueue(models.Sample{Timestamp: 1})
 	if err := r.Flush(t.Context(), models.HostInfo{ID: "h1"}); err != nil {
@@ -166,5 +167,75 @@ func TestReporter_CloudRefreshResponseQueuesACollection(t *testing.T) {
 	case <-cc.refresh:
 	default:
 		t.Fatal("a cloud_refresh response should queue an early collection")
+	}
+}
+
+// awsScriptedRunner answers sts with an account and Cost Explorer with
+// fixed amounts, recording every argv.
+type awsScriptedRunner struct {
+	mu    sync.Mutex
+	calls [][]string
+	env   []string
+}
+
+func (r *awsScriptedRunner) Run(_ context.Context, _ string, env []string, _ string, args ...string) (billing.Result, error) {
+	r.mu.Lock()
+	r.calls = append(r.calls, args)
+	r.env = env
+	r.mu.Unlock()
+	switch {
+	case args[0] == "sts":
+		return billing.Result{Stdout: []byte(`{"Account":"123456789012"}`)}, nil
+	case len(args) > 1 && args[1] == "get-cost-forecast":
+		return billing.Result{Stdout: []byte(`{"Total":{"Amount":"40.00","Unit":"USD"}}`)}, nil
+	default:
+		return billing.Result{Stdout: []byte(`{"ResultsByTime":[{"Total":{"UnblendedCost":{"Amount":"12.50","Unit":"USD"}}}]}`)}, nil
+	}
+}
+
+func TestCloudCostCollector_AWSInstanceRoleReportsItsAccount(t *testing.T) {
+	t.Parallel()
+	runner := &awsScriptedRunner{}
+	cc := NewCloudCostCollector(CloudCostCollectorOptions{
+		Provider: models.CloudBillingAWS,
+		Interval: 12 * time.Hour,
+		Runner:   runner,
+		Now:      func() time.Time { return time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC) },
+	})
+	cc.CollectOnce(t.Context())
+	cc.CollectOnce(t.Context())
+
+	snap := cc.Pending()
+	if snap == nil || snap.Provider != models.CloudBillingAWS || snap.AccountID != "123456789012" || snap.MTDCost != 12.5 {
+		t.Fatalf("pending = %+v, want AWS account 123456789012 with MTD 12.5", snap)
+	}
+	stsCalls := 0
+	for _, c := range runner.calls {
+		if c[0] == "sts" {
+			stsCalls++
+		}
+	}
+	if stsCalls != 1 {
+		t.Errorf("sts calls = %d, want the account looked up once and cached", stsCalls)
+	}
+	if !slices.Contains(runner.env, "AWS_DEFAULT_REGION=us-east-1") {
+		t.Errorf("env = %v, want Cost Explorer's region set", runner.env)
+	}
+	if cc.PendingNetwork() != nil {
+		t.Error("AWS collection must not report OCI VNIC traffic")
+	}
+}
+
+func TestCloudCostCollector_OCIReportsItsTenancyAsAccount(t *testing.T) {
+	t.Parallel()
+	cc := NewCloudCostCollector(CloudCostCollectorOptions{
+		TenancyID: "ocid1.tenancy.oc1..t",
+		Interval:  time.Hour,
+		Runner:    &fakeOCIRunner{res: billing.Result{Stdout: []byte(`{"data":{"items":[]}}`)}},
+		Network:   func(context.Context) OCINetworkTarget { return OCINetworkTarget{} },
+	})
+	cc.CollectOnce(t.Context())
+	if snap := cc.Pending(); snap == nil || snap.AccountID != "ocid1.tenancy.oc1..t" {
+		t.Fatalf("pending = %+v, want the tenancy as AccountID", snap)
 	}
 }

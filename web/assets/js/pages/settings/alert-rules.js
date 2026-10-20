@@ -19,6 +19,7 @@ import {
   getNotifyChannels,
   getHosts,
   getStorageAccounts,
+  getBilling,
   ApiError,
   localizeApiError,
 } from "../../core/api.js";
@@ -40,6 +41,11 @@ import {
   setDraftMetric,
 } from "../../core/alerts.js";
 import { t } from "../../core/i18n.js";
+import { accountTitle } from "../../core/billing-view.js";
+
+/** costAccountOptions lists the billing accounts loaded with the rules,
+ * as cost-rule scope options ({value: "provider:account", label}). */
+let costAccountOptions = [];
 
 const DURATION_UNITS = [
   { value: "seconds", get label() { return t("alert_rules.unit_seconds"); } },
@@ -114,13 +120,14 @@ export function mountAlertRulesSection(container, { announce }) {
   async function refresh() {
     clearChildren(container);
 
-    let rules, channels, hostsResp, storageAccountsResp;
+    let rules, channels, hostsResp, storageAccountsResp, billing;
     try {
-      [rules, channels, hostsResp, storageAccountsResp] = await Promise.all([
+      [rules, channels, hostsResp, storageAccountsResp, billing] = await Promise.all([
         getAlertRules(controller.signal),
         getNotifyChannels(controller.signal),
         getHosts(controller.signal),
         getStorageAccounts(controller.signal).catch(() => ({ accounts: [] })),
+        getBilling(controller.signal).catch(() => null),
       ]);
     } catch (err) {
       if (err?.name === "AbortError") return;
@@ -130,6 +137,10 @@ export function mountAlertRulesSection(container, { announce }) {
 
     const hosts = (hostsResp.hosts || []).map((h) => ({ id: h.host.id, hostname: h.host.hostname }));
     const storageAccounts = (storageAccountsResp.accounts || []).map((a) => ({ id: String(a.id), name: a.name }));
+    // Agent-reported billing accounts a cost rule can target one by one.
+    costAccountOptions = (billing?.snapshots || [])
+      .filter((snap) => snap.account_id)
+      .map((snap) => ({ value: `${snap.provider}:${snap.account_id}`, label: accountTitle(snap) }));
     container.append(rulesCard({ rules, channels, hosts, storageAccounts, signal: controller.signal, announce, onChanged: refresh }));
   }
 
@@ -410,7 +421,11 @@ function buildRuleForm(draft, hosts, storageAccounts, channels, onChange, onFull
   const scopeIsStorage = isStorageScopedMetric(draft.metric);
   const scopeIsCost = isCostScopedMetric(draft.metric);
   const hostOptions = scopeIsCost
-    ? [{ value: "", label: t("alerts.scope_any_provider") }, ...COST_PROVIDERS.map((p) => ({ value: p.value, label: p.name }))]
+    ? [
+      { value: "", label: t("alerts.scope_any_provider") },
+      ...COST_PROVIDERS.map((p) => ({ value: p.value, label: t("alerts.scope_all_provider_accounts", { provider: p.name }) })),
+      ...costAccountOptions,
+    ]
     : scopeIsStorage
       ? [{ value: "", label: t("alert_rules.all_connected_storage_accounts") }, ...storageAccounts.map((a) => ({ value: a.id, label: a.name }))]
       : [{ value: "", label: t("alert_rules.all_hosts") }, ...hosts.map((h) => ({ value: h.id, label: h.hostname }))];

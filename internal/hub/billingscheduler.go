@@ -60,6 +60,10 @@ type BillingRuntime struct {
 	agentMu          sync.Mutex
 	agentPending     map[string]bool
 	agentLastRequest map[string]time.Time
+
+	// costAlertMu serializes cost-alert evaluation (see
+	// evaluateCostAlerts).
+	costAlertMu sync.Mutex
 }
 
 // agentRefreshMinInterval throttles "Refresh now" requests relayed to

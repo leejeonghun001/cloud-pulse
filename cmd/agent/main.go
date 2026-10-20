@@ -190,16 +190,27 @@ func runAgentWithContext(ctx context.Context, envFile string) error {
 		syncCancel()
 	}
 
-	var ociCost *agent.OCICostCollector
-	if cfg.OCIBilling != "off" {
-		ociCost = agent.NewOCICostCollector(agent.OCICostCollectorOptions{
+	var cloudCost *agent.CloudCostCollector
+	switch {
+	case cfg.OCIBilling != "off":
+		cloudCost = agent.NewCloudCostCollector(agent.CloudCostCollectorOptions{
+			Provider:  models.CloudBillingOCI,
 			TenancyID: cfg.OCITenancyID,
 			Auth:      cfg.OCIBilling,
 			CLI:       cfg.OCICLI,
 			Interval:  cfg.OCIBillingInterval,
 			Logger:    logger,
 		})
-		go ociCost.Run(ctx)
+	case cfg.AWSBilling != "off":
+		cloudCost = agent.NewCloudCostCollector(agent.CloudCostCollectorOptions{
+			Provider: models.CloudBillingAWS,
+			CLI:      cfg.AWSCLI,
+			Interval: cfg.AWSBillingInterval,
+			Logger:   logger,
+		})
+	}
+	if cloudCost != nil {
+		go cloudCost.Run(ctx)
 	}
 
 	reporter := agent.NewReporter(agent.ReporterOptions{
@@ -209,7 +220,7 @@ func runAgentWithContext(ctx context.Context, envFile string) error {
 		Clock:        clock,
 		LogClockWarn: logClockOffsetWarning(logger),
 		Inventory:    agent.NewInventoryCollector(agent.InventoryCollectorOptions{Docker: cfg.Docker, Logger: logger}),
-		CloudCost:    ociCost,
+		CloudCost:    cloudCost,
 	})
 
 	hostInfoFunc := func(ctx context.Context) models.HostInfo {
@@ -224,6 +235,7 @@ func runAgentWithContext(ctx context.Context, envFile string) error {
 		"remote_update", cfg.RemoteUpdate,
 		"cloud_metadata", cfg.CloudMetadata,
 		"oci_billing", cfg.OCIBilling,
+		"aws_billing", cfg.AWSBilling,
 		"version", version.Version,
 	)
 

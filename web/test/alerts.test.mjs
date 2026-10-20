@@ -357,11 +357,12 @@ test("cost rules: provider scope, currency threshold, no sustained duration", as
   assert.equal(isCostScopedMetric("cost_forecast"), true);
   assert.equal(isCostScopedMetric("cpu"), false);
   assert.equal(scopeLabel("cost_mtd", ""), "any billing provider");
-  assert.equal(scopeLabel("cost_mtd", "oci"), "OCI");
+  assert.equal(scopeLabel("cost_mtd", "oci"), "all OCI accounts");
+  assert.equal(scopeLabel("cost_mtd", "oci:ocid1.tenancy.oc1..aaaaaaaawork1234"), "OCI · …work1234");
   assert.equal(formatThreshold("cost_forecast", 20), "20 (billing currency)");
   assert.equal(formatMetricValue("cost_mtd", 12.345), "12.35");
   const sentence = ruleSummarySentence({ metric: "cost_forecast", host_id: "oci", operator: ">=", threshold: 20, duration_sec: 600, channel_ids: [] });
-  assert.ok(sentence.includes("OCI") && sentence.includes("20 (billing currency)") && !sentence.includes("10 minutes"), sentence);
+  assert.ok(sentence.includes("all OCI accounts") && sentence.includes("20 (billing currency)") && !sentence.includes("10 minutes"), sentence);
   assert.equal(presetByID("cost-forecast-budget").rule.cooldown_sec, COST_DEFAULT_COOLDOWN_SEC);
 });
 

@@ -23,6 +23,16 @@ type AWSConfig struct {
 	// HomeDir is the sandboxed HOME directory `aws` is run with (also
 	// used as the process's working directory).
 	HomeDir string
+	// CLI is the `aws` executable name or path; empty means "aws" on
+	// Env's PATH.
+	CLI string
+}
+
+func (cfg AWSConfig) cli() string {
+	if cfg.CLI == "" {
+		return "aws"
+	}
+	return cfg.CLI
 }
 
 // BuildAWSEnv constructs the minimal environment passed to every `aws`
@@ -98,7 +108,7 @@ func CollectAWS(ctx context.Context, runner CommandRunner, cfg AWSConfig, now ti
 		"--metrics", "UnblendedCost",
 		"--output", "json",
 	}
-	res, err := runner.Run(ctx, cfg.HomeDir, cfg.Env, "aws", mtdArgs...)
+	res, err := runner.Run(ctx, cfg.HomeDir, cfg.Env, cfg.cli(), mtdArgs...)
 	if err != nil {
 		return errSnapshot(models.CloudBillingAWS, fmt.Sprintf("run aws ce get-cost-and-usage: %v", err))
 	}
@@ -135,7 +145,7 @@ func CollectAWS(ctx context.Context, runner CommandRunner, cfg AWSConfig, now ti
 			"--granularity", "MONTHLY",
 			"--output", "json",
 		}
-		fres, ferr := runner.Run(ctx, cfg.HomeDir, cfg.Env, "aws", forecastArgs...)
+		fres, ferr := runner.Run(ctx, cfg.HomeDir, cfg.Env, cfg.cli(), forecastArgs...)
 		if ferr == nil && fres.ExitCode == 0 && !fres.NotFound && !fres.TimedOut {
 			var fOut awsCostForecastOutput
 			if err := json.Unmarshal(fres.Stdout, &fOut); err == nil {
@@ -184,7 +194,7 @@ func collectAWSPerResource(ctx context.Context, runner CommandRunner, cfg AWSCon
 		"--group-by", "Type=DIMENSION,Key=RESOURCE_ID",
 		"--output", "json",
 	}
-	res, err := runner.Run(ctx, cfg.HomeDir, cfg.Env, "aws", args...)
+	res, err := runner.Run(ctx, cfg.HomeDir, cfg.Env, cfg.cli(), args...)
 	if err != nil || res.ExitCode != 0 || res.NotFound || res.TimedOut {
 		return nil, false
 	}
@@ -273,4 +283,27 @@ func linearProjection(mtdCost float64, now time.Time) float64 {
 // returning a non-nil error, or a JSON parse failure on an exit-0 call).
 func errSnapshot(provider models.CloudBillingProvider, detail string) models.CloudCostSnapshot {
 	return models.CloudCostSnapshot{Provider: provider, Status: models.CloudBillingError, StatusDetail: detail}
+}
+
+// AWSAccountID returns the 12-digit account the CLI's credentials belong
+// to (`aws sts get-caller-identity`, which needs no IAM permission), or
+// a failed snapshot carrying the classified status.
+func AWSAccountID(ctx context.Context, runner CommandRunner, cfg AWSConfig) (string, *models.CloudCostSnapshot) {
+	res, err := runner.Run(ctx, cfg.HomeDir, cfg.Env, cfg.cli(), "sts", "get-caller-identity", "--output", "json")
+	if err != nil {
+		snap := errSnapshot(models.CloudBillingAWS, fmt.Sprintf("run aws sts: %v", err))
+		return "", &snap
+	}
+	if res.NotFound || res.TimedOut || res.ExitCode != 0 {
+		c := classify(res)
+		return "", &models.CloudCostSnapshot{Provider: models.CloudBillingAWS, Status: c.Status, StatusDetail: c.Detail}
+	}
+	var out struct {
+		Account string `json:"Account"`
+	}
+	if err := json.Unmarshal(res.Stdout, &out); err != nil || out.Account == "" {
+		snap := errSnapshot(models.CloudBillingAWS, "parse sts get-caller-identity output")
+		return "", &snap
+	}
+	return out.Account, nil
 }

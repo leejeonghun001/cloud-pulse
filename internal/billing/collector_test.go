@@ -8,28 +8,44 @@ import (
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
 )
 
-// fakeStore is an in-memory billing.Store for Collector tests.
+// fakeStore is an in-memory billing.Store for Collector tests, keyed by
+// CloudCostSnapshot.Key().
 type fakeStore struct {
-	snapshots map[models.CloudBillingProvider]models.CloudCostSnapshot
+	snapshots map[string]models.CloudCostSnapshot
 	setErr    error
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{snapshots: make(map[models.CloudBillingProvider]models.CloudCostSnapshot)}
+	return &fakeStore{snapshots: make(map[string]models.CloudCostSnapshot)}
 }
 
-func (f *fakeStore) GetCloudCostSnapshot(_ context.Context, provider models.CloudBillingProvider) (models.CloudCostSnapshot, error) {
-	if s, ok := f.snapshots[provider]; ok {
+func (f *fakeStore) put(s models.CloudCostSnapshot) { f.snapshots[s.Key()] = s }
+
+func (f *fakeStore) GetCloudCostSnapshot(_ context.Context, provider models.CloudBillingProvider, accountID string) (models.CloudCostSnapshot, error) {
+	if s, ok := f.snapshots[models.CloudCostKey(provider, accountID)]; ok {
 		return s, nil
 	}
-	return models.CloudCostSnapshot{Provider: provider, Status: models.CloudBillingNotConfigured}, nil
+	return models.CloudCostSnapshot{Provider: provider, AccountID: accountID, Status: models.CloudBillingNotConfigured}, nil
+}
+
+func (f *fakeStore) ListCloudCostSnapshots(context.Context) ([]models.CloudCostSnapshot, error) {
+	out := make([]models.CloudCostSnapshot, 0, len(f.snapshots))
+	for _, s := range f.snapshots {
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+func (f *fakeStore) DeleteCloudCostSnapshot(_ context.Context, provider models.CloudBillingProvider, accountID string) error {
+	delete(f.snapshots, models.CloudCostKey(provider, accountID))
+	return nil
 }
 
 func (f *fakeStore) SetCloudCostSnapshot(_ context.Context, snap models.CloudCostSnapshot) error {
 	if f.setErr != nil {
 		return f.setErr
 	}
-	f.snapshots[snap.Provider] = snap
+	f.snapshots[snap.Key()] = snap
 	return nil
 }
 
@@ -81,7 +97,7 @@ func TestCollector_Run_PersistsBothProviders(t *testing.T) {
 
 	// Verify HOME sandbox dir was created under DataDir, never a real
 	// system path.
-	stored, err := store.GetCloudCostSnapshot(context.Background(), models.CloudBillingAWS)
+	stored, err := store.GetCloudCostSnapshot(context.Background(), models.CloudBillingAWS, "")
 	if err != nil || stored.Status != models.CloudBillingOK {
 		t.Fatalf("store did not persist AWS snapshot: %+v, %v", stored, err)
 	}
@@ -94,7 +110,7 @@ func TestCollector_Run_PersistsBothProviders(t *testing.T) {
 func TestCollector_PreservesLastSuccessOnQuietSkip(t *testing.T) {
 	store := newFakeStore()
 	firstSuccess := fixedNow("2026-09-10T00:00:00Z")
-	store.snapshots[models.CloudBillingAWS] = models.CloudCostSnapshot{
+	store.snapshots["aws"] = models.CloudCostSnapshot{
 		Provider:      models.CloudBillingAWS,
 		Status:        models.CloudBillingOK,
 		Currency:      "USD",
@@ -104,7 +120,7 @@ func TestCollector_PreservesLastSuccessOnQuietSkip(t *testing.T) {
 		LastSuccessAt: firstSuccess.Unix(),
 		LastAttemptAt: firstSuccess.Unix(),
 	}
-	store.snapshots[models.CloudBillingOCI] = models.CloudCostSnapshot{Provider: models.CloudBillingOCI, Status: models.CloudBillingNotConfigured}
+	store.snapshots["oci"] = models.CloudCostSnapshot{Provider: models.CloudBillingOCI, Status: models.CloudBillingNotConfigured}
 
 	// Second attempt: AWS CLI now fails (e.g. credentials expired).
 	runner := &fakeRunner{
@@ -210,47 +226,46 @@ type boomError struct{}
 
 func (*boomError) Error() string { return "boom" }
 
-func TestCollector_SkipsHubOCIWhenAgentReportsIt(t *testing.T) {
+func TestCollector_UnsetHubProviderLeavesAgentAccountsAlone(t *testing.T) {
 	store := newFakeStore()
 	agentSnap := models.CloudCostSnapshot{
 		Provider:      models.CloudBillingOCI,
+		AccountID:     "ocid1.tenancy.oc1..t",
 		Status:        models.CloudBillingOK,
 		Currency:      "USD",
 		MTDCost:       7,
 		LastSuccessAt: 100,
 		SourceHost:    "oci-box",
 	}
-	store.snapshots[models.CloudBillingOCI] = agentSnap
+	store.put(agentSnap)
+	// A never-successful hub OCI row from before the agent reported.
+	store.put(models.CloudCostSnapshot{Provider: models.CloudBillingOCI, Status: models.CloudBillingNotConfigured})
 	runner := &fakeRunner{Default: Result{NotFound: true}}
 
 	now := fixedNow("2026-09-15T12:00:00Z")
 	c := New(store, Options{Runner: runner, DataDir: t.TempDir(), Now: func() time.Time { return now }})
-	results, err := c.Run(context.Background(), models.BillingInterval24h)
-	if err != nil {
+	if _, err := c.Run(context.Background(), models.BillingInterval24h); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	for _, call := range runner.Calls {
-		if call.Name == "oci" {
-			t.Fatalf("hub ran oci %v, want it skipped for an agent-reported snapshot", call.Args)
-		}
+	if got := store.snapshots[agentSnap.Key()]; got.Status != models.CloudBillingOK || got.MTDCost != 7 || got.SourceHost != "oci-box" {
+		t.Errorf("agent account = %+v, want untouched", got)
 	}
-	got := store.snapshots[models.CloudBillingOCI]
-	if got.SourceHost != "oci-box" || got.Status != models.CloudBillingOK || got.MTDCost != 7 {
-		t.Errorf("stored OCI snapshot = %+v, want the agent's untouched", got)
+	if _, ok := store.snapshots["oci"]; ok {
+		t.Error("the hub's unset OCI row should be dropped while an agent reports OCI accounts")
 	}
-	if len(results) != 2 || results[1].SourceHost != "oci-box" || !results[1].Stale {
-		t.Errorf("results = %+v, want the agent snapshot returned with Stale recomputed", results)
+	if _, ok := store.snapshots["aws"]; !ok {
+		t.Error("AWS, reported by no agent, keeps its hub row (not_installed)")
 	}
 }
 
 func TestPersistSnapshot_FailureKeepsLastSuccessAndSource(t *testing.T) {
 	store := newFakeStore()
 	now := fixedNow("2026-09-15T12:00:00Z")
-	ok := models.CloudCostSnapshot{Provider: models.CloudBillingOCI, Status: models.CloudBillingOK, Currency: "USD", MTDCost: 3, SourceHost: "a"}
+	ok := models.CloudCostSnapshot{Provider: models.CloudBillingOCI, AccountID: "ocid1.tenancy.oc1..t", Status: models.CloudBillingOK, Currency: "USD", MTDCost: 3, SourceHost: "a"}
 	if _, err := PersistSnapshot(context.Background(), store, ok, now, models.BillingInterval24h); err != nil {
 		t.Fatalf("PersistSnapshot: %v", err)
 	}
-	failed := models.CloudCostSnapshot{Provider: models.CloudBillingOCI, Status: models.CloudBillingPermissionDenied, SourceHost: "a"}
+	failed := models.CloudCostSnapshot{Provider: models.CloudBillingOCI, AccountID: "ocid1.tenancy.oc1..t", Status: models.CloudBillingPermissionDenied, SourceHost: "a"}
 	got, err := PersistSnapshot(context.Background(), store, failed, now.Add(time.Hour), models.BillingInterval24h)
 	if err != nil {
 		t.Fatalf("PersistSnapshot: %v", err)

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/leejeonghun001/cloud-pulse/internal/billing"
 	"github.com/leejeonghun001/cloud-pulse/internal/models"
@@ -16,6 +18,81 @@ func (s *Server) registerBillingRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/billing", s.requireUser(s.handleGetBilling))
 	mux.HandleFunc("POST /api/v1/billing/refresh", s.requireAdmin(s.handlePostBillingRefresh))
 	mux.HandleFunc("PUT /api/v1/settings/billing/interval", s.requireAdmin(s.handleSetBillingInterval))
+	mux.HandleFunc("PUT /api/v1/billing/accounts/label", s.requireAdmin(s.handleSetBillingAccountLabel))
+	mux.HandleFunc("DELETE /api/v1/billing/accounts", s.requireAdmin(s.handleDeleteBillingAccount))
+}
+
+// Audit actions for billing accounts.
+const (
+	AuditActionBillingAccountLabel  models.AuditAction = "billing_account.label"
+	AuditActionBillingAccountDelete models.AuditAction = "billing_account.delete"
+)
+
+// maxBillingAccountLabel bounds an account display label, in bytes.
+const maxBillingAccountLabel = 64
+
+// billingAccountLabelRequest is the body of PUT
+// /api/v1/billing/accounts/label.
+type billingAccountLabelRequest struct {
+	Provider  models.CloudBillingProvider `json:"provider"`
+	AccountID string                      `json:"account_id"`
+	Label     string                      `json:"label"`
+}
+
+// handleSetBillingAccountLabel names a billing account (admin). An
+// empty label clears it.
+func (s *Server) handleSetBillingAccountLabel(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var req billingAccountLabelRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "invalid request body", Code: "invalid_request_body"})
+		return
+	}
+	label := strings.TrimSpace(req.Label)
+	if !utf8.ValidString(label) || len(label) > maxBillingAccountLabel {
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "label must be valid text of at most 64 bytes", Code: "invalid_label"})
+		return
+	}
+	before, err := s.store.GetCloudCostSnapshot(ctx, req.Provider, req.AccountID)
+	if err != nil {
+		s.logger.Error("billing: get account for label failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
+		return
+	}
+	if err := s.store.SetCloudCostLabel(ctx, req.Provider, req.AccountID, label); err != nil {
+		if isNotFound(err) {
+			writeJSON(w, http.StatusNotFound, models.APIError{Error: "billing account not found", Code: "account_not_found"})
+			return
+		}
+		s.logger.Error("billing: set account label failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
+		return
+	}
+	key := models.CloudCostKey(req.Provider, req.AccountID)
+	s.recordAudit(ctx, r, AuditActionBillingAccountLabel, "billing_account", key,
+		map[string]string{"label": before.Label}, map[string]string{"label": label})
+	writeJSON(w, http.StatusOK, map[string]string{"key": key, "label": label})
+}
+
+// handleDeleteBillingAccount removes a billing account's stored figures
+// (admin): DELETE /api/v1/billing/accounts?provider=&account_id=. An
+// agent still reporting the account recreates it on its next report.
+func (s *Server) handleDeleteBillingAccount(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	provider := models.CloudBillingProvider(r.URL.Query().Get("provider"))
+	accountID := r.URL.Query().Get("account_id")
+	if provider != models.CloudBillingAWS && provider != models.CloudBillingOCI {
+		writeJSON(w, http.StatusBadRequest, models.APIError{Error: "provider must be aws or oci", Code: "invalid_provider"})
+		return
+	}
+	if err := s.store.DeleteCloudCostSnapshot(ctx, provider, accountID); err != nil {
+		s.logger.Error("billing: delete account failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, models.APIError{Error: "internal server error", Code: "internal_error"})
+		return
+	}
+	key := models.CloudCostKey(provider, accountID)
+	s.recordAudit(ctx, r, AuditActionBillingAccountDelete, "billing_account", key, nil, nil)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleGetBilling serves GET /api/v1/billing: every provider's

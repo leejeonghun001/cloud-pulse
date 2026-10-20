@@ -104,16 +104,38 @@ export function ociAgentGuideCard({ oci }) {
   fields.append(tenancy.node, instance.node, group.node);
   card.append(fields);
 
+  const { list, copyStatus, sync } = buildGuideSteps(STEPS, "billing.oci_agent_step", () => ({
+    tenancy: fieldValue(tenancy.input, OCID_PATTERN, "<tenancy-ocid>"),
+    instance: fieldValue(instance.input, OCID_PATTERN, "<instance-ocid>"),
+    group: fieldValue(group.input, GROUP_PATTERN, DEFAULT_GROUP),
+  }));
+  for (const f of [tenancy, instance, group]) f.input.addEventListener("input", sync);
+  sync();
+
+  card.append(list, copyStatus);
+  return card;
+}
+
+/**
+ * buildGuideSteps renders a numbered setup guide: each step's title and
+ * body come from `${keyPrefix}_${step.key}_title|_body`, and a step with
+ * code() gets a copyable block filled from values(). Call sync() after
+ * values change.
+ * @param {Array<{key: string, code?: (v: Object) => string}>} steps
+ * @param {string} keyPrefix
+ * @param {() => Object} values
+ * @returns {{list: HTMLElement, copyStatus: HTMLElement, sync: () => void}}
+ */
+export function buildGuideSteps(steps, keyPrefix, values) {
   const copyStatus = el("p", { class: "cp-muted-small cp-oci-guide-copy-status", attrs: { role: "status", "aria-live": "polite" } });
   const list = el("ol", { class: "cp-oci-guide-steps" });
   /** @type {Array<() => void>} */
   const syncers = [];
-
-  for (const step of STEPS) {
+  for (const step of steps) {
     const item = el("li", { class: "cp-oci-guide-step" });
-    const title = t(`billing.oci_agent_step_${step.key}_title`);
+    const title = t(`${keyPrefix}_${step.key}_title`);
     item.append(el("h3", { class: "cp-oci-guide-step-title", text: title }));
-    item.append(el("p", { class: "cp-muted-small", text: t(`billing.oci_agent_step_${step.key}_body`) }));
+    item.append(el("p", { class: "cp-muted-small", text: t(`${keyPrefix}_${step.key}_body`) }));
     if (step.code) {
       const code = el("code", { text: "" });
       const pre = el("pre", { class: "cp-code-block cp-code-block-wrap", children: [code] });
@@ -127,21 +149,11 @@ export function ociAgentGuideCard({ oci }) {
         copyStatus.textContent = result === "copied" ? t("billing.oci_agent_copied") : t("billing.oci_agent_copy_failed");
       });
       item.append(el("div", { class: "cp-oci-guide-code", children: [pre, copy] }));
-      syncers.push(() => {
-        code.textContent = step.code({
-          tenancy: fieldValue(tenancy.input, OCID_PATTERN, "<tenancy-ocid>"),
-          instance: fieldValue(instance.input, OCID_PATTERN, "<instance-ocid>"),
-          group: fieldValue(group.input, GROUP_PATTERN, DEFAULT_GROUP),
-        });
-      });
+      syncers.push(() => { code.textContent = step.code(values()); });
     }
     list.append(item);
   }
-
   const sync = () => syncers.forEach((fn) => fn());
-  for (const f of [tenancy, instance, group]) f.input.addEventListener("input", sync);
   sync();
-
-  card.append(list, copyStatus);
-  return card;
+  return { list, copyStatus, sync };
 }

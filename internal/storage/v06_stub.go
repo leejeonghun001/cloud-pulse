@@ -21,33 +21,30 @@ import (
 
 // --- Cloud billing (SPEC-v0.6 §1) ---
 
-// GetCloudCostSnapshot returns the persisted snapshot for provider, or a
-// zero-value models.CloudCostSnapshot{Provider: provider, Status:
-// models.CloudBillingNotConfigured} with a nil error if no row exists
-// yet.
-func (db *DB) GetCloudCostSnapshot(ctx context.Context, provider models.CloudBillingProvider) (models.CloudCostSnapshot, error) {
+// GetCloudCostSnapshot returns the persisted snapshot for
+// provider/accountID, or a zero-value snapshot with Status
+// models.CloudBillingNotConfigured and a nil error if no row exists yet.
+func (db *DB) GetCloudCostSnapshot(ctx context.Context, provider models.CloudBillingProvider, accountID string) (models.CloudCostSnapshot, error) {
 	row := db.sql.QueryRowContext(ctx, `
-		SELECT status, status_detail, currency, mtd_cost, forecast_cost, forecast_method,
-		       account_level, per_resource, collected_at, last_success_at, last_attempt_at, source_host
-		FROM cloud_cost_snapshots WHERE provider = ?
-	`, string(provider))
-	snap, err := scanCloudCostSnapshot(row.Scan, provider)
+		SELECT `+cloudCostColumns+`
+		FROM cloud_cost_snapshots WHERE provider = ? AND account_id = ?
+	`, string(provider), accountID)
+	snap, err := scanCloudCostSnapshot(row.Scan)
 	if err != nil {
 		if isNoRows(err) {
-			return models.CloudCostSnapshot{Provider: provider, Status: models.CloudBillingNotConfigured}, nil
+			return models.CloudCostSnapshot{Provider: provider, AccountID: accountID, Status: models.CloudBillingNotConfigured}, nil
 		}
 		return models.CloudCostSnapshot{}, fmt.Errorf("storage: get cloud cost snapshot: %w", err)
 	}
 	return snap, nil
 }
 
-// ListCloudCostSnapshots returns every persisted provider snapshot,
-// sorted by provider.
+// ListCloudCostSnapshots returns every persisted account snapshot,
+// sorted by provider then account.
 func (db *DB) ListCloudCostSnapshots(ctx context.Context) ([]models.CloudCostSnapshot, error) {
 	rows, err := db.sql.QueryContext(ctx, `
-		SELECT provider, status, status_detail, currency, mtd_cost, forecast_cost, forecast_method,
-		       account_level, per_resource, collected_at, last_success_at, last_attempt_at, source_host
-		FROM cloud_cost_snapshots ORDER BY provider
+		SELECT `+cloudCostColumns+`
+		FROM cloud_cost_snapshots ORDER BY provider, account_id
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("storage: list cloud cost snapshots: %w", err)
@@ -56,20 +53,10 @@ func (db *DB) ListCloudCostSnapshots(ctx context.Context) ([]models.CloudCostSna
 
 	out := make([]models.CloudCostSnapshot, 0)
 	for rows.Next() {
-		var provider string
-		var snap models.CloudCostSnapshot
-		var perResourceJSON string
-		if err := rows.Scan(&provider, &snap.Status, &snap.StatusDetail, &snap.Currency, &snap.MTDCost,
-			&snap.ForecastCost, &snap.ForecastMethod, &snap.AccountLevel, &perResourceJSON,
-			&snap.CollectedAt, &snap.LastSuccessAt, &snap.LastAttemptAt, &snap.SourceHost); err != nil {
+		snap, err := scanCloudCostSnapshot(rows.Scan)
+		if err != nil {
 			return nil, fmt.Errorf("storage: list cloud cost snapshots: %w", err)
 		}
-		snap.Provider = models.CloudBillingProvider(provider)
-		perResource, err := unmarshalPerResource(perResourceJSON)
-		if err != nil {
-			return nil, fmt.Errorf("storage: list cloud cost snapshots: unmarshal per_resource: %w", err)
-		}
-		snap.PerResource = perResource
 		out = append(out, snap)
 	}
 	if err := rows.Err(); err != nil {
@@ -78,7 +65,9 @@ func (db *DB) ListCloudCostSnapshots(ctx context.Context) ([]models.CloudCostSna
 	return out, nil
 }
 
-// SetCloudCostSnapshot upserts the snapshot for snap.Provider.
+// SetCloudCostSnapshot upserts the snapshot for (snap.Provider,
+// snap.AccountID). The account's Label is not touched; see
+// SetCloudCostLabel.
 func (db *DB) SetCloudCostSnapshot(ctx context.Context, snap models.CloudCostSnapshot) error {
 	perResourceJSON, err := marshalPerResource(snap.PerResource)
 	if err != nil {
@@ -86,10 +75,10 @@ func (db *DB) SetCloudCostSnapshot(ctx context.Context, snap models.CloudCostSna
 	}
 	_, err = db.sql.ExecContext(ctx, `
 		INSERT INTO cloud_cost_snapshots (
-			provider, status, status_detail, currency, mtd_cost, forecast_cost, forecast_method,
+			provider, account_id, status, status_detail, currency, mtd_cost, forecast_cost, forecast_method,
 			account_level, per_resource, collected_at, last_success_at, last_attempt_at, source_host
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(provider) DO UPDATE SET
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(provider, account_id) DO UPDATE SET
 			status = excluded.status,
 			status_detail = excluded.status_detail,
 			currency = excluded.currency,
@@ -102,7 +91,7 @@ func (db *DB) SetCloudCostSnapshot(ctx context.Context, snap models.CloudCostSna
 			last_success_at = excluded.last_success_at,
 			last_attempt_at = excluded.last_attempt_at,
 			source_host = excluded.source_host
-	`, string(snap.Provider), string(snap.Status), snap.StatusDetail, snap.Currency, snap.MTDCost,
+	`, string(snap.Provider), snap.AccountID, string(snap.Status), snap.StatusDetail, snap.Currency, snap.MTDCost,
 		snap.ForecastCost, snap.ForecastMethod, snap.AccountLevel, perResourceJSON,
 		snap.CollectedAt, snap.LastSuccessAt, snap.LastAttemptAt, snap.SourceHost)
 	if err != nil {
@@ -111,16 +100,42 @@ func (db *DB) SetCloudCostSnapshot(ctx context.Context, snap models.CloudCostSna
 	return nil
 }
 
-func scanCloudCostSnapshot(scan func(dest ...any) error, provider models.CloudBillingProvider) (models.CloudCostSnapshot, error) {
+// SetCloudCostLabel sets an account's display label, or returns
+// models.ErrNotFound when the account has no snapshot.
+func (db *DB) SetCloudCostLabel(ctx context.Context, provider models.CloudBillingProvider, accountID, label string) error {
+	res, err := db.sql.ExecContext(ctx, `UPDATE cloud_cost_snapshots SET label = ? WHERE provider = ? AND account_id = ?`, label, string(provider), accountID)
+	if err != nil {
+		return fmt.Errorf("storage: set cloud cost label: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("storage: set cloud cost label: rows affected: %w", err)
+	} else if n == 0 {
+		return fmt.Errorf("storage: set cloud cost label: %w", models.ErrNotFound)
+	}
+	return nil
+}
+
+// DeleteCloudCostSnapshot removes an account's snapshot. Deleting a
+// missing one is not an error.
+func (db *DB) DeleteCloudCostSnapshot(ctx context.Context, provider models.CloudBillingProvider, accountID string) error {
+	if _, err := db.sql.ExecContext(ctx, `DELETE FROM cloud_cost_snapshots WHERE provider = ? AND account_id = ?`, string(provider), accountID); err != nil {
+		return fmt.Errorf("storage: delete cloud cost snapshot: %w", err)
+	}
+	return nil
+}
+
+const cloudCostColumns = `provider, account_id, label, status, status_detail, currency, mtd_cost, forecast_cost, forecast_method,
+		       account_level, per_resource, collected_at, last_success_at, last_attempt_at, source_host`
+
+func scanCloudCostSnapshot(scan func(dest ...any) error) (models.CloudCostSnapshot, error) {
 	var snap models.CloudCostSnapshot
-	var status string
-	var perResourceJSON string
-	if err := scan(&status, &snap.StatusDetail, &snap.Currency, &snap.MTDCost, &snap.ForecastCost,
-		&snap.ForecastMethod, &snap.AccountLevel, &perResourceJSON, &snap.CollectedAt,
+	var provider, status, perResourceJSON string
+	if err := scan(&provider, &snap.AccountID, &snap.Label, &status, &snap.StatusDetail, &snap.Currency, &snap.MTDCost,
+		&snap.ForecastCost, &snap.ForecastMethod, &snap.AccountLevel, &perResourceJSON, &snap.CollectedAt,
 		&snap.LastSuccessAt, &snap.LastAttemptAt, &snap.SourceHost); err != nil {
 		return models.CloudCostSnapshot{}, err
 	}
-	snap.Provider = provider
+	snap.Provider = models.CloudBillingProvider(provider)
 	snap.Status = models.CloudBillingStatus(status)
 	perResource, err := unmarshalPerResource(perResourceJSON)
 	if err != nil {

@@ -324,8 +324,6 @@ export function mountOverviewPage(container, { announce, onAddAgent }) {
 // This month's cloud spend
 // ---------------------------------------------------------------------------
 
-const PROVIDER_LABELS = { aws: "AWS", oci: "OCI" };
-
 /**
  * renderSpend shows this month's provider-reported spend, one figure per
  * billing currency, linking to the Costs page. Hidden when billing is off
@@ -357,7 +355,7 @@ export function renderSpend(host, billing) {
   const list = el("dl", { class: "cp-spend-totals" });
   for (const row of totals) {
     const item = el("div", { class: "cp-spend-total" });
-    item.append(el("dt", { class: "cp-spend-providers", text: row.providers.map((p) => PROVIDER_LABELS[p] || p.toUpperCase()).join(" + ") }));
+    item.append(el("dt", { class: "cp-spend-providers", text: row.providers.join(" + ") }));
     item.append(el("dd", { class: "cp-spend-value", text: formatUSD(row.mtd, row.currency, { taxNote: false }) }));
     item.append(el("dd", { class: "cp-muted-small", text: t("overview.spend_forecast", { amount: formatUSD(row.forecast, row.currency, { taxNote: false }) }) }));
     list.append(item);
@@ -366,7 +364,7 @@ export function renderSpend(host, billing) {
 
   const notes = [];
   if (attention.length > 0) {
-    notes.push(t("overview.spend_attention", { providers: attention.map((p) => PROVIDER_LABELS[p] || p.toUpperCase()).join(", ") }));
+    notes.push(t("overview.spend_attention", { providers: attention.join(", ") }));
   }
   if (stale) notes.push(t("costs.stale_data"));
   notes.push(t("costs.excl_tax"));

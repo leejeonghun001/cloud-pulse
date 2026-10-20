@@ -208,6 +208,7 @@ export function providerStatusHint(snap) {
  * `attention`, while one that was simply never set up is not.
  * @param {Array<Object>} snapshots models.CloudCostSnapshot JSON objects
  * @returns {{totals: Array<{currency: string, mtd: number, forecast: number, providers: string[]}>, attention: string[], stale: boolean}}
+ *   providers/attention hold account titles (see accountTitle).
  */
 export function spendSummary(snapshots) {
   /** @type {Map<string, {currency: string, mtd: number, forecast: number, providers: string[]}>} */
@@ -221,13 +222,42 @@ export function spendSummary(snapshots) {
       const row = byCurrency.get(currency) || { currency, mtd: 0, forecast: 0, providers: [] };
       row.mtd += Number(snap.mtd_cost) || 0;
       row.forecast += Number(snap.forecast_cost) || 0;
-      row.providers.push(snap.provider);
+      row.providers.push(accountTitle(snap));
       byCurrency.set(currency, row);
       stale ||= Boolean(snap.stale);
     }
     const setUp = hasFigures || Boolean(snap.source_host) || ["auth_failed", "permission_denied", "error"].includes(snap.status);
-    if (snap.status !== "ok" && setUp) attention.push(snap.provider);
+    if (snap.status !== "ok" && setUp) attention.push(accountTitle(snap));
   }
   const totals = [...byCurrency.values()].sort((a, b) => a.currency.localeCompare(b.currency));
   return { totals, attention, stale };
+}
+
+const PROVIDER_SHORT = { aws: "AWS", oci: "OCI" };
+
+/**
+ * shortAccountID abbreviates a long account identifier (an OCI tenancy
+ * OCID) to its last 8 characters; short ones (a 12-digit AWS ID) are
+ * kept whole.
+ * @param {string} id
+ * @returns {string}
+ */
+export function shortAccountID(id) {
+  return id.length <= 14 ? id : `…${id.slice(-8)}`;
+}
+
+/**
+ * accountTitle names a billing account for display: "OCI" for the hub's
+ * own account, "OCI · <label>" once labelled, else "OCI · <short id>"
+ * (or "OCI · <host>" while an agent hasn't reported its account yet).
+ * @param {{provider: string, account_id?: string, label?: string}} snap
+ * @returns {string}
+ */
+export function accountTitle(snap) {
+  const name = PROVIDER_SHORT[snap.provider] || String(snap.provider).toUpperCase();
+  const id = snap.account_id || "";
+  if (snap.label) return `${name} · ${snap.label}`;
+  if (!id) return name;
+  if (id.startsWith("host:")) return `${name} · ${id.slice(5)}`;
+  return `${name} · ${shortAccountID(id)}`;
 }

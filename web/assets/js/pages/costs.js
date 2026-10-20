@@ -8,7 +8,7 @@ import { showToast } from "../ui/toast.js";
 import { formatDuration } from "../core/format.js";
 import { getBilling, refreshBilling, ApiError, RateLimitError, localizeApiError } from "../core/api.js";
 import { formatUSD } from "../core/currency.js";
-import { freshnessViewModel, hostCostDisplayAmounts, providerStatusHint } from "../core/billing-view.js";
+import { freshnessViewModel, hostCostDisplayAmounts, providerStatusHint, accountTitle } from "../core/billing-view.js";
 import { t } from "../core/i18n.js";
 
 /** localUtcOffsetMinutes returns the browser's current UTC offset in
@@ -185,14 +185,21 @@ function providerCardsSection({ snapshots, intervalSeconds, signal, announce, on
 
   const grid = el("div", { class: "cp-costs-provider-grid" });
   for (const snap of snapshots) {
-    grid.append(isProviderUnconfigured(snap) ? providerSetupRow(snap) : providerCard(snap, intervalSeconds));
+    if (isProviderUnconfigured(snap)) {
+      // "Not set up" only when no agent reports this provider either.
+      if (!snapshots.some((other) => other.provider === snap.provider && other !== snap)) grid.append(providerSetupRow(snap));
+      continue;
+    }
+    grid.append(providerCard(snap, intervalSeconds));
   }
   section.append(grid);
   return section;
 }
 
+/** Only the hub's own, never-set-up account is "not set up"; an agent's
+ * account in that state gets a full card with its fix. */
 function isProviderUnconfigured(snap) {
-  return snap.status === "not_installed" || snap.status === "not_configured";
+  return !snap.account_id && !snap.source_host && (snap.status === "not_installed" || snap.status === "not_configured");
 }
 
 /** A missing optional billing integration is setup guidance, not an error card. */
@@ -215,7 +222,7 @@ function providerSetupRow(snap) {
 function providerCard(snap, intervalSeconds) {
   const card = el("div", { class: "cp-card cp-costs-provider-card" });
   const head = el("div", { class: "cp-costs-section-head" });
-  head.append(el("h3", { class: "cp-card-title", text: PROVIDER_NAMES[snap.provider] || snap.provider.toUpperCase() }));
+  head.append(el("h3", { class: "cp-card-title", text: accountTitle(snap) }));
   head.append(statusBadge(snap.status, snap.stale));
   card.append(head);
 
@@ -244,7 +251,8 @@ function providerCard(snap, intervalSeconds) {
   if (hint) card.append(el("p", { class: "cp-costs-status-hint", text: t(hint.key, hint.params) }));
 
   if (snap.source_host) {
-    notes.append(el("p", { class: "cp-muted-small", text: t("costs.collected_by_agent", { host: snap.source_host }) }));
+    const key = snap.provider === "aws" ? "costs.collected_by_agent_aws" : "costs.collected_by_agent";
+    notes.append(el("p", { class: "cp-muted-small", text: t(key, { host: snap.source_host }) }));
   } else if (snap.provider === "oci" && snap.status !== "ok") {
     notes.append(el("a", { class: "cp-back-link", attrs: { href: "#/settings/billing" }, text: t("costs.oci_agent_link") }));
   }

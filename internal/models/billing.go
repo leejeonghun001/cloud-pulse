@@ -97,6 +97,29 @@ type CloudCostSnapshot struct {
 	// instance principal), or empty when the hub's own collector
 	// produced it.
 	SourceHost string `json:"source_host,omitempty"`
+	// AccountID identifies which account of Provider this snapshot
+	// covers: the tenancy OCID for OCI, the 12-digit account ID for
+	// AWS. Agents report it with each snapshot; "" is the hub's own
+	// CLI-configured account. (Provider, AccountID) is the key.
+	AccountID string `json:"account_id"`
+	// Label is the user's display name for the account ("" until set
+	// in Settings → Billing). Never reported by agents.
+	Label string `json:"label,omitempty"`
+}
+
+// Key returns the snapshot's storage key, "provider" for the hub's own
+// account or "provider:accountID" for an agent-reported one — also the
+// scope ID a cost alert rule uses to target one account.
+func (s CloudCostSnapshot) Key() string {
+	return CloudCostKey(s.Provider, s.AccountID)
+}
+
+// CloudCostKey builds a CloudCostSnapshot.Key from its parts.
+func CloudCostKey(provider CloudBillingProvider, accountID string) string {
+	if accountID == "" {
+		return string(provider)
+	}
+	return string(provider) + ":" + accountID
 }
 
 // CloudCostStale reports whether a snapshot last successful at
@@ -156,6 +179,10 @@ type HostCost struct {
 	// Matched) with NetworkEstimate's MTD/Projected.
 	TotalMTD      float64 `json:"total_mtd"`
 	TotalForecast float64 `json:"total_forecast"`
+	// AccountID/AccountLabel name the account the cloud figures came
+	// from, empty when none applies.
+	AccountID    string `json:"account_id,omitempty"`
+	AccountLabel string `json:"account_label,omitempty"`
 }
 
 // BillingView is the response body for GET /api/v1/billing.

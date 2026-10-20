@@ -14,7 +14,9 @@ import (
 // hub.Store (kept as its own interface here so internal/billing has no
 // dependency on internal/hub, matching this repo's layering convention).
 type Store interface {
-	GetCloudCostSnapshot(ctx context.Context, provider models.CloudBillingProvider) (models.CloudCostSnapshot, error)
+	GetCloudCostSnapshot(ctx context.Context, provider models.CloudBillingProvider, accountID string) (models.CloudCostSnapshot, error)
+	ListCloudCostSnapshots(ctx context.Context) ([]models.CloudCostSnapshot, error)
+	DeleteCloudCostSnapshot(ctx context.Context, provider models.CloudBillingProvider, accountID string) error
 	SetCloudCostSnapshot(ctx context.Context, snap models.CloudCostSnapshot) error
 }
 
@@ -128,24 +130,8 @@ func (c *Collector) Run(ctx context.Context, interval models.BillingInterval) ([
 	return results, nil
 }
 
-// collectOCI runs the hub's own OCI collection, unless the hub has no
-// tenancy configured and the stored OCI snapshot was reported by an
-// agent (agent-side instance-principal collection): then the hub has
-// nothing of its own to contribute, and polling would only overwrite
-// the agent's status with not_configured. The skipped snapshot is
-// returned with Stale recomputed, but not re-persisted.
+// collectOCI runs the hub's own OCI collection.
 func (c *Collector) collectOCI(ctx context.Context, home string, now time.Time, interval models.BillingInterval) (models.CloudCostSnapshot, error) {
-	if c.opts.OCITenancyID == "" {
-		prev, err := c.store.GetCloudCostSnapshot(ctx, models.CloudBillingOCI)
-		if err != nil {
-			return models.CloudCostSnapshot{Provider: models.CloudBillingOCI, Status: models.CloudBillingError},
-				fmt.Errorf("billing: load previous snapshot: %w", err)
-		}
-		if prev.SourceHost != "" {
-			prev.Stale = models.CloudCostStale(prev.LastSuccessAt, now.Unix(), interval)
-			return prev, nil
-		}
-	}
 	snap := CollectOCI(ctx, c.opts.Runner, OCIConfig{
 		TenancyID: c.opts.OCITenancyID,
 		Env:       BuildOCIEnv(home, c.opts.PATH, c.opts.OCIConfigFile, c.opts.OCIProfile),
@@ -154,8 +140,36 @@ func (c *Collector) collectOCI(ctx context.Context, home string, now time.Time, 
 	return c.mergeAndPersist(ctx, snap, now, interval)
 }
 
-// mergeAndPersist is PersistSnapshot against c's own store.
+// mergeAndPersist persists the hub's own result for fresh.Provider
+// (account ""), unless the hub simply has nothing set up for it
+// (not_installed/not_configured, never successful) while agents report
+// that provider's accounts — then a hub row would only be clutter, and
+// an old never-successful one is removed.
 func (c *Collector) mergeAndPersist(ctx context.Context, fresh models.CloudCostSnapshot, now time.Time, interval models.BillingInterval) (models.CloudCostSnapshot, error) {
+	if fresh.Status == models.CloudBillingNotInstalled || fresh.Status == models.CloudBillingNotConfigured {
+		all, err := c.store.ListCloudCostSnapshots(ctx)
+		if err != nil {
+			return fresh, fmt.Errorf("billing: list snapshots: %w", err)
+		}
+		agentReported, hubEverOK := false, false
+		for _, s := range all {
+			if s.Provider != fresh.Provider {
+				continue
+			}
+			if s.AccountID != "" {
+				agentReported = true
+			} else if s.LastSuccessAt > 0 {
+				hubEverOK = true
+			}
+		}
+		if agentReported && !hubEverOK {
+			if err := c.store.DeleteCloudCostSnapshot(ctx, fresh.Provider, ""); err != nil {
+				return fresh, fmt.Errorf("billing: drop unused hub snapshot: %w", err)
+			}
+			fresh.LastAttemptAt = now.Unix()
+			return fresh, nil
+		}
+	}
 	return PersistSnapshot(ctx, c.store, fresh, now, interval)
 }
 
@@ -166,7 +180,7 @@ func (c *Collector) mergeAndPersist(ctx context.Context, fresh models.CloudCostS
 // recomputes Stale, persists the result, and returns it. Used by the
 // hub's own collector and by agent-reported snapshots alike.
 func PersistSnapshot(ctx context.Context, store Store, fresh models.CloudCostSnapshot, now time.Time, interval models.BillingInterval) (models.CloudCostSnapshot, error) {
-	prev, err := store.GetCloudCostSnapshot(ctx, fresh.Provider)
+	prev, err := store.GetCloudCostSnapshot(ctx, fresh.Provider, fresh.AccountID)
 	if err != nil {
 		return fresh, fmt.Errorf("billing: load previous snapshot: %w", err)
 	}

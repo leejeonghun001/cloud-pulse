@@ -79,6 +79,17 @@ type Agent struct {
 	// OCIBillingInterval is CP_OCI_BILLING_INTERVAL (default 1h, min
 	// 15m), the time between two agent-side Usage API queries.
 	OCIBillingInterval time.Duration
+	// AWSBilling is CP_AWS_BILLING: "off" (default) or "instance_role",
+	// which makes this agent query AWS Cost Explorer with its EC2
+	// instance's IAM role and report that account's cost. Mutually
+	// exclusive with OCIBilling: one agent reports one account.
+	AWSBilling string
+	// AWSCLI is CP_AWS_CLI, the `aws` executable path; empty looks it up
+	// on /usr/local/bin:/usr/bin:/bin.
+	AWSCLI string
+	// AWSBillingInterval is CP_AWS_BILLING_INTERVAL (default 12h, min
+	// 6h): Cost Explorer bills $0.01 per call, two calls per query.
+	AWSBillingInterval time.Duration
 }
 
 // DefaultAgentNetExclude returns the default network interface exclusion
@@ -102,7 +113,10 @@ func DefaultAgentNetExclude() []string {
 // auto), CP_REMOTE_UPDATE (off|on, default off), CP_CLOUD_METADATA
 // (auto|off, default auto), CP_OCI_BILLING (off|instance_principal,
 // default off), CP_OCI_TENANCY_ID (required when CP_OCI_BILLING is on),
-// CP_OCI_CLI, CP_OCI_BILLING_INTERVAL (default 1h, min 15m).
+// CP_OCI_CLI, CP_OCI_BILLING_INTERVAL (default 1h, min 15m),
+// CP_AWS_BILLING (off|instance_role, default off; not together with
+// CP_OCI_BILLING), CP_AWS_CLI, CP_AWS_BILLING_INTERVAL (default 12h,
+// min 6h).
 func LoadAgent(l LookupFunc, hostname string) (Agent, error) {
 	cfg := Agent{}
 
@@ -174,6 +188,9 @@ func LoadAgent(l LookupFunc, hostname string) (Agent, error) {
 	cfg.CloudMetadata = cloudMetadata
 
 	if err := loadOCIBilling(l, &cfg); err != nil {
+		return Agent{}, err
+	}
+	if err := loadAWSBilling(l, &cfg); err != nil {
 		return Agent{}, err
 	}
 
@@ -345,4 +362,32 @@ func loadEgressLimitBytes(l LookupFunc) (*uint64, error) {
 	}
 	bytes := uint64(gb * float64(models.GiB))
 	return &bytes, nil
+}
+
+// loadAWSBilling reads CP_AWS_BILLING and, when it is enabled, the CLI
+// path and interval settings it depends on.
+func loadAWSBilling(l LookupFunc, cfg *Agent) error {
+	mode := strings.ToLower(getString(l, "CP_AWS_BILLING", "off"))
+	switch mode {
+	case "off", "instance_role":
+	default:
+		return fmt.Errorf("config: CP_AWS_BILLING must be one of off|instance_role, got %q", mode)
+	}
+	cfg.AWSBilling = mode
+	if mode == "off" {
+		return nil
+	}
+	if cfg.OCIBilling != "off" {
+		return fmt.Errorf("config: CP_AWS_BILLING and CP_OCI_BILLING can't both be on; an agent reports the account of the cloud it runs in")
+	}
+	cfg.AWSCLI = strings.TrimSpace(getString(l, "CP_AWS_CLI", ""))
+	if cfg.AWSCLI != "" && !filepath.IsAbs(cfg.AWSCLI) {
+		return fmt.Errorf("config: CP_AWS_CLI must be an absolute path, got %q", cfg.AWSCLI)
+	}
+	interval, err := getDuration(l, "CP_AWS_BILLING_INTERVAL", 12*time.Hour, 6*time.Hour)
+	if err != nil {
+		return err
+	}
+	cfg.AWSBillingInterval = interval
+	return nil
 }

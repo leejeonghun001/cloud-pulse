@@ -594,6 +594,24 @@ export function refreshBilling(signal) {
   return apiFetch("/api/v1/billing/refresh", { method: "POST", signal });
 }
 
+/** setBillingAccountLabel names a billing account (admin): PUT
+ * /api/v1/billing/accounts/label. An empty label clears it. */
+export function setBillingAccountLabel(provider, accountID, label, signal) {
+  return apiFetch("/api/v1/billing/accounts/label", {
+    method: "PUT",
+    signal,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider, account_id: accountID, label }),
+  });
+}
+
+/** deleteBillingAccount removes a billing account's stored figures
+ * (admin); an agent still reporting it recreates it. */
+export function deleteBillingAccount(provider, accountID, signal) {
+  const q = new URLSearchParams({ provider, account_id: accountID });
+  return apiFetch(`/api/v1/billing/accounts?${q}`, { method: "DELETE", signal });
+}
+
 /**
  * setBillingInterval calls PUT /api/v1/settings/billing/interval
  * (admin). interval must be "6h", "12h", or "24h".

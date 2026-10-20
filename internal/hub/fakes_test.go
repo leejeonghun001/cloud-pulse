@@ -37,7 +37,7 @@ type fakeStore struct {
 	inventories  map[string]models.Inventory         // key: hostID
 	cloudNetwork map[string]models.CloudNetworkUsage // key: hostID
 
-	cloudCostSnapshots map[models.CloudBillingProvider]models.CloudCostSnapshot
+	cloudCostSnapshots map[string]models.CloudCostSnapshot // key: CloudCostSnapshot.Key()
 
 	updateJobs map[int64]models.UpdateJob
 	nextJobID  int64
@@ -81,7 +81,7 @@ func newFakeStore() *fakeStore {
 		alertEvents:        make(map[int64]models.AlertEvent),
 		inventories:        make(map[string]models.Inventory),
 		cloudNetwork:       make(map[string]models.CloudNetworkUsage),
-		cloudCostSnapshots: make(map[models.CloudBillingProvider]models.CloudCostSnapshot),
+		cloudCostSnapshots: make(map[string]models.CloudCostSnapshot),
 		updateJobs:         make(map[int64]models.UpdateJob),
 		pricingPlans:       make(map[int64]models.PricingPlan),
 		hostPricing:        make(map[string]models.HostPricing),
@@ -757,12 +757,12 @@ func (f *fakeStore) SetHostCloudNetwork(_ context.Context, hostID string, u mode
 
 // --- Cloud billing (SPEC-v0.6 §1) ---
 
-func (f *fakeStore) GetCloudCostSnapshot(_ context.Context, provider models.CloudBillingProvider) (models.CloudCostSnapshot, error) {
+func (f *fakeStore) GetCloudCostSnapshot(_ context.Context, provider models.CloudBillingProvider, accountID string) (models.CloudCostSnapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	snap, ok := f.cloudCostSnapshots[provider]
+	snap, ok := f.cloudCostSnapshots[models.CloudCostKey(provider, accountID)]
 	if !ok {
-		return models.CloudCostSnapshot{Provider: provider, Status: models.CloudBillingNotConfigured}, nil
+		return models.CloudCostSnapshot{Provider: provider, AccountID: accountID, Status: models.CloudBillingNotConfigured}, nil
 	}
 	return snap, nil
 }
@@ -774,14 +774,39 @@ func (f *fakeStore) ListCloudCostSnapshots(_ context.Context) ([]models.CloudCos
 	for _, snap := range f.cloudCostSnapshots {
 		out = append(out, snap)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Provider < out[j].Provider })
+	sort.Slice(out, func(i, j int) bool { return out[i].Key() < out[j].Key() })
 	return out, nil
 }
 
 func (f *fakeStore) SetCloudCostSnapshot(_ context.Context, snap models.CloudCostSnapshot) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.cloudCostSnapshots[snap.Provider] = snap
+	if prev, ok := f.cloudCostSnapshots[snap.Key()]; ok {
+		snap.Label = prev.Label
+	} else {
+		snap.Label = ""
+	}
+	f.cloudCostSnapshots[snap.Key()] = snap
+	return nil
+}
+
+func (f *fakeStore) SetCloudCostLabel(_ context.Context, provider models.CloudBillingProvider, accountID, label string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := models.CloudCostKey(provider, accountID)
+	snap, ok := f.cloudCostSnapshots[key]
+	if !ok {
+		return models.ErrNotFound
+	}
+	snap.Label = label
+	f.cloudCostSnapshots[key] = snap
+	return nil
+}
+
+func (f *fakeStore) DeleteCloudCostSnapshot(_ context.Context, provider models.CloudBillingProvider, accountID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.cloudCostSnapshots, models.CloudCostKey(provider, accountID))
 	return nil
 }
 

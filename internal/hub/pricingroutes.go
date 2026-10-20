@@ -488,7 +488,7 @@ func (s *Server) NetworkEstimatorFor(ctx context.Context) billing.NetworkEstimat
 // HostSummary.Cost unset, matching HostCost's "billing disabled"
 // omitempty contract (see internal/models/host.go's doc comment on
 // HostSummary.Cost).
-func (s *Server) hostCostInputs(ctx context.Context) (map[models.CloudBillingProvider]models.CloudCostSnapshot, billing.NetworkEstimator) {
+func (s *Server) hostCostInputs(ctx context.Context) (map[models.CloudBillingProvider][]models.CloudCostSnapshot, billing.NetworkEstimator) {
 	if s.opts.Billing == nil {
 		return nil, billing.ZeroNetworkEstimator
 	}
@@ -507,7 +507,7 @@ func (s *Server) hostCostInputs(ctx context.Context) (map[models.CloudBillingPro
 // identical whether read from GET /api/v1/hosts, GET
 // /api/v1/hosts/{id}, or the Costs page. Leaves summary.Cost unset
 // (nil) when billing is disabled, matching its omitempty contract.
-func (s *Server) attachHostCost(summary *models.HostSummary, costByProvider map[models.CloudBillingProvider]models.CloudCostSnapshot, estimateNetwork billing.NetworkEstimator) {
+func (s *Server) attachHostCost(summary *models.HostSummary, costByProvider map[models.CloudBillingProvider][]models.CloudCostSnapshot, estimateNetwork billing.NetworkEstimator) {
 	if costByProvider == nil {
 		return
 	}

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -44,6 +46,7 @@ func TestIngest_AgentCloudCostPersisted(t *testing.T) {
 	t.Parallel()
 	store, now := postAgentCloudCost(t, true, models.CloudCostSnapshot{
 		Provider:       models.CloudBillingOCI,
+		AccountID:      "ocid1.tenancy.oc1..t",
 		Status:         models.CloudBillingOK,
 		Currency:       "USD",
 		MTDCost:        12.5,
@@ -55,7 +58,7 @@ func TestIngest_AgentCloudCostPersisted(t *testing.T) {
 		Stale:          true,
 	})
 
-	got := store.cloudCostSnapshots[models.CloudBillingOCI]
+	got := store.cloudCostSnapshots["oci:ocid1.tenancy.oc1..t"]
 	if got.SourceHost != "oci-box" {
 		t.Errorf("SourceHost = %q, want the reporting host, not the agent's claim", got.SourceHost)
 	}
@@ -70,10 +73,11 @@ func TestIngest_AgentCloudCostPersisted(t *testing.T) {
 func TestIngest_AgentCloudCostRejected(t *testing.T) {
 	t.Parallel()
 	cases := map[string]models.CloudCostSnapshot{
-		"aws provider":   {Provider: models.CloudBillingAWS, Status: models.CloudBillingOK},
-		"unknown status": {Provider: models.CloudBillingOCI, Status: "great"},
-		"huge cost":      {Provider: models.CloudBillingOCI, Status: models.CloudBillingOK, MTDCost: 1e15},
-		"empty resource": {Provider: models.CloudBillingOCI, Status: models.CloudBillingOK, PerResource: map[string]float64{"": 1}},
+		"aws bad account": {Provider: models.CloudBillingAWS, AccountID: "12345", Status: models.CloudBillingOK},
+		"bad tenancy":     {Provider: models.CloudBillingOCI, AccountID: "ocid1.compartment.oc1..x", Status: models.CloudBillingOK},
+		"unknown status":  {Provider: models.CloudBillingOCI, Status: "great"},
+		"huge cost":       {Provider: models.CloudBillingOCI, Status: models.CloudBillingOK, MTDCost: 1e15},
+		"empty resource":  {Provider: models.CloudBillingOCI, Status: models.CloudBillingOK, PerResource: map[string]float64{"": 1}},
 	}
 	for name, snap := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -125,7 +129,7 @@ func TestIngest_AgentCloudCostEvaluatesCostAlerts(t *testing.T) {
 	opts.Alerting = engine
 	opts.Billing = &BillingRuntime{Collector: billing.New(store, billing.Options{Runner: &noopRunner{}, DataDir: t.TempDir()})}
 	// A provider that never collected must not reach the evaluator.
-	store.cloudCostSnapshots[models.CloudBillingAWS] = models.CloudCostSnapshot{Provider: models.CloudBillingAWS, Status: models.CloudBillingNotInstalled}
+	store.cloudCostSnapshots["aws"] = models.CloudCostSnapshot{Provider: models.CloudBillingAWS, Status: models.CloudBillingNotInstalled}
 	s := newTestServer(t, opts, store)
 
 	body, err := json.Marshal(models.AgentReport{
@@ -148,7 +152,7 @@ func TestIngest_AgentCloudCostEvaluatesCostAlerts(t *testing.T) {
 	if len(engine.calls) != 1 {
 		t.Fatalf("EvaluateCost calls = %d, want 1", len(engine.calls))
 	}
-	want := []alerting.CloudCostInput{{Provider: models.CloudBillingOCI, Currency: "SGD", MTD: 3, Forecast: 6}}
+	want := []alerting.CloudCostInput{{Provider: models.CloudBillingOCI, AccountID: "host:oci-box", Currency: "SGD", MTD: 3, Forecast: 6}}
 	if got := engine.calls[0]; len(got) != 1 || got[0] != want[0] {
 		t.Errorf("EvaluateCost providers = %+v, want %+v", got, want)
 	}
@@ -222,7 +226,7 @@ func TestBillingRefresh_RelaysToAgentOnItsNextReport(t *testing.T) {
 	opts := testOptions()
 	opts.Now = fixedNow(now)
 	opts.Billing = &BillingRuntime{Collector: billing.New(store, billing.Options{Runner: &noopRunner{}, DataDir: t.TempDir()}), Now: func() time.Time { return now }}
-	store.cloudCostSnapshots[models.CloudBillingOCI] = models.CloudCostSnapshot{Provider: models.CloudBillingOCI, Status: models.CloudBillingOK, SourceHost: "oci-box", LastSuccessAt: 1}
+	store.cloudCostSnapshots["oci:ocid1.tenancy.oc1..t"] = models.CloudCostSnapshot{Provider: models.CloudBillingOCI, AccountID: "ocid1.tenancy.oc1..t", Status: models.CloudBillingOK, SourceHost: "oci-box", LastSuccessAt: 1}
 	s := newTestServer(t, opts, store)
 
 	refresh := func() *httptest.ResponseRecorder {
@@ -252,5 +256,102 @@ func TestBillingRefresh_RelaysToAgentOnItsNextReport(t *testing.T) {
 	// Both the hub (10 min) and this agent (2 min) were just refreshed.
 	if rec := refresh(); rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("immediate second refresh status = %d, want 429", rec.Code)
+	}
+}
+
+func TestIngest_AgentAccountsStaySeparateAndPlaceholderIsReplaced(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	opts := testOptions()
+	opts.Now = fixedNow(now)
+	opts.Billing = &BillingRuntime{Collector: billing.New(store, billing.Options{Runner: &noopRunner{}, DataDir: t.TempDir()})}
+	s := newTestServer(t, opts, store)
+	post := func(host string, snap models.CloudCostSnapshot) {
+		body, _ := json.Marshal(models.AgentReport{Host: sampleHostInfo(host), Samples: []models.Sample{{Timestamp: now.Unix()}}, CloudCost: &snap})
+		if rec := doRequest(t, s.Handler(), http.MethodPost, "/api/v1/agent/report", "203.0.113.1:1234", opts.AgentToken, body); rec.Code != http.StatusOK {
+			t.Fatalf("status = %d", rec.Code)
+		}
+	}
+
+	// Pre-upgrade agent: no account ID yet.
+	post("box-a", models.CloudCostSnapshot{Provider: models.CloudBillingOCI, Status: models.CloudBillingOK, Currency: "SGD"})
+	if _, ok := store.cloudCostSnapshots["oci:host:box-a"]; !ok {
+		t.Fatalf("snapshots = %v, want a host: placeholder for the legacy agent", store.cloudCostSnapshots)
+	}
+	// Upgraded: real tenancy replaces the placeholder.
+	post("box-a", models.CloudCostSnapshot{Provider: models.CloudBillingOCI, AccountID: "ocid1.tenancy.oc1..a", Status: models.CloudBillingOK, Currency: "SGD"})
+	// A later report without the account (a failed lookup) must not
+	// displace the real one.
+	post("box-a", models.CloudCostSnapshot{Provider: models.CloudBillingOCI, Status: models.CloudBillingError})
+	delete(store.cloudCostSnapshots, "oci:host:box-a")
+	// A second tenancy from another agent, and an AWS account.
+	post("box-b", models.CloudCostSnapshot{Provider: models.CloudBillingOCI, AccountID: "ocid1.tenancy.oc1..b", Status: models.CloudBillingOK, Currency: "USD"})
+	post("ec2-1", models.CloudCostSnapshot{Provider: models.CloudBillingAWS, AccountID: "123456789012", Status: models.CloudBillingOK, Currency: "USD"})
+
+	keys := make([]string, 0, len(store.cloudCostSnapshots))
+	for k := range store.cloudCostSnapshots {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	want := []string{"aws:123456789012", "oci:ocid1.tenancy.oc1..a", "oci:ocid1.tenancy.oc1..b"}
+	if strings.Join(keys, ",") != strings.Join(want, ",") {
+		t.Errorf("accounts = %v, want %v", keys, want)
+	}
+}
+
+func TestBillingAccounts_LabelAndDelete(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	opts := testOptions()
+	opts.Billing = &BillingRuntime{Collector: billing.New(store, billing.Options{Runner: &noopRunner{}, DataDir: t.TempDir()})}
+	store.cloudCostSnapshots["oci:ocid1.tenancy.oc1..a"] = models.CloudCostSnapshot{Provider: models.CloudBillingOCI, AccountID: "ocid1.tenancy.oc1..a"}
+	s := newTestServer(t, opts, store)
+
+	body := []byte(`{"provider":"oci","account_id":"ocid1.tenancy.oc1..a","label":"  업무 테넌시  "}`)
+	if rec := doRequest(t, s.Handler(), http.MethodPut, "/api/v1/billing/accounts/label", "127.0.0.1:1", testUIToken, body); rec.Code != http.StatusOK {
+		t.Fatalf("label status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := store.cloudCostSnapshots["oci:ocid1.tenancy.oc1..a"].Label; got != "업무 테넌시" {
+		t.Errorf("label = %q, want trimmed", got)
+	}
+	if rec := doRequest(t, s.Handler(), http.MethodPut, "/api/v1/billing/accounts/label", "127.0.0.1:1", testUIToken, []byte(`{"provider":"oci","account_id":"missing","label":"x"}`)); rec.Code != http.StatusNotFound {
+		t.Errorf("label on missing account status = %d, want 404", rec.Code)
+	}
+	if rec := doRequest(t, s.Handler(), http.MethodDelete, "/api/v1/billing/accounts?provider=oci&account_id=ocid1.tenancy.oc1..a", "127.0.0.1:1", testUIToken, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d", rec.Code)
+	}
+	if len(store.cloudCostSnapshots) != 0 {
+		t.Errorf("snapshots = %v, want the account deleted", store.cloudCostSnapshots)
+	}
+}
+
+func TestEvaluateCostAlerts_ClosesAlertsOfRemovedAccounts(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	opts := testOptions()
+	opts.Now = fixedNow(now)
+	opts.Alerting = &fakeCostAlertEngine{}
+	opts.Billing = &BillingRuntime{Collector: billing.New(store, billing.Options{Runner: &noopRunner{}, DataDir: t.TempDir()})}
+	store.cloudCostSnapshots["oci:ocid1.tenancy.oc1..a"] = models.CloudCostSnapshot{Provider: models.CloudBillingOCI, AccountID: "ocid1.tenancy.oc1..a", LastSuccessAt: 1}
+	s := newTestServer(t, opts, store)
+
+	orphan, err := store.CreateAlertEvent(t.Context(), models.AlertEvent{RuleID: 4, HostID: "oci:host:old-box", Metric: models.AlertMetricCostMTD, State: models.AlertEventFiring, StartedAt: 1})
+	if err != nil {
+		t.Fatalf("CreateAlertEvent: %v", err)
+	}
+	live, err := store.CreateAlertEvent(t.Context(), models.AlertEvent{RuleID: 4, HostID: "oci:ocid1.tenancy.oc1..a", Metric: models.AlertMetricCostMTD, State: models.AlertEventFiring, StartedAt: 1})
+	if err != nil {
+		t.Fatalf("CreateAlertEvent: %v", err)
+	}
+
+	s.evaluateCostAlerts(t.Context(), now)
+
+	if got, _ := store.GetAlertEvent(t.Context(), orphan.ID); got.State != models.AlertEventResolved || got.ResolvedAt != now.Unix() {
+		t.Errorf("orphan event = %+v, want resolved now", got)
+	}
+	if got, _ := store.GetAlertEvent(t.Context(), live.ID); got.State != models.AlertEventFiring {
+		t.Errorf("live account's event = %+v, want still firing", got)
 	}
 }

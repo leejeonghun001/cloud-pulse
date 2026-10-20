@@ -48,6 +48,23 @@
   .cp-oci-guide-copy { @apply shrink-0; }
   .cp-oci-guide-copy-status:empty { @apply hidden; }
 
+  .cp-billing-account-list { @apply flex flex-col gap-3 list-none p-0 m-0; }
+  .cp-billing-account {
+    @apply flex flex-col gap-1 rounded-[var(--radius-cp-md)] bg-[rgb(var(--muted-surface))] p-3 min-w-0;
+  }
+  .cp-billing-account-head { @apply flex flex-wrap gap-2 items-center; }
+  .cp-billing-account-title {
+    @apply text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-semibold)] text-[rgb(var(--text))];
+    overflow-wrap: anywhere;
+  }
+  .cp-billing-account-meta { overflow-wrap: anywhere; }
+  .cp-billing-account-hint {
+    @apply m-0 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] text-[rgb(var(--status-warning-fg))];
+    overflow-wrap: anywhere;
+  }
+  .cp-billing-account-actions { @apply flex flex-wrap items-end gap-2 pt-1; }
+  .cp-billing-account-label-field { @apply flex-1 min-w-[12rem] max-w-sm; }
+
   .cp-billing-provider-status-list {
     @apply flex flex-col gap-2 list-none p-0 m-0;
   }

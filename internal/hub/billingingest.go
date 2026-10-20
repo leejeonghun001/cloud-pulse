@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"regexp"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -38,6 +39,11 @@ func (s *Server) ingestAgentCloudCost(ctx context.Context, hostID string, snap m
 		return
 	}
 	clean.SourceHost = hostID
+	if clean.AccountID == "" {
+		// The agent doesn't know (or, if older, doesn't say) its account;
+		// keep it apart from every other account until it does.
+		clean.AccountID = "host:" + hostID
+	}
 	// Not serialized with Billing.runMu: a hub CLI run can hold it for
 	// minutes, and this runs inside the agent's report request. The
 	// upsert is atomic; with the hub's own OCI collection configured too
@@ -47,15 +53,41 @@ func (s *Server) ingestAgentCloudCost(ctx context.Context, hostID string, snap m
 		s.logger.Error("ingest: persist agent cloud cost failed", "host_id", hostID, "error", err)
 		return
 	}
+	s.dropOtherAgentAccounts(ctx, hostID, clean)
 	s.evaluateCostAlerts(ctx, now)
 }
 
+// dropOtherAgentAccounts removes this host's earlier rows for the same
+// provider under another account — its pre-upgrade "host:" placeholder,
+// or an account it no longer reports after its config changed. An
+// account other agents also report is left to them.
+func (s *Server) dropOtherAgentAccounts(ctx context.Context, hostID string, current models.CloudCostSnapshot) {
+	if strings.HasPrefix(current.AccountID, "host:") {
+		// A placeholder (account not known this time, e.g. a failed
+		// lookup after a restart) must never displace a real account.
+		return
+	}
+	all, err := s.store.ListCloudCostSnapshots(ctx)
+	if err != nil {
+		s.logger.Error("ingest: list cost accounts failed", "error", err)
+		return
+	}
+	for _, snap := range all {
+		if snap.SourceHost != hostID || snap.Provider != current.Provider || snap.AccountID == current.AccountID || snap.AccountID == "" {
+			continue
+		}
+		if err := s.store.DeleteCloudCostSnapshot(ctx, snap.Provider, snap.AccountID); err != nil {
+			s.logger.Error("ingest: drop stale cost account failed", "account", snap.Key(), "error", err)
+		}
+	}
+}
+
 // sanitizeAgentCloudCost validates an agent-reported snapshot and
-// returns only the fields an agent may set; timestamps and staleness
-// are the hub's to assign. Only OCI is accepted: it is the one provider
-// with agent-side collection.
+// returns only the fields an agent may set; timestamps, staleness,
+// source and label are the hub's to assign. OCI and AWS — the providers
+// with agent-side collection — are accepted.
 func sanitizeAgentCloudCost(snap models.CloudCostSnapshot) (models.CloudCostSnapshot, bool) {
-	if snap.Provider != models.CloudBillingOCI {
+	if !validAgentAccount(snap.Provider, snap.AccountID) {
 		return models.CloudCostSnapshot{}, false
 	}
 	if !validCloudStatus(snap.Status) {
@@ -80,6 +112,7 @@ func sanitizeAgentCloudCost(snap models.CloudCostSnapshot) (models.CloudCostSnap
 	detail := truncateUTF8(snap.StatusDetail, maxAgentCostDetail)
 	return models.CloudCostSnapshot{
 		Provider:       snap.Provider,
+		AccountID:      snap.AccountID,
 		Status:         snap.Status,
 		StatusDetail:   detail,
 		Currency:       snap.Currency,
@@ -167,4 +200,23 @@ func truncateUTF8(s string, max int) string {
 		s = s[:len(s)-1]
 	}
 	return s
+}
+
+var (
+	awsAccountPattern = regexp.MustCompile(`^\d{12}$`)
+	ociTenancyPattern = regexp.MustCompile(`^ocid1\.tenancy\.[a-z0-9]+\.[a-z0-9-]*\.[a-z0-9]{1,128}$`)
+)
+
+// validAgentAccount checks an agent-reported (provider, account): an
+// OCI tenancy OCID or a 12-digit AWS account ID — or "" when the agent
+// doesn't know it (an OCI agent older than account IDs, or an AWS agent
+// whose account lookup itself failed), filed under the host instead.
+func validAgentAccount(provider models.CloudBillingProvider, accountID string) bool {
+	switch provider {
+	case models.CloudBillingOCI:
+		return accountID == "" || ociTenancyPattern.MatchString(accountID)
+	case models.CloudBillingAWS:
+		return accountID == "" || awsAccountPattern.MatchString(accountID)
+	}
+	return false
 }

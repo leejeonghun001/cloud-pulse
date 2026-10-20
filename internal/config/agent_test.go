@@ -688,3 +688,29 @@ func TestLoadAgent_OCIBilling(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadAgent_AWSBilling(t *testing.T) {
+	t.Parallel()
+	env := validAgentEnv()
+	env["CP_AWS_BILLING"] = "instance_role"
+	cfg, err := LoadAgent(mapLookup(env), "h")
+	if err != nil {
+		t.Fatalf("LoadAgent: %v", err)
+	}
+	if cfg.AWSBilling != "instance_role" || cfg.AWSBillingInterval != 12*time.Hour {
+		t.Errorf("cfg = %q %s, want instance_role every 12h", cfg.AWSBilling, cfg.AWSBillingInterval)
+	}
+	for _, extra := range []map[string]string{
+		{"CP_AWS_BILLING": "keys"},
+		{"CP_AWS_BILLING": "instance_role", "CP_AWS_BILLING_INTERVAL": "1h"},
+		{"CP_AWS_BILLING": "instance_role", "CP_OCI_BILLING": "instance_principal", "CP_OCI_TENANCY_ID": "ocid1.tenancy.oc1..a"},
+	} {
+		e := validAgentEnv()
+		for k, v := range extra {
+			e[k] = v
+		}
+		if _, err := LoadAgent(mapLookup(e), "h"); err == nil {
+			t.Errorf("LoadAgent(%v) succeeded, want an error", extra)
+		}
+	}
+}

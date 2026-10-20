@@ -471,8 +471,8 @@ func validateRuleRequest(req ruleRequest) (models.AlertRule, map[string]string) 
 				details["host_id"] = "must be a storage account id (decimal integer)"
 			}
 		} else if isCostMetric(metric) {
-			if req.HostID != string(models.CloudBillingAWS) && req.HostID != string(models.CloudBillingOCI) {
-				details["host_id"] = "must be a billing provider (aws, oci) or empty for every provider"
+			if !validCostScope(req.HostID) {
+				details["host_id"] = "must be a billing provider (aws, oci), one account (provider:account), or empty for every account"
 			}
 		} else if !models.ValidHostID(req.HostID) {
 			details["host_id"] = "invalid host id"
@@ -507,6 +507,21 @@ func validateRuleRequest(req ruleRequest) (models.AlertRule, map[string]string) 
 		NotifyResolved: req.NotifyResolved,
 		ChannelIDs:     channelIDs,
 	}, details
+}
+
+// validCostScope checks a cost rule's scope: a provider, or one of its
+// accounts as "provider:account" (a hub-reported account's key is the
+// bare provider).
+func validCostScope(scope string) bool {
+	provider, account, hasAccount := strings.Cut(scope, ":")
+	p := models.CloudBillingProvider(provider)
+	if p != models.CloudBillingAWS && p != models.CloudBillingOCI {
+		return false
+	}
+	if !hasAccount {
+		return true
+	}
+	return (account != "" && validAgentAccount(p, account)) || strings.HasPrefix(account, "host:")
 }
 
 // isCostMetric reports whether metric is a provider-cost budget metric,
@@ -680,14 +695,14 @@ func (s *Server) previewCostRule(w http.ResponseWriter, r *http.Request, rule mo
 	}
 	result := make(map[string]bool)
 	for _, snap := range snapshots {
-		if snap.LastSuccessAt == 0 || (rule.HostID != "" && rule.HostID != string(snap.Provider)) {
+		if snap.LastSuccessAt == 0 || !alerting.CostRuleApplies(rule.HostID, snap.Provider, snap.AccountID) {
 			continue
 		}
 		value := snap.MTDCost
 		if rule.Metric == models.AlertMetricCostForecast {
 			value = snap.ForecastCost
 		}
-		result[string(snap.Provider)] = value > rule.Threshold || (rule.Operator == models.AlertOperatorGTE && value == rule.Threshold)
+		result[snap.Key()] = value > rule.Threshold || (rule.Operator == models.AlertOperatorGTE && value == rule.Threshold)
 	}
 	writeJSON(w, http.StatusOK, result)
 }

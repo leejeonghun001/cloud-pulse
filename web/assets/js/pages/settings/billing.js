@@ -8,7 +8,6 @@ import { selectField } from "../../ui/select.js";
 import { createDialog, buildDialogActions } from "../../ui/dialog.js";
 import { formatUSD } from "../../core/currency.js";
 import { formatRelativeTimeFromUnixSeconds } from "../../core/format.js";
-import { freshnessViewModel } from "../../core/billing-view.js";
 import {
   getBilling,
   setBillingInterval,
@@ -24,6 +23,8 @@ import {
 } from "../../core/api.js";
 import { t } from "../../core/i18n.js";
 import { ociAgentGuideCard } from "./oci-agent-guide.js";
+import { awsAgentGuideCard } from "./aws-agent-guide.js";
+import { accountsCard } from "./billing-accounts.js";
 
 /** INTERVAL_API_COST_HINTS shows the AWS Cost Explorer API cost
  * estimate for each poll interval (SPEC-v0.6 §1: 24h ≈ $0.6/mo, 12h ≈
@@ -80,7 +81,9 @@ export function mountBillingSection(container, { announce }) {
     controls.append(intervalCard({ billing, signal: controller.signal, announce, onChanged: refresh, feedback }));
     controls.append(currencyCard({ currency, signal: controller.signal, announce, onChanged: refresh, feedback }));
     root.append(controls);
-    root.append(ociAgentGuideCard({ oci: (billing.snapshots || []).find((snap) => snap.provider === "oci") }));
+    root.append(accountsCard({ billing, signal: controller.signal, announce, onChanged: refresh }));
+    root.append(ociAgentGuideCard({ oci: (billing.snapshots || []).find((snap) => snap.provider === "oci" && snap.source_host) }));
+    root.append(awsAgentGuideCard({ aws: (billing.snapshots || []).find((snap) => snap.provider === "aws" && snap.source_host) }));
     root.append(plansCard({ plans, signal: controller.signal, announce, onChanged: refresh }));
     root.append(auditLogCard({ signal: controller.signal }));
     if (feedback?.id) document.getElementById(feedback.id)?.focus();
@@ -135,39 +138,7 @@ function intervalCard({ billing, signal, announce, onChanged, feedback }) {
   });
   form.append(el("div", { class: "cp-billing-actions", children: [saveBtn, status] }));
   card.append(form);
-  const providers = el("div", { class: "cp-billing-providers" });
-  providers.append(el("h3", { class: "cp-label", text: t("billing.provider_status_title") }));
-
-  if ((billing.snapshots || []).length > 0) {
-    const list = el("ul", { class: "cp-billing-provider-status-list", attrs: { role: "list" } });
-    for (const snap of billing.snapshots) {
-      const item = el("li", { class: "cp-billing-provider-status-row" });
-      const statusHead = el("div", { class: "cp-billing-provider-head" });
-      statusHead.append(el("strong", { text: snap.provider.toUpperCase() }));
-      const tone = snap.status === "ok" ? "cp-chip-ok" : ["auth_failed", "permission_denied", "error"].includes(snap.status) ? "cp-chip-critical" : "cp-chip-other";
-      statusHead.append(el("span", { class: `cp-chip ${tone}`, text: providerStatusLabel(snap.status) }));
-      if (snap.stale) {
-        statusHead.append(el("span", { class: "cp-chip cp-chip-warning", text: t("costs.stale_data") }));
-      }
-      item.append(statusHead);
-      if (snap.status_detail) item.append(el("span", { class: "cp-muted-small", text: snap.status_detail }));
-      if (snap.source_host) item.append(el("span", { class: "cp-muted-small", text: t("billing.oci_agent_active", { host: snap.source_host }) }));
-      const vm = freshnessViewModel({
-        status: snap.status,
-        lastSuccessAt: snap.last_success_at || 0,
-        nowUnixSeconds: Math.floor(Date.now() / 1000),
-        intervalSeconds: billing.interval_seconds || 0,
-        utcOffsetMinutes: -new Date().getTimezoneOffset(),
-      });
-      item.append(el("span", { class: "cp-muted-small", text: vm.text }));
-      list.append(item);
-    }
-    providers.append(list);
-  } else {
-    providers.append(el("p", { class: "cp-muted-small", text: t("billing.billing_disabled_note") }));
-  }
-  providers.append(el("p", { class: "cp-muted-small", text: t("billing.provider_setup_note") }));
-  card.append(providers);
+  card.append(el("p", { class: "cp-muted-small", text: t("billing.provider_setup_note") }));
 
   return card;
 }

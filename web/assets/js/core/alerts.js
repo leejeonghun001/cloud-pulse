@@ -3,6 +3,7 @@
 // sentence, and rule-form validation. No DOM access here so this module
 // is fully covered by node --test without a browser.
 import { t } from "./i18n.js";
+import { accountTitle } from "./billing-view.js";
 
 /**
  * METRICS lists every models.AlertMetric value with display metadata:
@@ -248,10 +249,13 @@ export function hostScopeLabel(hostID, hostnameByID) {
  * @param {(id: string) => string|undefined} [storageAccountNameByID]
  * @returns {string}
  */
-export function scopeLabel(metric, scopeID, hostnameByID, storageAccountNameByID) {
+export function scopeLabel(metric, scopeID, hostnameByID, storageAccountNameByID, costAccountNameByID) {
   if (isCostScopedMetric(metric)) {
     if (!scopeID) return t("alerts.scope_any_provider");
-    return COST_PROVIDERS.find((p) => p.value === scopeID)?.name || scopeID;
+    const [provider, ...rest] = scopeID.split(":");
+    if (rest.length > 0) return costAccountNameByID?.(scopeID) || accountTitle({ provider, account_id: rest.join(":") });
+    const name = COST_PROVIDERS.find((p) => p.value === provider)?.name || provider;
+    return t("alerts.scope_all_provider_accounts", { provider: name });
   }
   if (isStorageScopedMetric(metric)) {
     if (!scopeID) return t("alerts.scope_any_storage_account");

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -29,7 +30,7 @@ func TestCloudCostSnapshot_GetDefaultsToNotConfigured(t *testing.T) {
 	db := openTestDBForV06(t)
 	ctx := context.Background()
 
-	snap, err := db.GetCloudCostSnapshot(ctx, models.CloudBillingAWS)
+	snap, err := db.GetCloudCostSnapshot(ctx, models.CloudBillingAWS, "")
 	if err != nil {
 		t.Fatalf("GetCloudCostSnapshot: %v", err)
 	}
@@ -61,7 +62,7 @@ func TestCloudCostSnapshot_SetAndGetRoundTrip(t *testing.T) {
 		t.Fatalf("SetCloudCostSnapshot: %v", err)
 	}
 
-	got, err := db.GetCloudCostSnapshot(ctx, models.CloudBillingAWS)
+	got, err := db.GetCloudCostSnapshot(ctx, models.CloudBillingAWS, "")
 	if err != nil {
 		t.Fatalf("GetCloudCostSnapshot: %v", err)
 	}
@@ -307,5 +308,43 @@ func TestAuditLog_CreateListAndPrune(t *testing.T) {
 	}
 	if afterPrune[0].At != now {
 		t.Errorf("surviving entry At = %d, want %d", afterPrune[0].At, now)
+	}
+}
+
+func TestCloudCostSnapshot_AccountsAreSeparateAndLabelSurvivesUpserts(t *testing.T) {
+	t.Parallel()
+	db := openTestDBForV06(t)
+	ctx := context.Background()
+
+	a := models.CloudCostSnapshot{Provider: models.CloudBillingOCI, AccountID: "ocid1.tenancy.oc1..a", Status: models.CloudBillingOK, MTDCost: 1}
+	b := models.CloudCostSnapshot{Provider: models.CloudBillingOCI, AccountID: "ocid1.tenancy.oc1..b", Status: models.CloudBillingOK, MTDCost: 2}
+	for _, s := range []models.CloudCostSnapshot{a, b} {
+		if err := db.SetCloudCostSnapshot(ctx, s); err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+	}
+	if err := db.SetCloudCostLabel(ctx, models.CloudBillingOCI, a.AccountID, "work"); err != nil {
+		t.Fatalf("SetCloudCostLabel: %v", err)
+	}
+	a.MTDCost = 3
+	if err := db.SetCloudCostSnapshot(ctx, a); err != nil {
+		t.Fatalf("Set (upsert): %v", err)
+	}
+	got, err := db.GetCloudCostSnapshot(ctx, models.CloudBillingOCI, a.AccountID)
+	if err != nil || got.MTDCost != 3 || got.Label != "work" {
+		t.Fatalf("Get a = %+v, %v; want MTD 3 and the label kept", got, err)
+	}
+	list, err := db.ListCloudCostSnapshots(ctx)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("List = %d, %v; want 2 accounts", len(list), err)
+	}
+	if err := db.SetCloudCostLabel(ctx, models.CloudBillingOCI, "missing", "x"); !errors.Is(err, models.ErrNotFound) {
+		t.Errorf("label on missing account err = %v, want ErrNotFound", err)
+	}
+	if err := db.DeleteCloudCostSnapshot(ctx, models.CloudBillingOCI, b.AccountID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if list, _ := db.ListCloudCostSnapshots(ctx); len(list) != 1 {
+		t.Errorf("after delete = %d accounts, want 1", len(list))
 	}
 }

@@ -185,6 +185,45 @@ snapshot, so two reporters (or an agent plus a hub-side tenancy) simply
 overwrite each other. Any holder of the agent token can submit this
 snapshot, the same trust level as the metrics it already reports.
 
+## Agent-side AWS collection (EC2 instance role)
+
+An agent on an EC2 instance can report its AWS account's cost with the
+instance's IAM role, so no access key is stored anywhere:
+
+1. Give the instance's role an inline policy allowing
+   `ce:GetCostAndUsage` and `ce:GetCostForecast` (the same JSON as the
+   hub requirement above), and attach the role to the instance.
+2. Install the AWS CLI v2 system-wide (`/usr/local/bin/aws`).
+3. Set `CP_AWS_BILLING=instance_role` in `/etc/cloud-pulse/agent.env`
+   and restart the agent.
+
+The agent looks its account up once with `aws sts get-caller-identity`
+and queries Cost Explorer at startup and every `CP_AWS_BILLING_INTERVAL`
+(default `12h`, minimum `6h`) — each query is two $0.01 calls, about
+$1.20 a month at the default. A "Refresh now" reaches it at most every
+10 minutes for the same reason. Settings → Billing has a step-by-step
+guide. An agent reports one account, so `CP_AWS_BILLING` and
+`CP_OCI_BILLING` are mutually exclusive.
+
+## Several accounts
+
+Cost figures are kept per account: each `(provider, account)` pair —
+an OCI tenancy OCID or a 12-digit AWS account ID — has its own snapshot,
+status, card on the Costs page and row under Settings → Billing →
+Billing accounts, where it can be named ("Personal", "Company") or
+removed. Set up one agent per account; agents in the same account
+simply refresh the same row. The hub's own CLI collection is the
+account with no ID. While an agent reports a provider, the hub stops
+recording a never-configured hub row for it.
+
+A host's cost is matched by its instance ID against every account of
+its provider; failing that, an account-level total is shown for it
+only when the account is unambiguous (the one its own agent reports,
+or the provider's only account). An agent that doesn't know its
+account yet (one older than this feature, or an AWS lookup that
+failed) is filed under `host:<host>` until it reports the real ID,
+which then replaces it.
+
 ## Not-connected states and data freshness
 
 A provider showing anything other than `ok` still displays its last

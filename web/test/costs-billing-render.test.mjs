@@ -416,3 +416,33 @@ test("Costs Refresh now tells the user which agent was asked to query again", as
     assert.ok(document.body.textContent.includes(t("costs.agent_refresh_requested", { hosts: "ted-vinc" })));
   });
 });
+
+test("Billing accounts list each agent account and can rename or remove it", async () => {
+  await withHarness(async ({ container, responses, requests }) => {
+    const work = snapshot({ provider: "oci", account_id: "ocid1.tenancy.oc1..aaaaaaaawork1234", currency: "SGD", source_host: "ted-vinc" });
+    const aws = snapshot({ provider: "aws", account_id: "123456789012", label: "Company", source_host: "ec2-1" });
+    billingResponses(responses, { snapshots: [work, aws] });
+    responses.set("PUT /api/v1/billing/accounts/label", { key: "oci:ocid1.tenancy.oc1..aaaaaaaawork1234", label: "Personal" });
+    responses.set("DELETE /api/v1/billing/accounts?provider=aws&account_id=123456789012", () => new Response(null, { status: 204 }));
+    const previousConfirm = globalThis.confirm;
+    globalThis.confirm = () => true;
+    try {
+      await mountBillingSection(container, {}).refresh();
+      const rows = byClass(container, "cp-billing-account");
+      assert.equal(rows.length, 2);
+      assert.ok(rows[0].textContent.includes("OCI · …work1234") && rows[0].textContent.includes(t("billing.account_source_agent", { host: "ted-vinc" })));
+      assert.ok(rows[1].textContent.includes("AWS · Company"));
+
+      const input = byTag(rows[0], "input")[0];
+      input.value = "Personal";
+      await byTag(rows[0], "button").find((b) => b.textContent === t("billing.account_label_save")).emit("click");
+      const put = requests.find((r) => r.method === "PUT" && r.path === "/api/v1/billing/accounts/label");
+      assert.deepEqual(JSON.parse(put.body), { provider: "oci", account_id: "ocid1.tenancy.oc1..aaaaaaaawork1234", label: "Personal" });
+
+      await byTag(byClass(container, "cp-billing-account")[1], "button").find((b) => b.textContent === t("billing.account_delete")).emit("click");
+      assert.ok(requests.some((r) => r.method === "DELETE" && r.path === "/api/v1/billing/accounts?provider=aws&account_id=123456789012"));
+    } finally {
+      globalThis.confirm = previousConfirm;
+    }
+  });
+});

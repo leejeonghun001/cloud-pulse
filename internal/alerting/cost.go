@@ -1,11 +1,12 @@
 // cost.go implements the cost_mtd and cost_forecast alert metrics: a
-// provider's month-to-date or month-end-forecast cost reaching a
+// billing account's month-to-date or month-end-forecast cost reaching a
 // budget amount. Like storage_usage_pct they are account-scoped, not
-// host-scoped: AlertRule.HostID holds a billing provider ("aws",
-// "oci"), "" meaning every provider, and each provider is driven
+// host-scoped: AlertRule.HostID is "" (every account), a provider
+// ("aws", "oci": every account of it) or one account's
+// CloudCostSnapshot.Key ("oci:<tenancy OCID>"). Each account is driven
 // through the shared ok/pending/firing state machine as a synthetic
-// models.HostSnapshot. Amounts are in the provider's own billing
-// currency, which notifications show as the unit.
+// models.HostSnapshot keyed by that Key. Amounts are in the account's
+// own billing currency, which notifications show as the unit.
 package alerting
 
 import (
@@ -20,10 +21,22 @@ import (
 // CloudCostInput is one provider's latest cost snapshot, the input
 // EvaluateCost compares cost rules against.
 type CloudCostInput struct {
-	Provider models.CloudBillingProvider
-	Currency string
-	MTD      float64
-	Forecast float64
+	Provider  models.CloudBillingProvider
+	AccountID string
+	Label     string
+	Currency  string
+	MTD       float64
+	Forecast  float64
+}
+
+// Key is the account's alert scope and state key (see
+// models.CloudCostKey).
+func (c CloudCostInput) Key() string { return models.CloudCostKey(c.Provider, c.AccountID) }
+
+// CostRuleApplies reports whether a cost rule's scope (AlertRule.HostID)
+// covers an account.
+func CostRuleApplies(scope string, provider models.CloudBillingProvider, accountID string) bool {
+	return scope == "" || scope == string(provider) || scope == models.CloudCostKey(provider, accountID)
 }
 
 // IsCostMetric reports whether metric is one of the provider-cost
@@ -43,7 +56,7 @@ func (e *Engine) EvaluateCost(ctx context.Context, now time.Time, providers []Cl
 		return fmt.Errorf("alerting: evaluate cost: list rules: %w", err)
 	}
 	sorted := append([]CloudCostInput(nil), providers...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Provider < sorted[j].Provider })
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Key() < sorted[j].Key() })
 
 	var firstErr error
 	for _, rule := range rules {
@@ -51,7 +64,7 @@ func (e *Engine) EvaluateCost(ctx context.Context, now time.Time, providers []Cl
 			continue
 		}
 		for _, p := range sorted {
-			if rule.HostID != "" && rule.HostID != string(p.Provider) {
+			if !CostRuleApplies(rule.HostID, p.Provider, p.AccountID) {
 				continue
 			}
 			if err := e.evaluateCostRule(ctx, now, rule, p); err != nil {
@@ -74,8 +87,8 @@ func (e *Engine) evaluateCostRule(ctx context.Context, now time.Time, rule model
 		value = p.Forecast
 	}
 	host := models.HostSnapshot{
-		HostID:   string(p.Provider),
-		Hostname: costProviderLabel(p.Provider),
+		HostID:   p.Key(),
+		Hostname: costAccountLabel(p),
 		Unit:     " " + p.Currency,
 	}
 	st, err := e.store.GetAlertState(ctx, rule.ID, host.HostID)
@@ -88,12 +101,30 @@ func (e *Engine) evaluateCostRule(ctx context.Context, now time.Time, rule model
 	return e.transitionToFiring(ctx, now, rule, host, st, value)
 }
 
-func costProviderLabel(p models.CloudBillingProvider) string {
-	switch p {
+// costAccountLabel names an account in notifications: "OCI", or
+// "OCI · <label>" / "OCI · <short account ID>" when there is one.
+func costAccountLabel(p CloudCostInput) string {
+	name := string(p.Provider)
+	switch p.Provider {
 	case models.CloudBillingAWS:
-		return "AWS"
+		name = "AWS"
 	case models.CloudBillingOCI:
-		return "OCI"
+		name = "OCI"
 	}
-	return string(p)
+	switch {
+	case p.Label != "":
+		return name + " · " + p.Label
+	case p.AccountID != "":
+		return name + " · " + ShortAccountID(p.AccountID)
+	}
+	return name
+}
+
+// ShortAccountID abbreviates a long account identifier (an OCI OCID)
+// to its last 8 characters; short ones (a 12-digit AWS ID) are kept.
+func ShortAccountID(id string) string {
+	if len(id) <= 14 {
+		return id
+	}
+	return "…" + id[len(id)-8:]
 }

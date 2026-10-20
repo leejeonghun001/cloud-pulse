@@ -214,16 +214,21 @@ type Store interface {
 
 	// --- Cloud billing (SPEC-v0.6 §1) ---
 
-	// GetCloudCostSnapshot returns the persisted snapshot for provider,
-	// or a zero-value models.CloudCostSnapshot{Provider: provider,
-	// Status: models.CloudBillingNotConfigured} with a nil error if no
-	// row exists yet.
-	GetCloudCostSnapshot(ctx context.Context, provider models.CloudBillingProvider) (models.CloudCostSnapshot, error)
-	// ListCloudCostSnapshots returns every persisted provider snapshot.
+	// GetCloudCostSnapshot returns the persisted snapshot for
+	// provider/accountID ("" = the hub's own account), or a zero-value
+	// snapshot with Status models.CloudBillingNotConfigured and a nil
+	// error if no row exists yet.
+	GetCloudCostSnapshot(ctx context.Context, provider models.CloudBillingProvider, accountID string) (models.CloudCostSnapshot, error)
+	// ListCloudCostSnapshots returns every persisted account snapshot.
 	ListCloudCostSnapshots(ctx context.Context) ([]models.CloudCostSnapshot, error)
-	// SetCloudCostSnapshot upserts the snapshot for snap.Provider,
-	// keyed on provider (one row per provider).
+	// SetCloudCostSnapshot upserts the snapshot for (provider,
+	// account), leaving its label alone.
 	SetCloudCostSnapshot(ctx context.Context, snap models.CloudCostSnapshot) error
+	// SetCloudCostLabel sets an account's display label, or returns
+	// models.ErrNotFound.
+	SetCloudCostLabel(ctx context.Context, provider models.CloudBillingProvider, accountID, label string) error
+	// DeleteCloudCostSnapshot removes an account's snapshot.
+	DeleteCloudCostSnapshot(ctx context.Context, provider models.CloudBillingProvider, accountID string) error
 
 	// --- Remote agent updates (SPEC-v0.6 §2) ---
 

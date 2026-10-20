@@ -30,25 +30,21 @@ func ZeroNetworkEstimator(string) models.EstimatedCost {
 // exported single-host counterpart of BuildBillingView, used by
 // handleGetHost/handleListHosts (internal/hub/handlers.go) to populate
 // HostSummary.Cost without needing the full host list BuildBillingView
-// expects. byProvider should be built the same way BuildBillingView
-// builds it internally (keyed by models.CloudCostSnapshot.Provider);
+// expects. byProvider should come from SnapshotsByProvider;
 // estimateNetwork defaults to ZeroNetworkEstimator when nil.
-func BuildHostCost(info models.HostInfo, byProvider map[models.CloudBillingProvider]models.CloudCostSnapshot, estimateNetwork NetworkEstimator) models.HostCost {
+func BuildHostCost(info models.HostInfo, byProvider map[models.CloudBillingProvider][]models.CloudCostSnapshot, estimateNetwork NetworkEstimator) models.HostCost {
 	if estimateNetwork == nil {
 		estimateNetwork = ZeroNetworkEstimator
 	}
 	return buildHostCost(info, byProvider, estimateNetwork)
 }
 
-// SnapshotsByProvider indexes snapshots by their Provider field, the
-// same lookup BuildBillingView builds internally — exported so
-// handleGetHost/handleListHosts can build it once per request and
-// reuse it across BuildHostCost calls for every host in that request,
-// rather than each call rebuilding the same small map.
-func SnapshotsByProvider(snapshots []models.CloudCostSnapshot) map[models.CloudBillingProvider]models.CloudCostSnapshot {
-	byProvider := make(map[models.CloudBillingProvider]models.CloudCostSnapshot, len(snapshots))
+// SnapshotsByProvider groups account snapshots by provider — built once
+// per request and reused across every host's BuildHostCost.
+func SnapshotsByProvider(snapshots []models.CloudCostSnapshot) map[models.CloudBillingProvider][]models.CloudCostSnapshot {
+	byProvider := make(map[models.CloudBillingProvider][]models.CloudCostSnapshot, len(snapshots))
 	for _, s := range snapshots {
-		byProvider[s.Provider] = s
+		byProvider[s.Provider] = append(byProvider[s.Provider], s)
 	}
 	return byProvider
 }
@@ -80,10 +76,13 @@ func BuildBillingView(snapshots []models.CloudCostSnapshot, hosts []models.HostR
 }
 
 // buildHostCost computes one host's models.HostCost: cloud-billing
-// figures matched via CloudInstanceID against byProvider's snapshot for
-// the host's own Provider (see providerToBilling), plus the network
-// estimate from estimateNetwork.
-func buildHostCost(info models.HostInfo, byProvider map[models.CloudBillingProvider]models.CloudCostSnapshot, estimateNetwork NetworkEstimator) models.HostCost {
+// figures for the host's own Provider (see providerToBilling) plus the
+// network estimate from estimateNetwork. The host is matched by its
+// CloudInstanceID against every account's PerResource map; failing
+// that, an account-level snapshot is attributed to it only when the
+// account is unambiguous — the one this host's own agent reports, or
+// the provider's only account.
+func buildHostCost(info models.HostInfo, byProvider map[models.CloudBillingProvider][]models.CloudCostSnapshot, estimateNetwork NetworkEstimator) models.HostCost {
 	hc := models.HostCost{
 		HostID:          info.ID,
 		Hostname:        info.Hostname,
@@ -93,29 +92,38 @@ func buildHostCost(info models.HostInfo, byProvider map[models.CloudBillingProvi
 	billingProvider, ok := providerToBilling(info.Provider)
 	if ok {
 		hc.Provider = billingProvider
-		if snap, found := byProvider[billingProvider]; found {
+		snaps := byProvider[billingProvider]
+		if len(snaps) > 0 {
 			hc.InstanceID = info.CloudInstanceID
-			if info.CloudInstanceID != "" && snap.PerResource != nil {
-				if cost, matched := snap.PerResource[info.CloudInstanceID]; matched {
-					hc.Matched = true
-					hc.CloudMTD = cost
-					// Forecast isn't broken out per-resource by either
-					// provider's CLI response; approximate a matched
-					// host's own forecast by the same MTD/forecast ratio
-					// the account-level snapshot observed (0 when the
-					// account MTD is 0, avoiding a divide-by-zero).
-					if snap.MTDCost != 0 {
-						hc.CloudForecast = cost / snap.MTDCost * snap.ForecastCost
-					}
-				}
+		}
+		for _, snap := range snaps {
+			if info.CloudInstanceID == "" || snap.PerResource == nil {
+				continue
 			}
-			if !hc.Matched && snap.AccountLevel {
+			if cost, matched := snap.PerResource[info.CloudInstanceID]; matched {
+				hc.Matched = true
+				hc.CloudMTD = cost
+				// Forecast isn't broken out per-resource by either
+				// provider's CLI response; approximate a matched host's
+				// own forecast by the same MTD/forecast ratio the
+				// account-level snapshot observed (0 when the account
+				// MTD is 0, avoiding a divide-by-zero).
+				if snap.MTDCost != 0 {
+					hc.CloudForecast = cost / snap.MTDCost * snap.ForecastCost
+				}
+				hc.AccountID, hc.AccountLabel = snap.AccountID, snap.Label
+				break
+			}
+		}
+		if !hc.Matched {
+			if snap, found := accountForHost(info.ID, snaps); found && snap.AccountLevel {
 				// Unmatched but the snapshot is account-level: surface
 				// the account total per SPEC-v0.6 §1's HostCost doc
 				// comment ("Matched is false and these represent
 				// 'account total'").
 				hc.CloudMTD = snap.MTDCost
 				hc.CloudForecast = snap.ForecastCost
+				hc.AccountID, hc.AccountLabel = snap.AccountID, snap.Label
 			}
 		}
 	}
@@ -127,6 +135,22 @@ func buildHostCost(info models.HostInfo, byProvider map[models.CloudBillingProvi
 		hc.TotalForecast += hc.CloudForecast
 	}
 	return hc
+}
+
+// accountForHost picks the account snapshot a host belongs to when no
+// per-resource match exists: the account its own agent reports, else
+// the provider's only account. Several unrelated accounts are
+// ambiguous, so none is picked.
+func accountForHost(hostID string, snaps []models.CloudCostSnapshot) (models.CloudCostSnapshot, bool) {
+	for _, s := range snaps {
+		if s.SourceHost == hostID {
+			return s, true
+		}
+	}
+	if len(snaps) == 1 {
+		return snaps[0], true
+	}
+	return models.CloudCostSnapshot{}, false
 }
 
 // providerToBilling maps a models.Provider (agent-reported) to the

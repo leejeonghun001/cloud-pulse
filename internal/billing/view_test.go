@@ -131,3 +131,29 @@ func TestBuildBillingView_EchoesIntervalAndDisplayCurrency(t *testing.T) {
 		t.Errorf("DisplayCurrency = %+v, want KRW @ 1385.5", view.DisplayCurrency)
 	}
 }
+
+func TestBuildBillingView_SeveralAccountsAttributeOnlyUnambiguously(t *testing.T) {
+	snapshots := []models.CloudCostSnapshot{
+		{Provider: models.CloudBillingOCI, AccountID: "ocid1.tenancy.oc1..a", Label: "work", AccountLevel: true, MTDCost: 5, SourceHost: "box-a"},
+		{Provider: models.CloudBillingOCI, AccountID: "ocid1.tenancy.oc1..b", PerResource: map[string]float64{"ocid1.instance..x": 2}, MTDCost: 4, ForecastCost: 8},
+	}
+	hosts := []models.HostRecord{
+		{Info: models.HostInfo{ID: "box-a", Provider: models.ProviderOCI}},
+		{Info: models.HostInfo{ID: "box-x", Provider: models.ProviderOCI, CloudInstanceID: "ocid1.instance..x"}},
+		{Info: models.HostInfo{ID: "box-z", Provider: models.ProviderOCI}},
+	}
+	view := BuildBillingView(snapshots, hosts, nil, 86400, models.DisplayCurrencySettings{})
+	byID := map[string]models.HostCost{}
+	for _, h := range view.Hosts {
+		byID[h.HostID] = h
+	}
+	if h := byID["box-a"]; h.AccountID != "ocid1.tenancy.oc1..a" || h.AccountLabel != "work" || h.CloudMTD != 5 || h.Matched {
+		t.Errorf("box-a = %+v, want its own agent's account total", h)
+	}
+	if h := byID["box-x"]; !h.Matched || h.AccountID != "ocid1.tenancy.oc1..b" || h.CloudMTD != 2 || h.CloudForecast != 4 {
+		t.Errorf("box-x = %+v, want the per-resource match in account b", h)
+	}
+	if h := byID["box-z"]; h.AccountID != "" || h.CloudMTD != 0 {
+		t.Errorf("box-z = %+v, want no account: two accounts make it ambiguous", h)
+	}
+}

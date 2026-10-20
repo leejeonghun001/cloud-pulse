@@ -73,9 +73,9 @@ type ReporterOptions struct {
 	// pre-v0.5.0 agent).
 	Inventory InventoryProvider
 	// CloudCost, if non-nil, supplies an agent-collected provider cost
-	// snapshot to attach to the next report (see OCICostCollector). nil
+	// snapshot to attach to the next report (see CloudCostCollector). nil
 	// disables agent-side billing reporting.
-	CloudCost *OCICostCollector
+	CloudCost *CloudCostCollector
 }
 
 // InventoryProvider supplies the Reporter with the agent's current
@@ -100,7 +100,7 @@ type Reporter struct {
 	logClockWarn func(offset time.Duration)
 	updateNotice *updateNotifier
 	inventory    *inventoryReportHook
-	cloudCost    *OCICostCollector
+	cloudCost    *CloudCostCollector
 
 	mu      sync.Mutex
 	samples []models.Sample

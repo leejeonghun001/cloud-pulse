@@ -89,3 +89,28 @@ func TestEvaluate_SkipsAccountScopedMetrics(t *testing.T) {
 		t.Fatalf("sender calls = %d, want 0", got)
 	}
 }
+
+func TestEvaluateCost_OneAccountScopeAndLabelledNotification(t *testing.T) {
+	t.Parallel()
+	e, store, sender, clock := newCostTestEngine(t, models.AlertRule{
+		ID: 5, Name: "Work budget", Enabled: true, Metric: models.AlertMetricCostMTD, HostID: "oci:ocid1.tenancy.oc1..work",
+		Operator: models.AlertOperatorGTE, Threshold: 10, CooldownSec: 86400, ChannelIDs: []int64{1},
+	})
+	accounts := []CloudCostInput{
+		{Provider: models.CloudBillingOCI, AccountID: "ocid1.tenancy.oc1..work", Label: "work", Currency: "SGD", MTD: 12},
+		{Provider: models.CloudBillingOCI, AccountID: "ocid1.tenancy.oc1..home", Currency: "SGD", MTD: 99},
+	}
+	if err := e.EvaluateCost(context.Background(), clock.Now(), accounts); err != nil {
+		t.Fatalf("EvaluateCost: %v", err)
+	}
+	e.Close()
+	if got := sender.callCount(); got != 1 {
+		t.Fatalf("sender calls = %d, want 1 (only the scoped account)", got)
+	}
+	if st := store.getState(5, "oci:ocid1.tenancy.oc1..work"); st.State != models.AlertStateFiring {
+		t.Errorf("state = %s, want firing under the account key", st.State)
+	}
+	if want := "OCI · work: Work budget"; sender.calls[0].Title != want {
+		t.Errorf("title = %q, want %q", sender.calls[0].Title, want)
+	}
+}

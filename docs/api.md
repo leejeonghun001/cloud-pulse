@@ -77,6 +77,8 @@ for session and password details.
 | `GET /api/v1/hosts/{id}/inventory` | A host's most recently reported listening ports + Docker containers | Session or API token |
 | `GET /api/v1/billing` | Provider cloud-cost snapshots + per-host cost view | Session or API token |
 | `POST /api/v1/billing/refresh` | Re-run the hub's AWS/OCI CLI poll (at most every 10 minutes) and ask agent-side collectors to query again (at most every 2 minutes per agent) | Admin |
+| `PUT /api/v1/billing/accounts/label` | Name a billing account: `{provider, account_id, label}` | Admin |
+| `DELETE /api/v1/billing/accounts?provider=&account_id=` | Remove a billing account's stored figures | Admin |
 | `PUT /api/v1/settings/billing/interval` | Set the hub-side billing polling interval override | Admin |
 | `GET /api/v1/billing/plans` | List network-cost pricing plans (builtin + custom) | Session or API token |
 | `POST /api/v1/billing/plans` | Create a custom pricing plan | Admin |

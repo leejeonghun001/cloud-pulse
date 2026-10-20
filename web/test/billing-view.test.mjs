@@ -308,10 +308,10 @@ test("spendSummary sums per currency and flags set-up providers that fail", asyn
     { provider: "oci", status: "error", currency: "SGD", mtd_cost: 2, forecast_cost: 4, last_success_at: 5, source_host: "box", stale: true },
   ]);
   assert.deepEqual(got.totals, [
-    { currency: "SGD", mtd: 2, forecast: 4, providers: ["oci"] },
-    { currency: "USD", mtd: 10, forecast: 30, providers: ["aws"] },
+    { currency: "SGD", mtd: 2, forecast: 4, providers: ["OCI"] },
+    { currency: "USD", mtd: 10, forecast: 30, providers: ["AWS"] },
   ]);
-  assert.deepEqual(got.attention, ["oci"]);
+  assert.deepEqual(got.attention, ["OCI"]);
   assert.equal(got.stale, true);
 
   const unset = spendSummary([
@@ -319,5 +319,14 @@ test("spendSummary sums per currency and flags set-up providers that fail", asyn
     { provider: "oci", status: "error", last_success_at: 0, source_host: "box" },
   ]);
   assert.deepEqual(unset.totals, []);
-  assert.deepEqual(unset.attention, ["oci"], "a never-set-up AWS is not an alarm; a failing OCI agent is");
+  assert.deepEqual(unset.attention, ["OCI"], "a never-set-up AWS is not an alarm; a failing OCI agent is");
+});
+
+test("accountTitle names hub, labelled, unlabelled and pending accounts", async () => {
+  const { accountTitle } = await import("../assets/js/core/billing-view.js");
+  assert.equal(accountTitle({ provider: "aws" }), "AWS");
+  assert.equal(accountTitle({ provider: "oci", account_id: "ocid1.tenancy.oc1..aaaaaaaaxyz12345", label: "work" }), "OCI · work");
+  assert.equal(accountTitle({ provider: "oci", account_id: "ocid1.tenancy.oc1..aaaaaaaaxyz12345" }), "OCI · …xyz12345");
+  assert.equal(accountTitle({ provider: "aws", account_id: "123456789012" }), "AWS · 123456789012");
+  assert.equal(accountTitle({ provider: "oci", account_id: "host:ted-vinc" }), "OCI · ted-vinc");
 });

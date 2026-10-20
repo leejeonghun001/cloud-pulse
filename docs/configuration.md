@@ -95,6 +95,9 @@ only session-based sign-in works.
 | `CP_OCI_TENANCY_ID` | *(unset)* | Tenancy OCID to query; required when `CP_OCI_BILLING` is on |
 | `CP_OCI_CLI` | *(unset)* | Absolute path to `oci` when it is not in `/usr/local/bin:/usr/bin:/bin` |
 | `CP_OCI_BILLING_INTERVAL` | `1h` | Time between agent-side Usage API queries; minimum `15m` |
+| `CP_AWS_BILLING` | `off` | `off\|instance_role` — query AWS Cost Explorer from this agent with its EC2 instance's IAM role and report that account's cost; not together with `CP_OCI_BILLING`. See [billing.md](billing.md#agent-side-aws-collection-ec2-instance-role) |
+| `CP_AWS_CLI` | *(unset)* | Absolute path to `aws` when it is not in `/usr/local/bin:/usr/bin:/bin` |
+| `CP_AWS_BILLING_INTERVAL` | `12h` | Time between agent-side Cost Explorer queries; minimum `6h` (each query is two billed $0.01 calls) |
 
 ## Agent CLI flags (`cloud-pulse-agent`)
 
