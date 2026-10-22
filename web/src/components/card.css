@@ -162,3 +162,26 @@
     color: rgb(var(--status-exceeded-fg));
   }
 }
+
+@layer components {
+  /* Collapsible section (ui/disclosure.js): a tonal row with a chevron
+     that turns when open — no borders or stripes. */
+  .cp-disclosure { @apply min-w-0; }
+  .cp-disclosure-summary {
+    @apply flex items-center gap-2 cursor-pointer select-none list-none rounded-[var(--radius-cp-md)] px-2 py-1.5 -mx-2 text-[length:var(--text-cp-sm)] leading-[length:var(--leading-cp-sm)] font-[weight:var(--weight-cp-medium)] text-[rgb(var(--text))];
+  }
+  .cp-disclosure-summary::-webkit-details-marker { display: none; }
+  .cp-disclosure-summary:hover { @apply bg-[rgb(var(--muted-surface))]; }
+  .cp-disclosure-summary:focus-visible {
+    outline: var(--focus-ring-cp-width) solid rgb(var(--ring));
+    outline-offset: var(--focus-ring-cp-offset);
+  }
+  .cp-disclosure-chevron { @apply inline-flex shrink-0 text-[rgb(var(--muted))] transition-transform duration-150; }
+  .cp-disclosure-chevron svg { @apply size-4; }
+  .cp-disclosure[open] > .cp-disclosure-summary .cp-disclosure-chevron { @apply rotate-90; }
+  .cp-disclosure-label { @apply min-w-0 flex-1; overflow-wrap: anywhere; }
+  .cp-disclosure-body { @apply flex flex-col gap-2 pt-2 min-w-0; }
+  @media (prefers-reduced-motion: reduce) {
+    .cp-disclosure-chevron { transition: none; }
+  }
+}

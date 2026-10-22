@@ -35,15 +35,21 @@ const SECONDS_PER_DAY = 86400;
  */
 export function elapsedLabel(sinceUnixSeconds, nowUnixSeconds) {
   const totalSeconds = Math.max(0, Math.floor(nowUnixSeconds - sinceUnixSeconds));
-  if (totalSeconds < SECONDS_PER_MINUTE) return "less than a minute";
+  if (totalSeconds < SECONDS_PER_MINUTE) return localized("costs.elapsed_under_minute", {}, "less than a minute");
 
   const days = Math.floor(totalSeconds / SECONDS_PER_DAY);
   const hours = Math.floor((totalSeconds % SECONDS_PER_DAY) / SECONDS_PER_HOUR);
   const minutes = Math.floor((totalSeconds % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE);
 
-  if (days > 0) return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
-  if (hours > 0) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
-  return `${minutes}m`;
+  if (days > 0) return hours > 0 ? localized("costs.elapsed_dh", { d: days, h: hours }, `${days}d ${hours}h`) : localized("costs.elapsed_d", { d: days }, `${days}d`);
+  if (hours > 0) return minutes > 0 ? localized("costs.elapsed_hm", { h: hours, m: minutes }, `${hours}h ${minutes}m`) : localized("costs.elapsed_h", { h: hours }, `${hours}h`);
+  return localized("costs.elapsed_m", { m: minutes }, `${minutes}m`);
+}
+
+/** localized is t(), falling back when no catalog has the key yet. */
+function localized(key, params, fallback) {
+  const out = t(key, params);
+  return out === key ? fallback : out;
 }
 
 /**

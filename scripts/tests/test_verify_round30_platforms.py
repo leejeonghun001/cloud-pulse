@@ -658,7 +658,9 @@ class ChildProcessTests(unittest.TestCase):
             try:
                 if stat_path.exists() and stat_path.read_text().split()[2] == "Z":
                     return
-            except FileNotFoundError:
+            except (FileNotFoundError, ProcessLookupError):
+                # The process exited between the exists() check and the
+                # read: /proc reports that as ESRCH on some kernels.
                 return
             time.sleep(0.025)
         test.fail(f"owned child {pid} was not terminated")

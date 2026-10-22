@@ -217,7 +217,7 @@ test("freshnessViewModel: Korean rendering of the ok-status case", () => {
       intervalSeconds: 24 * 3600,
       utcOffsetMinutes: 0,
     });
-    assert.equal(vm.text, "수집 완료 2026-09-29 07:00 (1h 전).");
+    assert.equal(vm.text, "수집 완료 2026-09-29 07:00 (1시간 전).");
   });
 });
 

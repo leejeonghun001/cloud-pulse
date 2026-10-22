@@ -5,6 +5,7 @@
 // Security section.
 import { el } from "./components.js";
 import { icon } from "./icons.js";
+import { disclosure } from "./disclosure.js";
 import { evaluateRequirements, scoreStrength, strengthLevel, strengthLabel } from "../core/password-policy.js";
 import { t } from "../core/i18n.js";
 
@@ -62,13 +63,16 @@ function clearIcon(btn) {
 }
 
 /**
- * passwordChecklist builds the live requirement checklist element. Call
+ * passwordChecklist builds the live requirement checklist, collapsed
+ * behind a one-line summary ("Password rules · 2 of 4 met") so the form
+ * stays short; the list itself is one click away. Call
  * update(password, currentPassword) whenever the password input
- * changes to refresh the met/unmet state.
- * @returns {{node: HTMLElement, update: (password: string, currentPassword?: string) => boolean}}
+ * changes, and reveal() to open it (e.g. after a rejected submit).
+ * @returns {{node: HTMLElement, update: (password: string, currentPassword?: string) => boolean, reveal: () => void}}
  */
 export function passwordChecklist() {
   const list = el("ul", { class: "cp-pw-checklist", attrs: { role: "list" } });
+  const box = disclosure({ summary: "", children: [list], className: "cp-pw-checklist-disclosure" });
 
   /** @type {Map<string, HTMLElement>} */
   const itemEls = new Map();
@@ -89,10 +93,12 @@ export function passwordChecklist() {
       while (iconHost.firstChild) iconHost.removeChild(iconHost.firstChild);
       iconHost.append(icon(req.met ? "circleCheck" : "circleX"));
     }
-    return reqs.every((r) => r.met);
+    const met = reqs.filter((r) => r.met).length;
+    box.setSummary(met === reqs.length ? t("password.requirements_all_met") : t("password.requirements_summary", { met, total: reqs.length }));
+    return met === reqs.length;
   }
 
-  return { node: list, update };
+  return { node: box.node, update, reveal: () => box.setOpen(true) };
 }
 
 /**

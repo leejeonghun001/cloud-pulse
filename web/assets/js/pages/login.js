@@ -236,6 +236,7 @@ export function openForcedChangeModal({ currentPassword, onDone }) {
     const cur = needsCurrent ? currentInput.value : currentPassword;
     if (!isPasswordValid(newInput.value, cur)) {
       errorEl.textContent = t("login.password_requirements_unmet");
+      checklist.reveal();
       return;
     }
     if (newInput.value !== confirmInput.value) {

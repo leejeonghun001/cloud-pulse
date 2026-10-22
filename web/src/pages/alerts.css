@@ -348,6 +348,8 @@
   .cp-notify-card .cp-channel-row-actions .cp-btn { @apply min-h-10; }
   .cp-notify-card .cp-channel-row-actions .cp-btn-icon { @apply min-w-10; }
   .cp-notify-card .cp-channel-row-status { @apply min-w-0 border-t border-[rgb(var(--border))] pt-3; grid-column: 1 / -1; }
+  /* Empty until a test runs: keep the live region, drop its divider. */
+  .cp-notify-card .cp-channel-row-status:empty { @apply border-t-0 pt-0; }
   .cp-notify-form { @apply flex flex-col gap-5 min-w-0; }
   .cp-notify-dialog.cp-dialog-wide { @apply lg:max-w-5xl; }
   .cp-notify-dialog .cp-channel-dialog-layout { @apply gap-5; }

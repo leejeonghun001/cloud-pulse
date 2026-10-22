@@ -3,6 +3,7 @@
 // display currency, and audit log.
 import { el, clearChildren, errorBanner, providerBadge } from "../../ui/components.js";
 import { icon } from "../../ui/icons.js";
+import { disclosure } from "../../ui/disclosure.js";
 import { showToast } from "../../ui/toast.js";
 import { selectField } from "../../ui/select.js";
 import { createDialog, buildDialogActions } from "../../ui/dialog.js";
@@ -22,8 +23,6 @@ import {
   localizeApiError,
 } from "../../core/api.js";
 import { t } from "../../core/i18n.js";
-import { ociAgentGuideCard } from "./oci-agent-guide.js";
-import { awsAgentGuideCard } from "./aws-agent-guide.js";
 import { accountsCard } from "./billing-accounts.js";
 
 /** INTERVAL_API_COST_HINTS shows the AWS Cost Explorer API cost
@@ -82,8 +81,6 @@ export function mountBillingSection(container, { announce }) {
     controls.append(currencyCard({ currency, signal: controller.signal, announce, onChanged: refresh, feedback }));
     root.append(controls);
     root.append(accountsCard({ billing, signal: controller.signal, announce, onChanged: refresh }));
-    root.append(ociAgentGuideCard({ oci: (billing.snapshots || []).find((snap) => snap.provider === "oci" && snap.source_host) }));
-    root.append(awsAgentGuideCard({ aws: (billing.snapshots || []).find((snap) => snap.provider === "aws" && snap.source_host) }));
     root.append(plansCard({ plans, signal: controller.signal, announce, onChanged: refresh }));
     root.append(auditLogCard({ signal: controller.signal }));
     if (feedback?.id) document.getElementById(feedback.id)?.focus();
@@ -138,7 +135,7 @@ function intervalCard({ billing, signal, announce, onChanged, feedback }) {
   });
   form.append(el("div", { class: "cp-billing-actions", children: [saveBtn, status] }));
   card.append(form);
-  card.append(el("p", { class: "cp-muted-small", text: t("billing.provider_setup_note") }));
+  card.append(disclosure({ id: "billing-interval-help", summary: t("billing.help_summary"), children: [el("p", { class: "cp-muted-small", text: t("billing.provider_setup_note") })] }).node);
 
   return card;
 }
@@ -225,7 +222,7 @@ function currencyCard({ currency, signal, announce, onChanged, feedback }) {
   });
   form.append(el("div", { class: "cp-billing-actions", children: [saveBtn, status] }));
   card.append(form);
-  card.append(el("p", { class: "cp-muted-small cp-billing-tax-note", text: t("billing.tax_note") }));
+  card.append(disclosure({ id: "billing-currency-help", summary: t("billing.help_summary"), children: [el("p", { class: "cp-muted-small", text: t("billing.tax_note") })], className: "cp-billing-tax-note" }).node);
   return card;
 }
 
@@ -506,7 +503,7 @@ function auditLogCard({ signal }) {
   card.append(el("h2", { class: "cp-card-title", text: t("billing.history_title"), attrs: { id: "cp-billing-history-heading" } }));
 
   const tableHost = el("div");
-  card.append(tableHost);
+  card.append(disclosure({ id: "billing-history", summary: t("billing.history_show"), children: [tableHost] }).node);
 
   loadPage(0);
 

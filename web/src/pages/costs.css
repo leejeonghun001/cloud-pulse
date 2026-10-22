@@ -56,6 +56,14 @@
     overflow-wrap: anywhere;
   }
 
+  .cp-costs-provider-group > .cp-disclosure-summary {
+    @apply text-[length:var(--text-cp-md)] leading-[length:var(--leading-cp-md)] font-[weight:var(--weight-cp-semibold)];
+  }
+  .cp-costs-provider-notes-body { @apply flex flex-col gap-1; }
+  .cp-costs-card-details > .cp-disclosure-summary {
+    @apply text-[length:var(--text-cp-xs)] leading-[length:var(--leading-cp-xs)] font-[weight:var(--weight-cp-regular)] text-[rgb(var(--muted))] py-1;
+  }
+
   .cp-costs-provider-notes {
     @apply flex flex-col gap-1 pt-2.5 mt-auto border-t border-[rgb(var(--border))];
   }

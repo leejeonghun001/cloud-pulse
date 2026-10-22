@@ -7,6 +7,9 @@ import { showToast } from "../../ui/toast.js";
 import { freshnessViewModel, accountTitle, providerStatusHint } from "../../core/billing-view.js";
 import { setBillingAccountLabel, deleteBillingAccount, localizeApiError } from "../../core/api.js";
 import { t } from "../../core/i18n.js";
+import { disclosure } from "../../ui/disclosure.js";
+import { ociAgentGuideCard } from "./oci-agent-guide.js";
+import { awsAgentGuideCard } from "./aws-agent-guide.js";
 
 /**
  * accountsCard lists billing accounts.
@@ -22,16 +25,53 @@ export function accountsCard({ billing, signal, announce, onChanged }) {
   card.append(el("h2", { class: "cp-card-title", text: t("billing.accounts_title"), attrs: { id: "cp-billing-accounts-heading" } }));
   card.append(el("p", { class: "cp-muted-small", text: t("billing.accounts_description") }));
 
-  const accounts = (billing.snapshots || []).filter((snap) => snap.account_id || snap.source_host || snap.last_success_at > 0 || !["not_installed", "not_configured"].includes(snap.status));
-  if (accounts.length === 0) {
-    card.append(el("p", { class: "cp-muted-small", text: (billing.snapshots || []).length === 0 ? t("billing.billing_disabled_note") : t("billing.accounts_empty") }));
+  if ((billing.snapshots || []).length === 0) {
+    card.append(el("p", { class: "cp-muted-small", text: t("billing.billing_disabled_note") }));
     return card;
   }
+  const accounts = (billing.snapshots || []).filter((snap) => snap.account_id || snap.source_host || snap.last_success_at > 0 || !["not_installed", "not_configured"].includes(snap.status));
 
-  const list = el("ul", { class: "cp-billing-account-list", attrs: { role: "list" } });
-  for (const snap of accounts) list.append(accountRow(snap, billing.interval_seconds || 0, { signal, announce, onChanged }));
-  card.append(list);
+  // One collapsible section per provider: its accounts, then its setup
+  // guide — itself collapsed once an account is connected.
+  for (const { provider, name, guide } of PROVIDER_SECTIONS) {
+    const mine = accounts.filter((snap) => snap.provider === provider);
+    const children = [];
+    if (mine.length > 0) {
+      const list = el("ul", { class: "cp-billing-account-list", attrs: { role: "list" } });
+      for (const snap of mine) list.append(accountRow(snap, billing.interval_seconds || 0, { signal, announce, onChanged }));
+      children.push(list);
+      children.push(disclosure({
+        id: `billing-guide-${provider}`,
+        summary: t("billing.provider_guide_add", { provider: name }),
+        children: [guide()],
+        className: "cp-billing-guide-disclosure",
+      }).node);
+    } else {
+      children.push(guide());
+    }
+    card.append(disclosure({
+      id: `billing-provider-${provider}`,
+      summary: providerSummary(name, mine),
+      children,
+      className: "cp-billing-provider-disclosure",
+    }).node);
+  }
   return card;
+}
+
+const PROVIDER_SECTIONS = [
+  { provider: "oci", name: "OCI", guide: () => ociAgentGuideCard({ bare: true }) },
+  { provider: "aws", name: "AWS", guide: () => awsAgentGuideCard({ bare: true }) },
+];
+
+/** providerSummary is a provider section's collapsed line: how many
+ * accounts, and whether any needs attention. */
+function providerSummary(name, accounts) {
+  if (accounts.length === 0) return t("billing.provider_summary_none", { provider: name });
+  const failing = accounts.filter((snap) => snap.status !== "ok").length;
+  return failing === 0
+    ? t("billing.provider_summary_ok", { provider: name, count: accounts.length })
+    : t("billing.provider_summary_attention", { provider: name, count: accounts.length, failing });
 }
 
 function accountRow(snap, intervalSeconds, { signal, announce, onChanged }) {
@@ -96,6 +136,6 @@ function accountRow(snap, intervalSeconds, { signal, announce, onChanged }) {
     }
   });
   actions.append(field, save, remove);
-  row.append(actions);
+  row.append(disclosure({ summary: t("billing.account_manage"), children: [actions], className: "cp-billing-account-manage" }).node);
   return row;
 }

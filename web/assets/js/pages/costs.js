@@ -8,7 +8,8 @@ import { showToast } from "../ui/toast.js";
 import { formatDuration } from "../core/format.js";
 import { getBilling, refreshBilling, ApiError, RateLimitError, localizeApiError } from "../core/api.js";
 import { formatUSD } from "../core/currency.js";
-import { freshnessViewModel, hostCostDisplayAmounts, providerStatusHint, accountTitle } from "../core/billing-view.js";
+import { freshnessViewModel, hostCostDisplayAmounts, providerStatusHint, accountTitle, spendSummary } from "../core/billing-view.js";
+import { disclosure } from "../ui/disclosure.js";
 import { t } from "../core/i18n.js";
 
 /** localUtcOffsetMinutes returns the browser's current UTC offset in
@@ -183,17 +184,47 @@ function providerCardsSection({ snapshots, intervalSeconds, signal, announce, on
     return section;
   }
 
-  const grid = el("div", { class: "cp-costs-provider-grid" });
+  // One collapsible group per provider, its line summing the provider's
+  // accounts per currency, so a closed group still says what it costs.
+  const setupRows = el("div", { class: "cp-costs-provider-grid" });
+  const groups = new Map();
   for (const snap of snapshots) {
     if (isProviderUnconfigured(snap)) {
       // "Not set up" only when no agent reports this provider either.
-      if (!snapshots.some((other) => other.provider === snap.provider && other !== snap)) grid.append(providerSetupRow(snap));
+      if (!snapshots.some((other) => other.provider === snap.provider && other !== snap)) setupRows.append(providerSetupRow(snap));
       continue;
     }
-    grid.append(providerCard(snap, intervalSeconds));
+    if (!groups.has(snap.provider)) groups.set(snap.provider, []);
+    groups.get(snap.provider).push(snap);
   }
-  section.append(grid);
+  for (const [provider, accounts] of groups) {
+    const grid = el("div", { class: "cp-costs-provider-grid" });
+    for (const snap of accounts) grid.append(providerCard(snap, intervalSeconds));
+    section.append(disclosure({
+      id: `costs-provider-${provider}`,
+      open: true,
+      summary: providerGroupSummary(provider, accounts),
+      children: [grid],
+      className: "cp-costs-provider-group",
+    }).node);
+  }
+  if (setupRows.children.length > 0) section.append(setupRows);
   return section;
+}
+
+/** providerGroupSummary: "OCI · 2 accounts · 31.00 SGD this month
+ * (forecast 47.26 SGD)", per currency, flagging accounts that fail. */
+function providerGroupSummary(provider, accounts) {
+  const name = PROVIDER_NAMES[provider] || provider.toUpperCase();
+  const { totals, attention } = spendSummary(accounts);
+  const money = totals.map((row) => t("costs.group_amounts", {
+    mtd: formatUSD(row.mtd, row.currency, { taxNote: false }),
+    forecast: formatUSD(row.forecast, row.currency, { taxNote: false }),
+  })).join(" · ");
+  const parts = [name, t("costs.group_accounts", { count: accounts.length })];
+  if (money) parts.push(money);
+  if (attention.length > 0) parts.push(t("costs.group_attention", { count: attention.length }));
+  return parts.join(" · ");
 }
 
 /** Only the hub's own, never-set-up account is "not set up"; an agent's
@@ -226,7 +257,7 @@ function providerCard(snap, intervalSeconds) {
   head.append(statusBadge(snap.status, snap.stale));
   card.append(head);
 
-  const notes = el("div", { class: "cp-costs-provider-notes" });
+  const notes = el("div", { class: "cp-costs-provider-notes-body" });
   if (snap.status === "ok" || snap.last_success_at > 0) {
     if (snap.status !== "ok") {
       card.append(el("p", { class: "cp-muted-small", text: snap.status_detail || t("costs.not_connected") }));
@@ -256,9 +287,13 @@ function providerCard(snap, intervalSeconds) {
   } else if (snap.provider === "oci" && snap.status !== "ok") {
     notes.append(el("a", { class: "cp-back-link", attrs: { href: "#/settings/billing" }, text: t("costs.oci_agent_link") }));
   }
-  notes.append(freshnessNote(snap, intervalSeconds));
   notes.append(el("p", { class: "cp-muted-small", text: t("costs.excl_tax") }));
-  card.append(notes);
+  // Freshness stays in view; the method/source/tax notes are one click
+  // away so the card reads as its two numbers first.
+  const footer = el("div", { class: "cp-costs-provider-notes" });
+  footer.append(freshnessNote(snap, intervalSeconds));
+  footer.append(disclosure({ summary: t("costs.card_details"), children: [notes], className: "cp-costs-card-details" }).node);
+  card.append(footer);
   return card;
 }
 

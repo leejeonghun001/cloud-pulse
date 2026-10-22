@@ -16,6 +16,7 @@
 // "pick one and document it" note.
 import { el, clearChildren, emptyState, errorBanner } from "../../ui/components.js";
 import { icon } from "../../ui/icons.js";
+import { disclosure } from "../../ui/disclosure.js";
 import { createDialog, buildDialogActions } from "../../ui/dialog.js";
 import { selectField } from "../../ui/select.js";
 import { showToast } from "../../ui/toast.js";
@@ -151,7 +152,14 @@ function channelsCard({ channels, health, signal, announce, onChanged }) {
   addBtn.addEventListener("click", () => openChannelDialog({ signal, announce, onChanged }));
   head.append(addBtn);
   card.append(head);
-  card.append(el("p", { class: "cp-notify-source-note", text: t("settings.notifications.health_source_note") }));
+  card.append(disclosure({
+    id: "notify-help",
+    summary: t("settings.notifications.help_summary"),
+    children: [
+      el("p", { class: "cp-notify-source-note", text: t("settings.notifications.health_source_note") }),
+      el("p", { class: "cp-muted-small", text: t("settings.notifications.saved_test_idle") }),
+    ],
+  }).node);
 
   if (channels.length === 0) {
     card.append(
@@ -198,7 +206,8 @@ function channelRow({ channel, health, healthAvailable, signal, announce, onChan
   history.append(el("span", { class: "cp-muted-small", text: !healthAvailable ? t("settings.notifications.health_load_hint") : latest ? t("settings.notifications.health_last_activity", { when: formatDateTimeLocalized(latest * 1000, { dateStyle: "medium", timeStyle: "short" }) }) : t("settings.notifications.health_no_activity") }));
 
   const status = el("div", { class: "cp-channel-row-status", attrs: { role: "status", "aria-live": "polite", "aria-atomic": "true" } });
-  status.append(el("p", { class: "cp-muted-small", text: t("settings.notifications.saved_test_idle") }));
+  // Empty until a test runs; what a test does is explained once, in the
+  // card's help section.
 
   const testBtn = el("button", { class: "cp-btn cp-btn-secondary cp-btn-sm", attrs: { type: "button" } });
   const testLabel = el("span", { text: t("settings.notifications.send_test") });

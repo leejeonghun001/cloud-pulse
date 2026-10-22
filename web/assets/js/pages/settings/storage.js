@@ -20,6 +20,7 @@ import {
 } from "../../core/api.js";
 import { copyToClipboard } from "./index.js";
 import { t } from "../../core/i18n.js";
+import { disclosure } from "../../ui/disclosure.js";
 
 // GOOGLE_DEVICE_POLL_MAX_ATTEMPTS/INTERVAL_MS bound how long the
 // browser itself keeps polling oauth/complete after "Connect Google
@@ -163,10 +164,10 @@ function connectCard({ signal, announce, onChanged, setPollTimer, container }) {
     }
   });
 
-  card.append(googleFields);
-  card.append(googleHint);
-  card.append(dropboxFields);
-  card.append(dropboxHint);
+  // One collapsed section per provider: the form and its setup hint
+  // appear only when the user picks that provider.
+  card.append(disclosure({ id: "storage-connect-google", summary: t("storage.section_google_drive"), children: [googleHint, googleFields] }).node);
+  card.append(disclosure({ id: "storage-connect-dropbox", summary: t("storage.section_dropbox"), children: [dropboxHint, dropboxFields] }).node);
   card.append(statusLine);
   return card;
 }

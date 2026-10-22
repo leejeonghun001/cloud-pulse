@@ -48,16 +48,21 @@ const STEPS = [
  * awsAgentGuideCard builds the AWS instance-role guide card.
  * @param {Object} opts
  * @param {Object|undefined} opts.aws an agent-reported AWS snapshot, if any
+ * @param {boolean} [opts.bare] content only, without the card and title
  * @returns {HTMLElement}
  */
-export function awsAgentGuideCard({ aws }) {
-  const card = el("section", { class: "cp-card cp-billing-card cp-oci-guide", attrs: { id: "aws-agent", "aria-labelledby": "cp-aws-guide-heading" } });
-  card.append(el("h2", { class: "cp-card-title", text: t("billing.aws_agent_title"), attrs: { id: "cp-aws-guide-heading" } }));
+export function awsAgentGuideCard({ aws, bare = false }) {
+  const card = bare
+    ? el("div", { class: "cp-oci-guide", attrs: { id: "aws-agent" } })
+    : el("section", { class: "cp-card cp-billing-card cp-oci-guide", attrs: { id: "aws-agent", "aria-labelledby": "cp-aws-guide-heading" } });
+  if (!bare) card.append(el("h2", { class: "cp-card-title", text: t("billing.aws_agent_title"), attrs: { id: "cp-aws-guide-heading" } }));
   card.append(el("p", { class: "cp-muted-small", text: t("billing.aws_agent_intro") }));
-  card.append(el("p", {
-    class: "cp-oci-guide-state",
-    text: aws?.source_host ? t("billing.aws_agent_active", { host: aws.source_host }) : t("billing.aws_agent_inactive"),
-  }));
+  if (!bare) {
+    card.append(el("p", {
+      class: "cp-oci-guide-state",
+      text: aws?.source_host ? t("billing.aws_agent_active", { host: aws.source_host }) : t("billing.aws_agent_inactive"),
+    }));
+  }
   const { list, copyStatus } = buildGuideSteps(STEPS, "billing.aws_agent_step", () => ({}));
   card.append(list, copyStatus);
   return card;

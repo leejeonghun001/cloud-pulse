@@ -99,6 +99,7 @@ function changePasswordCard({ signal, announce }) {
     errorEl.textContent = "";
     if (!isPasswordValid(newInput.value, curInput.value)) {
       errorEl.textContent = t("login.password_requirements_unmet");
+      checklist.reveal();
       return;
     }
     if (newInput.value !== confirmInput.value) {

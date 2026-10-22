@@ -86,16 +86,23 @@ function textField({ id, label, hint, value = "", example = "" }) {
  * ociAgentGuideCard builds the guide card.
  * @param {Object} opts
  * @param {Object|undefined} opts.oci the OCI models.CloudCostSnapshot, if any
+ * @param {boolean} [opts.bare] content only, without the card and title
  * @returns {HTMLElement}
  */
-export function ociAgentGuideCard({ oci }) {
-  const card = el("section", { class: "cp-card cp-billing-card cp-oci-guide", attrs: { id: "oci-agent", "aria-labelledby": "cp-oci-guide-heading" } });
-  card.append(el("h2", { class: "cp-card-title", text: t("billing.oci_agent_title"), attrs: { id: "cp-oci-guide-heading" } }));
+export function ociAgentGuideCard({ oci, bare = false }) {
+  // bare: the guide's content only, for embedding in Settings → Billing's
+  // OCI section (which already names the provider and its accounts).
+  const card = bare
+    ? el("div", { class: "cp-oci-guide", attrs: { id: "oci-agent" } })
+    : el("section", { class: "cp-card cp-billing-card cp-oci-guide", attrs: { id: "oci-agent", "aria-labelledby": "cp-oci-guide-heading" } });
+  if (!bare) card.append(el("h2", { class: "cp-card-title", text: t("billing.oci_agent_title"), attrs: { id: "cp-oci-guide-heading" } }));
   card.append(el("p", { class: "cp-muted-small", text: t("billing.oci_agent_intro") }));
-  card.append(el("p", {
-    class: "cp-oci-guide-state",
-    text: oci?.source_host ? t("billing.oci_agent_active", { host: oci.source_host }) : t("billing.oci_agent_inactive"),
-  }));
+  if (!bare) {
+    card.append(el("p", {
+      class: "cp-oci-guide-state",
+      text: oci?.source_host ? t("billing.oci_agent_active", { host: oci.source_host }) : t("billing.oci_agent_inactive"),
+    }));
+  }
 
   const fields = el("div", { class: "cp-oci-guide-fields" });
   const tenancy = textField({ id: "cp-oci-tenancy", label: t("billing.oci_agent_tenancy_label"), hint: t("billing.oci_agent_tenancy_hint"), example: "ocid1.tenancy.oc1..." });
